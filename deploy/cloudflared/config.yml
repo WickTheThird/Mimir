@@ -1,0 +1,43 @@
+# Cloudflare Tunnel for the MIMIR inference facade (ADR 16.2, 16.5).
+#
+# The network path is:
+#   Warp -> Warp server-side inference -> Cloudflare -> this tunnel
+#        -> MIMIR on the Mac -> local model runtime
+#
+# ONLY /v1 is published. This is the ADR 16.5 rule made concrete: shell, SDM,
+# Kubernetes, database, and filesystem helpers must never be reachable from the
+# internet, and the /api control plane additionally refuses non-loopback callers
+# in code, so this ingress list is defence in depth rather than the only guard.
+
+tunnel: CHANGE_ME_TUNNEL_ID
+credentials-file: /Users/CHANGE_ME/.cloudflared/CHANGE_ME_TUNNEL_ID.json
+
+# Keep the connection warm so the first Warp request is not paying for a cold
+# handshake on top of local model latency.
+originRequest:
+  connectTimeout: 10s
+  # Local generation can take a while on a large model; do not cut it short.
+  tlsTimeout: 10s
+  keepAliveTimeout: 90s
+  noHappyEyeballs: false
+
+ingress:
+  # The OpenAI-compatible facade. Authenticated by MIMIR itself with the key
+  # from `mimir keys create`, and rate limited per key.
+  - hostname: CHANGE_ME.example.com
+    path: ^/v1(/.*)?$
+    service: http://127.0.0.1:8756
+    originRequest:
+      httpHostHeader: 127.0.0.1:8756
+      # Streaming responses must not be buffered or Warp sees nothing until the
+      # generation completes.
+      disableChunkedEncoding: false
+
+  # A health probe that does not require a credential, so the tunnel can be
+  # monitored without embedding a key in the monitor.
+  - hostname: CHANGE_ME.example.com
+    path: ^/api/health$
+    service: http://127.0.0.1:8756
+
+  # Everything else is refused at the edge. Do not add /api here.
+  - service: http_status:404

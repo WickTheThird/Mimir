@@ -1,0 +1,56 @@
+# Optional containerised deployment (ADR 22.2).
+#
+# The default and recommended deployment is launchd on the Mac, because MIMIR
+# needs the operator's own kubeconfig, SDM authentication, VPN routes, and
+# repository checkouts. A container has none of those unless you mount them,
+# and mounting credentials into a container is a step backwards for a tool whose
+# whole safety story is "use the existing local authentication" (ADR NG3).
+#
+# This file exists for the case the ADR does anticipate: running the API and a
+# Postgres instance together when SQLite stops being enough (ADR 19.2).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mimir
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+      POSTGRES_DB: mimir
+    volumes:
+      - mimir-pg:/var/lib/postgresql/data
+    secrets:
+      - pg_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mimir"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # Loopback only. Nothing about this needs to be reachable off the machine.
+    ports:
+      - "127.0.0.1:5433:5432"
+
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MIMIR_HOME: /data
+      MIMIR_PERSISTENCE__URL: postgresql+psycopg://mimir@postgres:5432/mimir
+      MIMIR_API__HOST: 0.0.0.0
+    volumes:
+      - mimir-home:/data
+      # Read-only repository access, so the container can search but not edit.
+      - ${MIMIR_REPOS:-~/src}:/repos:ro
+    ports:
+      - "127.0.0.1:8756:8756"
+
+volumes:
+  mimir-pg:
+  mimir-home:
+
+secrets:
+  pg_password:
+    file: ./pg_password.txt

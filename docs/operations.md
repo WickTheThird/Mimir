@@ -1,0 +1,105 @@
+# Operating MIMIR
+
+## Daily use
+
+```bash
+mimir                                   # interactive
+mimir investigate "why is checkout timing out against auth?"
+mimir command "show pods in payments that restarted in the last hour"
+mimir repo ask "does this fail open when auth times out?" --repo billing
+mimir repo flow "HandleCheckout" --repo billing
+mimir k8s investigate payments-api -n payments -c staging
+mimir sdm investigate <resource> --target <container>
+kubectl -n payments logs deploy/api --since 1h | mimir logs
+mimir research "what changed in the Go 1.23 http client timeouts"
+```
+
+Sessions:
+
+```bash
+mimir session list
+mimir session show <id>
+mimir session resume <id>
+mimir export <id> --format md -o handoff.md
+```
+
+## Interactive commands
+
+`/help` `/context` `/ns` `/cluster` `/repo` `/evidence` `/commands`
+`/hypotheses` `/skills` `/session` `/export` `/new` `/quit`
+
+Follow-up questions reuse the evidence already gathered, so asking "and what
+about the callee side?" does not re-run the same commands.
+
+## Approvals
+
+Read-only work runs without prompting. Anything above the ceiling stops and
+shows the ADR 13.3 display. Choose approve, reject, edit, or explain. `explain`
+prints which policy rules fired and why, which is worth using the first few times
+so the classifier's behaviour is not a mystery.
+
+In a pipeline with no TTY, gated commands are refused rather than run unattended.
+An approval nobody can answer must not become a yes.
+
+## Configuration
+
+`~/.mimir/config.yaml`. `mimir init` writes a commented starting point.
+
+The settings worth understanding:
+
+- `safety.auto_execute_max_risk` (default R1). Raising it to R3 or R4 means
+  MIMIR changes live state without asking. `mimir doctor` reports that as a
+  blocking problem, not a warning.
+- `safety.production_context_patterns`. Anything matching in a context,
+  namespace, or resource name never auto-executes.
+- `kubernetes.allowed_contexts` / `denied_contexts`. Empty allow list means all.
+- `models.routing`. Point a task class at a faster profile if command completion
+  feels slow (ADR R6).
+
+## Health
+
+```bash
+mimir doctor
+```
+
+Reports config, binaries, repositories, every model profile, tool count,
+knowledge and skills, persistence including WAL mode, the safety ceiling, and
+network exposure. A missing `kubectl` is reported as a skipped capability, not a
+failure; an unreachable model is a blocking failure.
+
+## Troubleshooting
+
+**Model unreachable.** `mimir doctor` names the profile and URL. Start the
+runtime, pull the model, or repoint with `mimir models set deep --model X`.
+
+**Structured output keeps failing.** Small models struggle to emit valid JSON.
+The router already repairs fenced blocks, trailing commas, and Python literals,
+and retries once with the validation error. If it still fails, route
+`classification` and `final_synthesis` at a larger profile.
+
+**Everything asks for approval.** The command's target is probably unresolved.
+Pass `-n` and `--context` explicitly, or set defaults in config. A mutating
+command with no resolved target is R4 by design.
+
+**Repository search is slow.** Install ripgrep. Without it the helpers fall back
+to a Python walk, which works but is markedly slower on large trees.
+
+**"database is locked".** Should not happen; WAL is enabled at connect time.
+`mimir doctor` shows the journal mode. If it says `delete`, something replaced
+the connection setup.
+
+## Data on disk
+
+```
+~/.mimir/
+  config.yaml          configuration
+  mimir.db             sessions, commands, evidence, audit
+  checkpoints.sqlite   LangGraph checkpoints
+  artifacts/           full command output and fetched documents
+  knowledge/           the memory base
+  logs/                when running under launchd
+```
+
+Command output lives in `artifacts/`, not in the database, so the audit trail
+stays queryable while large outputs stay on disk. Retention defaults to keeping
+everything; ADR 19.3 leaves the policy open.

@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd job for the MIMIR API (ADR 22.2).
+
+  Install:
+    cp deploy/launchd/com.mimir.api.plist ~/Library/LaunchAgents/
+    # edit the paths below to match your checkout, then:
+    launchctl load  ~/Library/LaunchAgents/com.mimir.api.plist
+    launchctl start com.mimir.api
+
+  Inspect:
+    launchctl list | grep mimir
+    tail -f ~/.mimir/logs/api.log
+
+  The service binds loopback only. Exposure to Warp goes through the Cloudflare
+  Tunnel in deploy/cloudflared, which fronts the /v1 routes exclusively.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mimir.api</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/CHANGE_ME/Documents/PERS/mimir/.venv/bin/mimir-api</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/CHANGE_ME/Documents/PERS/mimir</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MIMIR_HOME</key>
+        <string>/Users/CHANGE_ME/.mimir</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Do not hammer a crash loop; give the operator time to read the log. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/CHANGE_ME/.mimir/logs/api.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/CHANGE_ME/.mimir/logs/api.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <!-- A local model runtime needs the machine awake to answer Warp. -->
+    <key>LowPriorityIO</key>
+    <false/>
+</dict>
+</plist>

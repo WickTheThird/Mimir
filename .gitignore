@@ -1,0 +1,49 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+*.egg-info/
+
+# Local runtime state. MIMIR_HOME defaults to ~/.mimir, but a repo-local
+# override must never be committed: it holds the session database, artifacts,
+# checkpoints, and the API keys.
+.mimir/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Evaluation output and held-out cases. The hidden corpus lives in MIMIR_HOME by
+# design; this is belt and braces in case someone points it here.
+report.json
+eval-hidden/
+eval_*.json
+baseline_*.json
+
+# Session and investigation artifacts
+artifacts/
+sessions/
+checkpoints*/
+
+# Web
+web/node_modules/
+web/dist/
+
+# Deployment secrets
+deploy/docker/pg_password.txt
+deploy/cloudflared/*.json
+*.pem
+*.key
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
+
+# TypeScript incremental build cache
+*.tsbuildinfo

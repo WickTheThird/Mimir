@@ -1,0 +1,84 @@
+# Skill routing cases (ADR 10.2).
+#
+# Selection is pure scoring, so these run in milliseconds with no model. They
+# exist because automatic skill selection silently returned nothing for months
+# of wall-clock and nothing caught it: the scorer normalised by an unreachable
+# maximum, so correct matches scored ~0.10 against a 0.25 threshold, and the
+# adapter then crashed on the wrapper type. Both failures were invisible because
+# the graph degrades quietly when no skill is selected.
+#
+# These cases pin the calibration. If someone retunes the weights or the
+# threshold, this file tells them what they broke.
+
+cases:
+  - id: skill-001-pod-restart
+    kind: skill_selection
+    prompt: routing for a restart question
+    select_query: why is my pod restarting with CrashLoopBackOff
+    expect_skill: pod-restart-investigation
+    description: The clearest routing case. If this breaks, scoring is broken.
+    tags: [routing]
+
+  - id: skill-002-timeout-phrasing
+    kind: skill_selection
+    prompt: routing when the operator says "timing out" and the tag says "timeout"
+    select_query: the checkout service is timing out against auth
+    expect_skill: timeout-investigation
+    description: >
+      Regression for the missing morphological expansion. Operators write
+      "timing out"; the skill is tagged "timeout". Before the fix this returned
+      nothing at all.
+    tags: [routing, regression, stemming]
+
+  - id: skill-003-fail-open-phrasing
+    kind: skill_selection
+    prompt: routing for a behaviour verification question
+    select_query: does this service fail open when auth times out
+    expect_skill: repository-feature-verification
+    description: >
+      "fail open" versus the tag "fail-open", and competing with
+      timeout-investigation which also matches "times out".
+    tags: [routing, regression]
+
+  - id: skill-004-namespace-read
+    kind: skill_selection
+    prompt: routing for a plain cluster read
+    select_query: show me pods in the payments namespace
+    expect_skill: kubernetes-readonly-investigation
+    description: Plural "pods" against the singular "pod" tag.
+    tags: [routing, regression, stemming]
+
+  - id: skill-005-flow-tracing
+    kind: skill_selection
+    prompt: routing for a flow question
+    select_query: trace where an inbound checkout request enters the system
+    expect_skill: repository-flow-tracing
+    tags: [routing]
+
+  - id: skill-006-explain-vs-construct
+    kind: skill_selection
+    prompt: routing between two command skills
+    select_query: what does this kubectl command do
+    expect_skill: command-explainer
+    expect_skill_in_top: 3
+    description: >
+      Genuinely ambiguous between command-explainer and
+      safe-command-completion. Asserted as top-3 rather than top-1 on purpose:
+      forcing a single winner here would be fitting the scorer to one example,
+      and both skills are reasonable responses to the phrasing. Tighten this
+      only if a real operator complaint justifies it.
+    tags: [routing, ambiguous]
+
+  - id: skill-007-upstream-research
+    kind: skill_selection
+    prompt: routing for an upstream research question
+    select_query: what changed in the Go http client timeouts upstream
+    expect_skill: web-technical-research
+    expect_skill_in_top: 3
+    description: >
+      Currently ranks below timeout-investigation because "timeouts" dominates
+      the score. Recorded as top-3 so the miss is visible and measured rather
+      than argued about. Fixing it means the scorer must weigh intent
+      ("what changed", "upstream") over topic nouns, which is a real change and
+      should be driven by more cases than this one.
+    tags: [routing, known-weakness]

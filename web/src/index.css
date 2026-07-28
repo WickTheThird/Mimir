@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-neutral-950 text-neutral-200 antialiased;
+}
+
+.panel {
+  @apply rounded-lg border border-neutral-800 bg-neutral-900/60;
+}
+
+.mono {
+  @apply font-mono text-[13px] leading-relaxed;
+}
