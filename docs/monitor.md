@@ -2,7 +2,6 @@
 
 ```bash
 mimir monitor                        # live, refreshes every 2s
-mimir monitor --view runs            # evaluation: cases in flight, run series
 mimir monitor -n 5                   # slower refresh
 mimir monitor --log /tmp/run.log     # tail a specific log
 mimir monitor --once                 # one frame, for scripts and screenshots
@@ -60,15 +59,13 @@ A stall warning appears when the gap since the last completed case exceeds three
 times the observed mean. A fixed threshold would either cry wolf on a slow model
 or stay silent on a fast one.
 
-## The runs view
+## Evaluation panels
 
-```bash
-mimir monitor --view runs
-```
-
-A separate view rather than more panels on the overview. The overview answers
-"is this machine healthy"; this answers "is this experiment trustworthy", and
-one screen holding both makes neither readable.
+There is no view flag. Which panels appear depends on what is happening, not on
+what the operator remembered to type. Cases appear while an evaluation is in
+flight; the series appears once there are repeats to compare; the events panel
+takes the series slot when no series exists. A flag would make the interesting
+state the one you have to know to ask for.
 
 **Cases in flight.** Each case of the running evaluation as it completes, with
 its case id, task type, confidence, evidence count, tool calls and duration.

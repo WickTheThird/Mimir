@@ -783,10 +783,10 @@ def render_events(lines: list[str], source: Path | None) -> Panel:
     return Panel(body, title=f"events  {source}" if source else "events", border_style="dim")
 
 
-def _header(settings: Settings, interval: float, *, view: str = "overview") -> Panel:
+def _header(settings: Settings, interval: float) -> Panel:
     line = Text()
     line.append("MIMIR", style="bold white")
-    line.append(f"  monitor  {view}", style="dim")
+    line.append("  monitor", style="dim")
     line.append(f"   {time.strftime('%H:%M:%S')}", style="dim")
     line.append(f"   home {settings.home}", style="dim")
     line.append(f"   refresh {interval:g}s   q to quit", style="dim")
@@ -799,8 +799,15 @@ def build(
     interval: float,
     *,
     first: bool = False,
-    view: str = "overview",
+    height: int = 0,
 ) -> Layout:
+    """One adaptive layout.
+
+    There is no view flag. The panels that matter depend on what is happening,
+    not on what the operator remembered to type: cases appear when an evaluation
+    is in flight, the series appears once repeats exist to compare. A flag would
+    make the interesting state the one you have to know to ask for.
+    """
     sample = machine_mod.sample(interval=0.2 if first else 0.0)
     state = runtime_mod.probe(settings)
     act = activity_mod.collect(settings)
@@ -812,59 +819,48 @@ def build(
         act.in_flight = activity_mod.in_flight_eval(
             evaluating.pid, evaluating.started_at, _model_case_count(), settings
         )
-        if view == "runs":
-            act.live_cases = activity_mod.live_cases(evaluating.started_at, settings)
-    if view == "runs":
-        act.series = activity_mod.collect_series(settings)
+        act.live_cases = activity_mod.live_cases(evaluating.started_at, settings)
+    act.series = activity_mod.collect_series(settings)
 
-    if view == "runs":
-        return _runs_layout(settings, act, state, interval)
     lines = activity_mod.tail_log(log_path, lines=6)
+    running = act.in_flight is not None
+    has_series = bool(act.series.runs)
 
-    layout = Layout()
-    layout.split_column(
-        Layout(_header(settings, interval), size=3, name="header"),
-        Layout(name="upper", size=14),
-        Layout(name="lower", size=14),
-        Layout(name="bottom"),
-    )
-    layout["upper"].split_row(
+    rows: list[Layout] = [Layout(_header(settings, interval), size=3, name="header")]
+
+    upper = Layout(name="upper", size=14)
+    upper.split_row(
         Layout(render_work(act, sample), name="work"),
         Layout(render_models(state), name="models"),
     )
-    layout["lower"].split_row(
+    rows.append(upper)
+
+    middle = Layout(name="middle", size=14)
+    middle.split_row(
         Layout(render_machine(sample), name="machine"),
         Layout(render_evaluation(act), name="evaluation"),
     )
-    layout["bottom"].split_row(
+    rows.append(middle)
+
+    lower = Layout(name="lower", size=14 if has_series else 12)
+    lower.split_row(
         Layout(render_telemetry(act), name="telemetry"),
-        Layout(render_events(lines, log_path), name="events"),
+        Layout(
+            render_series(act) if has_series else render_events(lines, log_path),
+            name="series" if has_series else "events",
+        ),
     )
-    return layout
+    rows.append(lower)
 
+    # Cases only while a run is in flight. An empty case table on an idle
+    # machine is a row of nothing that pushes everything useful off screen.
+    if running:
+        rows.append(Layout(render_live_cases(act), name="cases"))
+    elif has_series:
+        rows.append(Layout(render_events(lines, log_path), name="events"))
 
-def _runs_layout(
-    settings: Settings,
-    act: activity_mod.Activity,
-    state: runtime_mod.RuntimeState,
-    interval: float,
-) -> Layout:
-    """Evaluation-focused view: what is running, and how repeats compare.
-
-    A separate view rather than more panels on the overview. The overview
-    answers "is this machine healthy"; this answers "is this experiment
-    trustworthy", and cramming both into one screen makes neither readable.
-    """
     layout = Layout()
-    layout.split_column(
-        Layout(_header(settings, interval, view="runs"), size=3, name="header"),
-        Layout(name="top", size=10),
-        Layout(render_live_cases(act), name="cases"),
-    )
-    layout["top"].split_row(
-        Layout(render_evaluation(act), name="evaluation"),
-        Layout(render_series(act), name="series"),
-    )
+    layout.split_column(*rows)
     return layout
 
 
@@ -875,7 +871,6 @@ def run(
     interval: float = 2.0,
     once: bool = False,
     console: Console | None = None,
-    view: str = "overview",
 ) -> None:
     """Render once, or loop until interrupted."""
     active = settings or get_settings()
@@ -883,11 +878,11 @@ def run(
     target = log_path or active.observability.log_file
 
     if once:
-        out.print(build(active, target, interval, first=True, view=view))
+        out.print(build(active, target, interval, first=True))
         return
 
     with Live(
-        build(active, target, interval, first=True, view=view),
+        build(active, target, interval, first=True),
         console=out,
         refresh_per_second=4,
         screen=True,
@@ -895,6 +890,6 @@ def run(
         try:
             while True:
                 time.sleep(interval)
-                live.update(build(active, target, interval, view=view))
+                live.update(build(active, target, interval))
         except KeyboardInterrupt:
             return
