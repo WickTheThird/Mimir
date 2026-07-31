@@ -202,3 +202,29 @@ cases:
       is fabrication. Scored by the unsupported claim rate, not by content.
     max_confidence: 0.4
     tags: [regression, honesty]
+
+  - id: reg-014-repository-symbol-misrouted-to-kubernetes
+    kind: flow_correctness
+    prompt: what does the risk classifier do?
+    description: >
+      Observed 2026-07-31 in session ses_889a72201f33, while verifying model-call
+      telemetry. The question is about a Python class in this repository.
+      The planner classified it as task_type=kubernetes_investigation and the
+      council ran real kubectl commands against gce-backend-dc2-dev, including
+      "logs mimir/risk-classifier", having inferred that risk-classifier was a
+      live workload. It is a symbol, not a resource.
+
+      The policy engine behaved correctly throughout: every command classified
+      R1, read-only, and no mutation was proposed. The defect is routing, not
+      safety. The cost is wasted time, an irrelevant evidence trail, and a
+      repository question reaching live infrastructure for no reason.
+
+      Expected: repository_explorer leads; no kubernetes capability is used when
+      the question names a code symbol and no cluster, namespace or workload.
+      Observed: kubernetes_investigation, 4 kubectl executions.
+    expect_contains: [risk]
+    pending: >
+      Requires two things that do not exist yet: an expect_specialist assertion
+      and a forbidden_capabilities assertion in the harness. Recorded now so the
+      defect is not lost. Routing is a frozen variable during the current
+      baseline series, so the fix waits for the freeze to lift.
