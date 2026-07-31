@@ -59,11 +59,44 @@ A stall warning appears when the gap since the last completed case exceeds three
 times the observed mean. A fixed threshold would either cry wolf on a slow model
 or stay silent on a fast one.
 
+## Telemetry
+
+The telemetry panel shows measured cost per role over the last hour: call count,
+mean latency, share of total inference time, and tokens in and out. Failures and
+retries appear beside the token counts.
+
+This panel could not exist before the telemetry repair. `model_calls` held zero
+rows, so per-role latency and token cost were unknowable and the only available
+number was wall clock for an entire investigation.
+
+Health is assessed only over sessions created **after the first telemetry row**.
+Sessions older than that predate the instrumentation, so their lack of model
+calls is expected. Counting them reported "17/20 recent sessions recorded no
+model calls" at a moment when every session since the fix was correctly
+instrumented, which is history rendered as a present fault.
+
+The evaluation panel adds:
+
+- `telemetry` - persisted versus observed calls, and whether they agree
+- `valid for` - quality reporting versus efficiency comparison, separately.
+  Correctness may still be measurable when telemetry is missing; latency and
+  token comparisons are not.
+- `tool surface` - the fingerprint of the tools actually enabled. An empty
+  fingerprint reads **not comparable**, never as a match with another empty
+  fingerprint, because comparing those as equal is what silently disabled the
+  capability check.
+- `SOURCE CHANGED MID-RUN` when the working tree moved while the run was in
+  flight.
+
 ## Contamination is visible
 
 The evaluation panel shows offline containment status. A run with
 `external_calls > 0`, or one annotated contaminated, is shown in red with the
 reason. See [evaluation.md](evaluation.md) for why that annotation exists.
+
+Runs stored under provenance schema 1 are shown with their version, so a reader
+can tell they predate the containment and tool-surface fixes rather than
+inferring it from which keys happen to be present.
 
 ## Audit gaps
 
