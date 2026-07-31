@@ -284,6 +284,28 @@ def comparable(left: dict[str, Any], right: dict[str, Any]) -> list[str]:
     if not left or not right:
         return ["one of the runs has no recorded provenance"]
 
+    # A contaminated run is refused outright. Everything below compares how two
+    # runs differ; none of it matters if one of them did not measure what it
+    # claims to have measured.
+    for side, run in (("baseline", left), ("candidate", right)):
+        if run.get("contaminated"):
+            problems.append(
+                f"{side} is CONTAMINATED and cannot serve as a controlled "
+                f"comparison: {run.get('contaminated_reason', 'reason not recorded')}"
+            )
+
+    left_tools = left.get("enabled_tools_hash")
+    right_tools = right.get("enabled_tools_hash")
+    if left_tools and right_tools and left_tools != right_tools:
+        problems.append(
+            f"different tool sets were enabled ({left_tools} vs {right_tools}); "
+            "the models were not offered the same capabilities"
+        )
+    for side, run in (("baseline", left), ("candidate", right)):
+        calls = run.get("external_calls")
+        if calls:
+            problems.append(f"{side} made {calls} external network call(s)")
+
     if left.get("corpus_hash") != right.get("corpus_hash"):
         problems.append(
             f"different corpus ({left.get('corpus_hash')} vs {right.get('corpus_hash')}); "

@@ -158,11 +158,24 @@ def _first_key(row: dict[str, Any], keys: tuple[str, ...]) -> Any:
     return None
 
 
-def _resolve_tool(source: str, override: str | None) -> ToolSpec[Any] | None:
+def _registry(ctx: ToolContext) -> Any:
+    """The registry this fan-out must resolve through.
+
+    Falling back to the global REGISTRY is correct for normal use but wrong
+    whenever the caller supplied a filtered one: reaching past the filter is how
+    web search ran inside an offline evaluation.
+    """
+    return getattr(ctx, "registry", None) or REGISTRY
+
+
+def _resolve_tool(
+    ctx: ToolContext, source: str, override: str | None
+) -> ToolSpec[Any] | None:
+    registry = _registry(ctx)
     if override:
-        return REGISTRY.get(override)
+        return registry.get(override)
     for name in SOURCE_TOOL_CANDIDATES.get(source, ()):
-        spec = REGISTRY.get(name)
+        spec = registry.get(name)
         if spec is not None:
             return spec
     return None
@@ -394,7 +407,7 @@ async def parallel_search(args: ParallelSearchInput, ctx: ToolContext) -> ToolRe
     searched: dict[str, str] = {}
 
     for source in dict.fromkeys(args.sources):
-        spec = _resolve_tool(source, args.tool_overrides.get(source))
+        spec = _resolve_tool(ctx, source, args.tool_overrides.get(source))
         if spec is None:
             candidates = ", ".join(SOURCE_TOOL_CANDIDATES.get(source, ())) or "(none)"
             errors.append(

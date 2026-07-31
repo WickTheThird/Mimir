@@ -362,3 +362,90 @@ def test_provenance_marks_unresolved_models():
     # visible rather than implied.
     if not identity.resolved:
         assert identity.digest == ""
+
+
+def test_offline_selection_is_an_allowlist_not_a_denylist():
+    """A new capability must be unsafe until classified.
+
+    The first implementation used a denylist naming kubernetes, sdm, and
+    database. It omitted web, and a supposedly offline benchmark sent evaluation
+    prompts to Google, Yandex, and Brave. An allowlist fails closed instead.
+    """
+    from mimir.eval.harness import EvalHarness
+    from mimir.tools.base import Capability, load_all_tools
+
+    full = load_all_tools()
+    offline = EvalHarness().offline_registry()
+    enabled = set(offline.names())
+
+    for spec in full.all():
+        if spec.capability in (
+            Capability.WEB,
+            Capability.KUBERNETES,
+            Capability.SDM,
+            Capability.DATABASE,
+            Capability.SHELL,
+        ):
+            assert spec.name not in enabled, f"{spec.name} must not be offline-safe"
+
+    assert "search_repository" in enabled
+    assert "ingest_logs" in enabled
+
+
+def test_network_containment_blocks_external_and_permits_loopback():
+    """Containment is the second layer, in case a tool is misclassified."""
+    import socket
+
+    from mimir.eval.offline import OfflineViolation, network_containment
+
+    with network_containment() as report:
+        try:
+            socket.getaddrinfo("www.google.com", 443)
+            raise AssertionError("external resolution should have been blocked")
+        except OfflineViolation:
+            pass
+        socket.getaddrinfo("127.0.0.1", 11434)
+
+    assert report.external_calls == 1
+    assert "www.google.com" in report.blocked_hosts
+    assert report.allowed_loopback >= 1
+    assert not report.clean
+
+
+def test_contaminated_run_is_refused_for_comparison():
+    from mimir.eval.provenance import comparable
+
+    clean = {
+        "corpus_hash": "a", "prompts_hash": "b", "skills_hash": "c",
+        "offline": True, "mimir_commit": "abc", "mimir_dirty": False,
+        "enabled_tools_hash": "t1",
+    }
+    assert comparable(clean, dict(clean)) == []
+
+    contaminated = dict(clean, contaminated=True, contaminated_reason="web enabled")
+    problems = comparable(clean, contaminated)
+    assert any("CONTAMINATED" in p for p in problems)
+
+
+def test_external_calls_fail_the_gate():
+    """An offline run that reached the network is not acceptable, whatever it scored."""
+    from mimir.eval.harness import EvalReport
+
+    report = EvalReport()
+    assert report.acceptable
+
+    report.external_calls = 1
+    assert not report.acceptable
+
+
+def test_dispatching_tools_cannot_resolve_past_a_filtered_registry():
+    """parallel_search fans out by name and previously used the global registry,
+    which let it reach tools deliberately excluded from a filtered one."""
+    from mimir.eval.harness import EvalHarness
+    from mimir.tools.base import ToolContext
+    from mimir.tools.search import _resolve_tool
+
+    offline = EvalHarness().offline_registry()
+    ctx = ToolContext(registry=offline)
+    assert _resolve_tool(ctx, "web", None) is None
+    assert _resolve_tool(ctx, "web", "web_search") is None

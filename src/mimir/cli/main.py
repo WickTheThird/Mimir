@@ -825,7 +825,7 @@ def evaluate(
             )
 
         async def _scored() -> Any:
-            return await harness.run_model_cases(cases, allow_live=allow_live)
+            return await harness.run_model_cases_contained(cases, allow_live=allow_live)
 
         model_report = _run(_scored())
         console.print(model_report.summary())

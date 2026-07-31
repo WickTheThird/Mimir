@@ -52,6 +52,25 @@ class Capability(StrEnum):
     INTERNAL = "internal"
 
 
+#: Capabilities that touch only local, immutable-during-a-run state and may
+#: therefore run in an offline evaluation. This is an ALLOWLIST on purpose: a new
+#: capability is unsafe until somebody argues otherwise, which is the opposite of
+#: the denylist that let web search into a supposedly offline benchmark.
+#:
+#: Deliberately excluded: WEB (mutable third-party state, and it transmits the
+#: prompt off the machine), KUBERNETES, SDM, DATABASE (live infrastructure),
+#: SHELL (arbitrary execution).
+OFFLINE_SAFE_CAPABILITIES: frozenset[Capability] = frozenset(
+    {
+        Capability.REPOSITORY,
+        Capability.LOGS,
+        Capability.MEMORY,
+        Capability.SKILLS,
+        Capability.SANDBOX,
+        Capability.INTERNAL,
+    }
+)
+
 #: Capabilities that must never be reachable from the public inference facade.
 PRIVILEGED_CAPABILITIES: frozenset[Capability] = frozenset(
     {
@@ -137,6 +156,13 @@ class ToolContext:
     approvals: Any = None  # mimir.safety.approvals.ApprovalBroker
     hooks: Any = None  # mimir.hooks.manager.HookManager
     environment: Any = None  # mimir.models.state.EnvironmentContext
+    registry: Any = None  # mimir.tools.base.ToolRegistry
+    """The registry a dispatching tool must resolve through.
+
+    Tools that fan out to other tools (parallel_search) previously reached the
+    global REGISTRY at call time, which let them invoke helpers that had been
+    deliberately excluded from a filtered registry. Any tool that dispatches
+    must use this when it is set."""
     extra: dict[str, Any] = field(default_factory=dict)
 
     def child(self, **overrides: Any) -> ToolContext:
@@ -149,6 +175,7 @@ class ToolContext:
             "approvals": self.approvals,
             "hooks": self.hooks,
             "environment": self.environment,
+            "registry": self.registry,
             "extra": dict(self.extra),
         }
         data.update(overrides)
@@ -175,6 +202,21 @@ class ToolSpec(Generic[InputT]):
     requires_approval: bool = False
     long_running: bool = False
     tags: tuple[str, ...] = ()
+    offline_safe: bool | None = None
+    """Whether this tool may run in an offline evaluation.
+
+    ``None`` derives from :data:`OFFLINE_SAFE_CAPABILITIES`, which is an
+    allowlist: anything not named there is unsafe. A denylist was tried first
+    and failed exactly as denylists do, by omitting a capability nobody
+    remembered to add.
+
+    Set explicitly only to make a tool MORE restricted than its capability."""
+
+    @property
+    def is_offline_safe(self) -> bool:
+        if self.offline_safe is not None:
+            return self.offline_safe
+        return self.capability in OFFLINE_SAFE_CAPABILITIES
 
     def json_schema(self) -> dict[str, Any]:
         schema = self.input_model.model_json_schema()

@@ -168,6 +168,45 @@ not beaten it, and the headline number would hide that. An unresolvable field is
 recorded as unknown rather than omitted, so a run made without a runtime
 listening is visibly weaker evidence rather than quietly equivalent.
 
+## Offline mode is an allowlist, plus containment
+
+Two overlapping layers, because the first failed alone.
+
+**Tool selection** uses `spec.is_offline_safe`, defaulting from
+`OFFLINE_SAFE_CAPABILITIES`. That set is an allowlist: repository, logs, memory,
+skills, sandbox, internal. Anything else, including web, is unsafe until
+explicitly classified. The first implementation was a denylist naming
+kubernetes, sdm, and database; it omitted web, and a benchmark labelled
+`offline: true` sent evaluation prompts to Google, Yandex, Brave, Yahoo, and
+Startpage. An allowlist fails closed when a capability is added.
+
+**Network containment** patches name resolution and socket connection for the
+duration of the run, permits loopback so the model runtime stays reachable, and
+refuses and counts everything else. Proxy variables are cleared, since a proxy
+would route an external request through a loopback address and defeat the check.
+
+The hard invariant: `external_calls == 0`. A run that trips it is marked
+contaminated, fails `acceptable`, and is refused by `eval compare`.
+
+Provenance records the tool set that was actually enabled
+(`enabled_tools_hash`, `enabled_capabilities`, `external_calls`) rather than a
+bare `offline: true`, which was true of the run that queried Yandex.
+
+## Contaminated runs
+
+Runs made before the fix are annotated rather than corrected:
+
+```yaml
+contaminated: true
+contaminated_reason: web tools remained enabled while offline=true
+usable_for: historical debugging and regression coverage only
+usable_for_controlled_comparison: false
+```
+
+Their original scores are preserved exactly. `eval compare` refuses them as
+baselines. They remain useful for regression coverage and for tool-use
+tendencies read cautiously, but not for quantitative model comparison.
+
 ## Held-out corpus
 
 ```bash

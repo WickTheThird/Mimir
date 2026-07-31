@@ -102,6 +102,7 @@ class InvestigationRunner:
             executor=self.executor,
             approvals=self.approvals,
             hooks=self.hooks,
+            registry=self.registry,
         )
 
     def _deps(self, session_id: str | None) -> NodeDeps:
