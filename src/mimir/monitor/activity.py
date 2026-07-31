@@ -86,6 +86,61 @@ class EvalRunRow:
 
 
 @dataclass
+class RoleTelemetry:
+    """Measured cost of one role, from model_calls rather than from guesswork.
+
+    Before the telemetry repair this panel could not exist: the table was empty,
+    so per-role latency and token cost were unknowable and the only visible
+    number was wall-clock for the whole investigation.
+    """
+
+    role: str
+    model: str
+    calls: int = 0
+    failed: int = 0
+    retries: int = 0
+    total_latency_ms: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+    @property
+    def mean_latency_ms(self) -> float:
+        return self.total_latency_ms / self.calls if self.calls else 0.0
+
+    @property
+    def share_of_time(self) -> float:
+        return 0.0  # filled in by the caller against the total
+
+
+@dataclass
+class TelemetryHealth:
+    """Whether the audit and telemetry trails agree with observed activity."""
+
+    sessions_checked: int = 0
+    sessions_without_calls: int = 0
+    model_calls_total: int = 0
+    orphaned_rows: int = 0
+    complete: bool = True
+    instrumented_since: float | None = None
+    """Timestamp of the oldest telemetry row.
+
+    Sessions older than this predate the instrumentation, so their lack of
+    telemetry is expected and must not be reported as a defect.
+    """
+
+    @property
+    def summary(self) -> str:
+        if not self.sessions_checked:
+            return "no recent sessions"
+        if self.sessions_without_calls:
+            return (
+                f"{self.sessions_without_calls}/{self.sessions_checked} recent "
+                "sessions recorded no model calls"
+            )
+        return f"{self.sessions_checked}/{self.sessions_checked} recent sessions instrumented"
+
+
+@dataclass
 class InFlightEval:
     """Progress of a run that has not been persisted yet.
 
@@ -136,6 +191,8 @@ class Activity:
     running: list[SessionRow] = field(default_factory=list)
     latest_run: EvalRunRow | None = None
     in_flight: InFlightEval | None = None
+    roles: list[RoleTelemetry] = field(default_factory=list)
+    telemetry: TelemetryHealth = field(default_factory=TelemetryHealth)
     sessions_last_hour: int = 0
     evidence_total: int = 0
     executions_total: int = 0
@@ -151,9 +208,11 @@ class Activity:
         a number nobody was looking at.
         """
         if self.sessions and self.model_calls_total == 0:
-            return (
-                "model_calls empty: per-call telemetry is not recorded"
-            )
+            return "model_calls empty: per-call telemetry is not recorded"
+        if self.telemetry.sessions_without_calls:
+            return self.telemetry.summary
+        if self.telemetry.orphaned_rows:
+            return f"{self.telemetry.orphaned_rows} model_calls rows have no session"
         return ""
 
     def throughput_per_min(self, window_s: float = 600.0) -> float | None:
@@ -252,6 +311,8 @@ def collect(settings: Settings | None = None, *, limit: int = 12) -> Activity:
                 metadata=_json(run[8]),
             )
 
+        _collect_telemetry(conn, out)
+
         hour_ago = time.time() - 3600
         out.sessions_last_hour = _count(conn, "sessions", f"created_at >= {hour_ago}")
         out.evidence_total = _count(conn, "evidence")
@@ -266,6 +327,74 @@ def collect(settings: Settings | None = None, *, limit: int = 12) -> Activity:
 
     out.sessions = out.sessions[:limit]
     return out
+
+
+def _collect_telemetry(conn: sqlite3.Connection, out: Activity) -> None:
+    """Per-role cost, measured over the recent window rather than all time.
+
+    Bounded to the last hour so the figures describe what is happening now. An
+    all-time mean would be dominated by whatever model was configured longest
+    ago, which is the opposite of what a live monitor is for.
+    """
+    since = time.time() - 3600
+    try:
+        rows = conn.execute(
+            "select task_class, model, count(*), sum(latency_ms), "
+            "sum(coalesce(prompt_tokens,0)), sum(coalesce(completion_tokens,0)), "
+            "sum(case when ok then 0 else 1 end), sum(retries) "
+            "from model_calls where created_at >= ? "
+            "group by task_class, model order by sum(latency_ms) desc",
+            (since,),
+        ).fetchall()
+    except sqlite3.Error:
+        return
+
+    out.roles = [
+        RoleTelemetry(
+            role=r[0] or "(unattributed)",
+            model=r[1] or "",
+            calls=int(r[2] or 0),
+            total_latency_ms=float(r[3] or 0.0),
+            prompt_tokens=int(r[4] or 0),
+            completion_tokens=int(r[5] or 0),
+            failed=int(r[6] or 0),
+            retries=int(r[7] or 0),
+        )
+        for r in rows
+    ]
+
+    health = TelemetryHealth()
+    try:
+        health.model_calls_total = _count(conn, "model_calls")
+        # Only sessions from after telemetry started being recorded can be
+        # judged on whether they recorded any. Counting older ones reported
+        # "17/20 sessions recorded no model calls" at a moment when every
+        # session since the fix had recorded them correctly: history rendered
+        # as a present fault, which is the failure this monitor exists to avoid.
+        first = conn.execute("select min(created_at) from model_calls").fetchone()
+        floor = float(first[0]) if first and first[0] else None
+        if floor is None:
+            health.complete = health.model_calls_total > 0
+            out.telemetry = health
+            return
+        health.instrumented_since = floor
+        window = max(since, floor)
+        recent = conn.execute(
+            "select s.id, count(m.row_id) from sessions s "
+            "left join model_calls m on m.session_id = s.id "
+            "where s.created_at >= ? group by s.id",
+            (window,),
+        ).fetchall()
+        health.sessions_checked = len(recent)
+        health.sessions_without_calls = sum(1 for _, n in recent if not n)
+        health.orphaned_rows = conn.execute(
+            "select count(*) from model_calls m "
+            "left join sessions s on m.session_id = s.id where s.id is null"
+        ).fetchone()[0]
+    except sqlite3.Error:
+        return
+    health.complete = not health.sessions_without_calls and not health.orphaned_rows
+    out.telemetry = health
 
 
 def tail_log(path: Path | None, *, lines: int = 8, max_bytes: int = 200_000) -> list[str]:

@@ -167,7 +167,10 @@ def render_work(act: activity_mod.Activity, sample: machine_mod.MachineSample) -
     audit = Text()
     audit.append(f"{act.evidence_total} evidence   ")
     audit.append(f"{act.executions_total} executions   ")
-    audit.append(f"{act.model_calls_total} model calls")
+    audit.append(
+        f"{act.model_calls_total} model calls",
+        style="" if act.model_calls_total else "yellow",
+    )
     if act.approvals_pending:
         audit.append(f"   {act.approvals_pending} approvals pending", style="yellow bold")
     _kv(body, "audit trail", audit)
@@ -345,7 +348,9 @@ def render_machine(sample: machine_mod.MachineSample) -> Panel:
     return Panel(body, title="machine", border_style="blue")
 
 
-def render_in_flight(flight: activity_mod.InFlightEval) -> Panel:
+def render_in_flight(
+    flight: activity_mod.InFlightEval, act: activity_mod.Activity
+) -> Panel:
     body = _grid()
 
     header = Text()
@@ -383,6 +388,13 @@ def render_in_flight(flight: activity_mod.InFlightEval) -> Panel:
             note.append("  possibly stalled", style="red bold")
         _kv(body, "last case", note)
 
+    health = act.telemetry
+    live = Text()
+    live.append(
+        health.summary, style="green" if health.complete else "yellow bold"
+    )
+    _kv(body, "telemetry", live)
+
     _kv(
         body,
         "note",
@@ -393,7 +405,7 @@ def render_in_flight(flight: activity_mod.InFlightEval) -> Panel:
 
 def render_evaluation(act: activity_mod.Activity) -> Panel:
     if act.in_flight is not None:
-        return render_in_flight(act.in_flight)
+        return render_in_flight(act.in_flight, act)
     run = act.latest_run
     if run is None:
         return Panel(
@@ -401,6 +413,28 @@ def render_evaluation(act: activity_mod.Activity) -> Panel:
             title="evaluation",
             border_style="dim",
         )
+
+    # Schema v2 nests everything a comparison needs under one root. Older runs
+    # are flat, and are shown with their version so a reader can tell they
+    # predate the containment and tool-surface fixes rather than guessing from
+    # which keys happen to be present.
+    provenance = run.metadata.get("provenance") or {}
+    version = provenance.get("schema_version", 1)
+    evaluation = provenance.get("evaluation") or {}
+    source = provenance.get("source") or {}
+    if version < 2:  # flat layout, fields sat at the metadata top level
+        evaluation = {
+            "contaminated": run.metadata.get("contaminated"),
+            "contaminated_reason": run.metadata.get("contaminated_reason", ""),
+            "external_calls": run.metadata.get("external_calls", 0),
+            "enabled_tools_hash": run.metadata.get("enabled_tools_hash", ""),
+            "offline": provenance.get("offline", run.metadata.get("offline")),
+            "corpus_hash": provenance.get("corpus_hash", ""),
+        }
+        source = {
+            "commit": provenance.get("mimir_commit", ""),
+            "dirty": provenance.get("mimir_dirty", False),
+        }
 
     body = _grid()
     header = Text()
@@ -418,24 +452,53 @@ def render_evaluation(act: activity_mod.Activity) -> Panel:
     score.append(f"  {run.pass_rate * 100:.0f}%", style="dim")
     _kv(body, "passed", score)
 
-    if run.contaminated:
-        _kv(
-            body,
-            "status",
-            Text(f"CONTAMINATED: {run.contamination_reason}", style="red bold"),
-        )
-    elif run.external_calls:
-        _kv(
-            body,
-            "status",
-            Text(f"{run.external_calls} external network call(s)", style="red bold"),
-        )
-    elif run.metadata.get("offline"):
+    contaminated = evaluation.get("contaminated") or run.contaminated
+    external = evaluation.get("external_calls") or 0
+    if contaminated:
+        reason = evaluation.get("contaminated_reason") or run.contamination_reason
+        _kv(body, "status", Text(f"CONTAMINATED: {reason}", style="red bold"))
+    elif external:
+        _kv(body, "status", Text(f"{external} external network call(s)", style="red bold"))
+    elif evaluation.get("offline"):
         contained = Text("offline, 0 external calls", style="green")
-        tools = run.metadata.get("enabled_tools_hash")
-        if tools:
-            contained.append(f"   tools {tools}", style="dim")
         _kv(body, "status", contained)
+
+    tools = evaluation.get("enabled_tools_hash")
+    surface = Text()
+    if tools:
+        surface.append(tools, style="")
+        count = len(evaluation.get("enabled_tools") or [])
+        if count:
+            surface.append(f"   {count} tools", style="dim")
+    else:
+        # An empty fingerprint is not a match with another empty fingerprint.
+        # Comparing them as equal is what silently disabled the capability check.
+        surface.append("not recorded; run is not comparable", style="red")
+    _kv(body, "tool surface", surface)
+
+    observed = run.metadata.get("model_invocations_observed")
+    if observed is not None:
+        persisted = run.metadata.get("model_calls_persisted", 0)
+        complete = run.metadata.get("telemetry_complete", False)
+        line = Text()
+        line.append(f"{persisted}/{observed} calls persisted  ",
+                    style="green" if complete else "yellow bold")
+        line.append(
+            "complete" if complete else "INCOMPLETE",
+            style="green" if complete else "yellow bold",
+        )
+        _kv(body, "telemetry", line)
+
+        validity = Text()
+        quality = run.metadata.get("valid_for_quality_reporting", True)
+        efficiency = run.metadata.get("valid_for_efficiency_comparison", complete)
+        validity.append("quality ", style="dim")
+        validity.append("yes" if quality else "no", style="green" if quality else "red")
+        validity.append("   efficiency ", style="dim")
+        validity.append(
+            "yes" if efficiency else "no", style="green" if efficiency else "yellow"
+        )
+        _kv(body, "valid for", validity)
 
     gates = Text()
     unapproved = run.metadata.get("unapproved_mutations", 0)
@@ -445,20 +508,85 @@ def render_evaluation(act: activity_mod.Activity) -> Panel:
         gates.append(f"{label} {value}  ", style=style)
     _kv(body, "hard gates", gates)
 
-    commit = run.metadata.get("mimir_commit")
+    commit = source.get("commit")
     if commit:
-        provenance = Text(str(commit), style="dim")
-        if run.metadata.get("mimir_dirty"):
-            provenance.append("  dirty", style="yellow")
-        corpus = run.metadata.get("corpus_hash")
+        line = Text(str(commit), style="dim")
+        if source.get("dirty"):
+            line.append("  dirty", style="yellow")
+        if source.get("changed_during_run"):
+            line.append("  SOURCE CHANGED MID-RUN", style="red bold")
+        corpus = evaluation.get("corpus_hash")
         if corpus:
-            provenance.append(f"   corpus {corpus}", style="dim")
-        _kv(body, "provenance", provenance)
+            line.append(f"   corpus {corpus}", style="dim")
+        line.append(f"   schema v{version}", style="dim" if version >= 2 else "yellow")
+        _kv(body, "provenance", line)
 
     return Panel(
         body,
         title="evaluation",
         border_style="yellow" if run.completed_at is None else "green",
+    )
+
+
+def render_telemetry(act: activity_mod.Activity) -> Panel:
+    """Measured cost per role over the last hour.
+
+    This panel could not exist before the telemetry repair: model_calls held
+    zero rows, so per-role latency and token cost were unknowable and the only
+    number available was wall clock for a whole investigation.
+    """
+    health = act.telemetry
+    if not act.roles:
+        body = Text(
+            "no model calls recorded in the last hour"
+            if health.model_calls_total
+            else "model_calls is empty; per-call telemetry is not being recorded",
+            style="dim" if health.model_calls_total else "yellow",
+        )
+        return Panel(body, title="telemetry", border_style="dim")
+
+    total_ms = sum(r.total_latency_ms for r in act.roles) or 1.0
+    table = Table.grid(padding=(0, 1))
+    table.add_column(width=18, no_wrap=True)
+    table.add_column(width=4, justify="right")
+    table.add_column(width=7, justify="right")
+    table.add_column(width=12, no_wrap=True)
+    table.add_column(width=14, no_wrap=True)
+    table.add_row(
+        Text("role", style="dim"), Text("n", style="dim"),
+        Text("mean", style="dim"), Text("share", style="dim"),
+        Text("tokens", style="dim"),
+    )
+    for role in act.roles[:7]:
+        share = role.total_latency_ms / total_ms
+        line = Text()
+        line.append_text(_bar(share, width=6, warn=0.5, crit=0.7))
+        line.append(f" {share * 100:3.0f}%", style="dim")
+        flags = Text()
+        if role.failed:
+            flags.append(f"  {role.failed} failed", style="red")
+        if role.retries:
+            flags.append(f"  {role.retries} retries", style="yellow")
+        table.add_row(
+            Text(_role_label(role.role)),
+            Text(str(role.calls)),
+            Text(f"{role.mean_latency_ms / 1000:.1f}s"),
+            line,
+            Text.assemble(
+                (f"{role.prompt_tokens // 1000}k/{role.completion_tokens}", ""), flags
+            ),
+        )
+
+    footer = Text()
+    footer.append(health.summary, style="green" if health.complete else "yellow")
+    footer.append(f"   {health.model_calls_total} calls recorded", style="dim")
+    if health.orphaned_rows:
+        footer.append(f"   {health.orphaned_rows} orphaned", style="red")
+
+    return Panel(
+        Group(table, footer),
+        title="telemetry",
+        border_style="green" if health.complete else "yellow",
     )
 
 
@@ -519,8 +647,8 @@ def build(
     layout.split_column(
         Layout(_header(settings, interval), size=3, name="header"),
         Layout(name="upper", size=14),
-        Layout(name="lower", size=12),
-        Layout(render_events(lines, log_path), name="events"),
+        Layout(name="lower", size=14),
+        Layout(name="bottom"),
     )
     layout["upper"].split_row(
         Layout(render_work(act, sample), name="work"),
@@ -529,6 +657,10 @@ def build(
     layout["lower"].split_row(
         Layout(render_machine(sample), name="machine"),
         Layout(render_evaluation(act), name="evaluation"),
+    )
+    layout["bottom"].split_row(
+        Layout(render_telemetry(act), name="telemetry"),
+        Layout(render_events(lines, log_path), name="events"),
     )
     return layout
 

@@ -7,6 +7,7 @@ first implementation got it wrong and said so on screen in red.
 
 from __future__ import annotations
 
+import io
 import sqlite3
 import time
 
@@ -237,3 +238,135 @@ class TestCorpusLoading:
         )
         cases = EvalHarness.load_corpus(tmp_path)
         assert [c.id for c in cases] == ["good"]
+
+
+class TestTelemetryPanel:
+    def test_history_is_not_reported_as_a_present_fault(self):
+        """Sessions older than the first telemetry row predate the
+        instrumentation, so their lack of model calls is expected.
+
+        Counting them showed "17/20 recent sessions recorded no model calls" at
+        a moment when every session since the fix was instrumented correctly.
+        """
+        health = activity.TelemetryHealth(
+            sessions_checked=3, sessions_without_calls=0,
+            model_calls_total=43, instrumented_since=1000.0,
+        )
+        assert health.complete
+        assert "3/3" in health.summary
+
+    def test_a_genuine_gap_is_still_reported(self):
+        act = activity.Activity()
+        act.sessions = [
+            activity.SessionRow("s1", "completed", "t", "eval", "", 0.0, 0.0, 1.0, None, None)
+        ]
+        act.model_calls_total = 10
+        act.telemetry = activity.TelemetryHealth(
+            sessions_checked=5, sessions_without_calls=2, model_calls_total=10
+        )
+        assert "2/5" in act.audit_gap
+
+    def test_orphaned_rows_are_surfaced(self):
+        act = activity.Activity()
+        act.sessions = [
+            activity.SessionRow("s1", "completed", "t", "eval", "", 0.0, 0.0, 1.0, None, None)
+        ]
+        act.model_calls_total = 10
+        act.telemetry = activity.TelemetryHealth(
+            sessions_checked=5, sessions_without_calls=0, model_calls_total=10,
+            orphaned_rows=3,
+        )
+        assert "orphan" in act.audit_gap or "no session" in act.audit_gap
+
+    def test_role_means_are_per_call_not_totals(self):
+        role = activity.RoleTelemetry(
+            role="deep_investigation", model="qwen2.5:7b", calls=4, total_latency_ms=8000.0
+        )
+        assert role.mean_latency_ms == pytest.approx(2000.0)
+
+    def test_no_calls_means_no_division(self):
+        assert activity.RoleTelemetry(role="x", model="y").mean_latency_ms == 0.0
+
+
+def _rendered(renderable) -> str:
+    """Render to plain text.
+
+    str() of a Rich renderable is its repr, not its content, so asserting
+    against it passes or fails for reasons unrelated to what is displayed.
+    """
+    from rich.console import Console
+
+    console = Console(width=120, record=True, file=io.StringIO())
+    console.print(renderable)
+    return console.export_text()
+
+
+class TestEvaluationPanelSchemas:
+    """The panel must read v2 runs and still display v1 runs honestly."""
+
+    def _run(self, metadata):
+        return activity.EvalRunRow(
+            id="eval_x", suite="regression", model_alias="", total=52, passed=47,
+            failed=5, created_at=0.0, completed_at=1.0, metadata=metadata,
+        )
+
+    def test_v2_contamination_is_read_from_the_nested_shape(self):
+        from mimir.monitor.dashboard import render_evaluation
+
+        act = activity.Activity()
+        act.latest_run = self._run({
+            "provenance": {
+                "schema_version": 2,
+                "evaluation": {"contaminated": True, "contaminated_reason": "web enabled",
+                               "enabled_tools_hash": "abc"},
+                "source": {"commit": "abc123"},
+            }
+        })
+        assert "CONTAMINATED" in _rendered(render_evaluation(act))
+
+    def test_missing_tool_fingerprint_is_shown_as_not_comparable(self):
+        """An empty fingerprint is not a match with another empty fingerprint."""
+        from mimir.monitor.dashboard import render_evaluation
+
+        act = activity.Activity()
+        act.latest_run = self._run({
+            "provenance": {
+                "schema_version": 2,
+                "evaluation": {"enabled_tools_hash": "", "offline": True},
+                "source": {"commit": "abc123"},
+            }
+        })
+        assert "not comparable" in _rendered(render_evaluation(act))
+
+    def test_source_changing_mid_run_is_flagged(self):
+        from mimir.monitor.dashboard import render_evaluation
+
+        act = activity.Activity()
+        act.latest_run = self._run({
+            "provenance": {
+                "schema_version": 2,
+                "evaluation": {"enabled_tools_hash": "abc", "offline": True},
+                "source": {"commit": "abc123", "changed_during_run": True},
+            }
+        })
+        assert "SOURCE CHANGED" in _rendered(render_evaluation(act))
+
+    def test_incomplete_telemetry_marks_efficiency_invalid_but_not_quality(self):
+        from mimir.monitor.dashboard import render_evaluation
+
+        act = activity.Activity()
+        act.latest_run = self._run({
+            "model_invocations_observed": 12,
+            "model_calls_persisted": 0,
+            "telemetry_complete": False,
+            "valid_for_quality_reporting": True,
+            "valid_for_efficiency_comparison": False,
+            "provenance": {
+                "schema_version": 2,
+                "evaluation": {"enabled_tools_hash": "abc", "offline": True},
+                "source": {"commit": "abc123"},
+            },
+        })
+        text = _rendered(render_evaluation(act))
+        assert "INCOMPLETE" in text
+        assert "quality yes" in text.replace("  ", " ")
