@@ -217,6 +217,7 @@ class EvalReport:
         if other.enabled_tools_hash:
             self.enabled_tools_hash = other.enabled_tools_hash
             self.enabled_capabilities = list(other.enabled_capabilities)
+            self.enabled_tools = list(other.enabled_tools)
 
     @property
     def telemetry_complete(self) -> bool:
@@ -438,6 +439,13 @@ class EvalHarness:
                     "contaminated": bool(report.contaminated_reason),
                     "contaminated_reason": report.contaminated_reason,
                     "usable_for_controlled_comparison": not report.contaminated_reason,
+                    "model_invocations_observed": report.model_invocations,
+                    "model_calls_persisted": report.model_calls_persisted,
+                    "telemetry_complete": report.telemetry_complete,
+                    "valid_for_quality_reporting": not report.contaminated_reason,
+                    "valid_for_efficiency_comparison": (
+                        report.telemetry_complete and not report.contaminated_reason
+                    ),
                     "pending": [r.case_id for r in report.pending],
                     "provenance": provenance,
                     "by_kind": {k: {"passed": p, "total": t}

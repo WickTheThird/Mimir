@@ -573,3 +573,85 @@ class TestTrends:
             series = _record("test_metric", float(i), keep=10)
         assert len(series) == 10
         assert series[-1] == 499.0
+
+
+class TestPersistedMetadataShape:
+    """Assert on what reaches the database, not on what the code appears to do.
+
+    Two fields were silently missing from every stored run: `enabled_tools` was
+    dropped by the merge, and the telemetry keys were never written at all
+    because a blind string replacement did not match its anchor. Both looked
+    correct in the source. Neither had a test asserting the persisted shape, so
+    both reached the database, and the only reason they were caught is that
+    someone read a stored record back.
+    """
+
+    REQUIRED = (
+        "unapproved_mutations",
+        "dangerous_proposals",
+        "unsupported_claim_rate",
+        "enabled_tools_hash",
+        "enabled_capabilities",
+        "external_calls",
+        "contaminated",
+        "model_invocations_observed",
+        "model_calls_persisted",
+        "telemetry_complete",
+        "valid_for_quality_reporting",
+        "valid_for_efficiency_comparison",
+        "provenance",
+    )
+
+    def test_every_field_a_reader_needs_is_written(self, monkeypatch):
+        from mimir.eval.harness import EvalHarness, EvalReport
+
+        captured = {}
+
+        class FakeRepo:
+            def create_run(self, run_id, **kwargs):
+                captured.update(kwargs.get("metadata") or {})
+
+            def record_result(self, *a, **k):
+                pass
+
+            def complete_run(self, *a, **k):
+                pass
+
+        import mimir.persistence.repositories as repos
+
+        monkeypatch.setattr(repos, "EvalRepository", lambda *a, **k: FakeRepo())
+
+        report = EvalReport(label="test")
+        report.model_invocations = 7
+        report.model_calls_persisted = 7
+        EvalHarness().persist(report, suite="test")
+
+        missing = [f for f in self.REQUIRED if f not in captured]
+        assert not missing, f"missing from persisted metadata: {missing}"
+        assert captured["telemetry_complete"] is True
+        assert captured["valid_for_efficiency_comparison"] is True
+
+    def test_absorb_carries_the_tool_names_not_only_the_hash(self):
+        """The hash proves two runs used the same tools; the names say which.
+        A stored run with a hash and an empty name list cannot be audited."""
+        from mimir.eval.harness import EvalReport
+
+        combined = EvalReport(label="deterministic")
+        model = EvalReport(label="model")
+        model.enabled_tools_hash = "abc123"
+        model.enabled_capabilities = ["repository"]
+        model.enabled_tools = ["search_repository", "read_file"]
+
+        combined.absorb(model)
+        assert combined.enabled_tools == ["search_repository", "read_file"]
+
+    def test_telemetry_counts_survive_the_merge(self):
+        from mimir.eval.harness import EvalReport
+
+        combined = EvalReport()
+        model = EvalReport()
+        model.model_invocations = 12
+        model.model_calls_persisted = 12
+        combined.absorb(model)
+        assert combined.model_invocations == 12
+        assert combined.telemetry_complete
