@@ -113,6 +113,74 @@ class RoleTelemetry:
 
 
 @dataclass
+class CouncilNode:
+    """One specialist, with its measured cost and output.
+
+    Every number here is observed. None of it describes the model's internals:
+    Ollama exposes no weights, activations or attention, so anything resembling
+    a picture of "what the model is thinking" would be invented. What MIMIR does
+    expose is its own topology, and that is what this measures.
+    """
+
+    specialist: str
+    calls: int = 0
+    total_latency_ms: float = 0.0
+    tool_calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    failed: int = 0
+    evidence: int = 0
+    active: bool = False
+    last_seen: float = 0.0
+
+    @property
+    def mean_latency_ms(self) -> float:
+        return self.total_latency_ms / self.calls if self.calls else 0.0
+
+
+@dataclass
+class Council:
+    """The council graph with measured edge weights.
+
+    Structure comes from the code (who may run, and in what order); weights come
+    from the database (how often, how long, how many tools, how much evidence).
+    Neither is guessed.
+    """
+
+    nodes: list[CouncilNode] = field(default_factory=list)
+    evidence_sources: list[tuple[str, int]] = field(default_factory=list)
+    window_s: float = 3600.0
+
+    def by_name(self, name: str) -> CouncilNode | None:
+        return next((n for n in self.nodes if n.specialist == name), None)
+
+    @property
+    def entry(self) -> CouncilNode | None:
+        return self.by_name("coordinator")
+
+    @property
+    def exit(self) -> CouncilNode | None:
+        return self.by_name("synthesis")
+
+    @property
+    def workers(self) -> list[CouncilNode]:
+        """Everything between entry and exit, busiest first."""
+        return sorted(
+            (n for n in self.nodes if n.specialist not in ("coordinator", "synthesis")),
+            key=lambda n: n.total_latency_ms,
+            reverse=True,
+        )
+
+    @property
+    def total_latency_ms(self) -> float:
+        return sum(n.total_latency_ms for n in self.nodes) or 1.0
+
+    @property
+    def active_names(self) -> list[str]:
+        return [n.specialist for n in self.nodes if n.active]
+
+
+@dataclass
 class TelemetryHealth:
     """Whether the audit and telemetry trails agree with observed activity."""
 
@@ -304,6 +372,7 @@ class Activity:
     in_flight: InFlightEval | None = None
     roles: list[RoleTelemetry] = field(default_factory=list)
     series: Series = field(default_factory=Series)
+    council: Council = field(default_factory=Council)
     live_cases: list[LiveCase] = field(default_factory=list)
     telemetry: TelemetryHealth = field(default_factory=TelemetryHealth)
     sessions_last_hour: int = 0
@@ -508,6 +577,65 @@ def _collect_telemetry(conn: sqlite3.Connection, out: Activity) -> None:
         return
     health.complete = not health.sessions_without_calls and not health.orphaned_rows
     out.telemetry = health
+
+
+def collect_council(
+    settings: Settings | None = None, *, window_s: float = 3600.0
+) -> Council:
+    """Measure the council graph over a recent window.
+
+    A specialist counts as active if it issued a model call in the last few
+    seconds. That is inferred from telemetry rather than from any liveness
+    signal, so it lags by roughly one call; the alternative is instrumenting the
+    graph for the display's benefit, which would make the display capable of
+    disagreeing with the audit trail.
+    """
+    active = settings or get_settings()
+    council = Council(window_s=window_s)
+    try:
+        conn = _connect(active)
+    except (FileNotFoundError, sqlite3.Error):
+        return council
+
+    since = time.time() - window_s
+    recently = time.time() - 20.0
+    try:
+        rows = conn.execute(
+            "select specialist, count(*), sum(latency_ms), sum(tool_calls), "
+            "sum(coalesce(prompt_tokens,0)), sum(coalesce(completion_tokens,0)), "
+            "sum(case when ok then 0 else 1 end), max(created_at) "
+            "from model_calls where specialist is not null and created_at >= ? "
+            "group by specialist",
+            (since,),
+        ).fetchall()
+        council.nodes = [
+            CouncilNode(
+                specialist=r[0],
+                calls=int(r[1] or 0),
+                total_latency_ms=float(r[2] or 0.0),
+                tool_calls=int(r[3] or 0),
+                prompt_tokens=int(r[4] or 0),
+                completion_tokens=int(r[5] or 0),
+                failed=int(r[6] or 0),
+                last_seen=float(r[7] or 0.0),
+                active=float(r[7] or 0.0) >= recently,
+            )
+            for r in rows
+        ]
+        council.evidence_sources = [
+            (r[0], int(r[1]))
+            for r in conn.execute(
+                "select collected_by, count(*) from evidence "
+                "where collected_by is not null and collected_at >= ? "
+                "group by collected_by order by count(*) desc limit 6",
+                (since,),
+            )
+        ]
+    except sqlite3.Error:
+        return council
+    finally:
+        conn.close()
+    return council
 
 
 def live_cases(started_at: float, settings: Settings | None = None) -> list[LiveCase]:

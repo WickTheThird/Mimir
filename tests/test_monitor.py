@@ -455,3 +455,77 @@ class TestLiveCases:
             confidence=None, evidence=0, tool_calls=0, duration_s=3.0, running=True,
         )
         assert running.running and running.confidence is None
+
+
+class TestCouncilGraph:
+    """The graph is drawn from telemetry. Structure from code, weights from data."""
+
+    def test_labels_are_abbreviated_not_truncated(self):
+        """A chopped word reads as a bug; an abbreviation reads as deliberate."""
+        from mimir.monitor.dashboard import _SPECIALIST_SHORT
+
+        for full, short in _SPECIALIST_SHORT.items():
+            assert len(short) <= 11, f"{full} -> {short} will be cut off"
+
+    def _council(self, *nodes):
+        c = activity.Council()
+        c.nodes = list(nodes)
+        return c
+
+    def _node(self, name, **kw):
+        return activity.CouncilNode(specialist=name, **kw)
+
+    def test_entry_and_exit_are_identified(self):
+        c = self._council(
+            self._node("coordinator", calls=10),
+            self._node("log_analyst", calls=5),
+            self._node("synthesis", calls=10),
+        )
+        assert c.entry.specialist == "coordinator"
+        assert c.exit.specialist == "synthesis"
+        assert [n.specialist for n in c.workers] == ["log_analyst"]
+
+    def test_workers_are_ordered_by_measured_cost_not_by_name(self):
+        c = self._council(
+            self._node("aaa_cheap", total_latency_ms=100.0),
+            self._node("zzz_expensive", total_latency_ms=9000.0),
+        )
+        assert [n.specialist for n in c.workers] == ["zzz_expensive", "aaa_cheap"]
+
+    def test_mean_latency_never_divides_by_zero(self):
+        assert self._node("x").mean_latency_ms == 0.0
+
+    def test_total_latency_is_never_zero_so_shares_are_safe(self):
+        """Share of time divides by this. A council with no recorded latency
+        would otherwise raise while rendering."""
+        assert self._council(self._node("x")).total_latency_ms == 1.0
+
+    def test_active_nodes_are_reported(self):
+        c = self._council(
+            self._node("coordinator", active=False),
+            self._node("log_analyst", active=True),
+        )
+        assert c.active_names == ["log_analyst"]
+
+    def test_an_empty_council_renders_without_claiming_anything(self):
+        from mimir.monitor.dashboard import render_council
+
+        act = activity.Activity()
+        text = _rendered(render_council(act))
+        assert "no model calls" in text
+        assert "drawn from telemetry" in text
+
+    def test_the_panel_shows_measured_edges_not_invented_ones(self):
+        from mimir.monitor.dashboard import render_council
+
+        act = activity.Activity()
+        act.council = self._council(
+            self._node("coordinator", calls=43, total_latency_ms=215000.0),
+            self._node("kubernetes_investigator", calls=88, total_latency_ms=721000.0,
+                       tool_calls=72),
+            self._node("synthesis", calls=44, total_latency_ms=602000.0),
+        )
+        text = _rendered(render_council(act))
+        assert "coordinator" in text and "k8s" in text and "synthesis" in text
+        assert "72t" in text, "tool-call weight must be shown"
+        assert "43x" in text, "call count must be shown"

@@ -528,6 +528,114 @@ def render_evaluation(act: activity_mod.Activity) -> Panel:
     )
 
 
+_SPECIALIST_SHORT = {
+    # Chosen to fit the column without truncation. "kubernete" is worse than
+    # "k8s": an abbreviation reads as deliberate, a chopped word reads as a bug.
+    "kubernetes_investigator": "k8s",
+    "repository_explorer": "repo",
+    "behaviour_verifier": "behaviour",
+    "sdm_investigator": "sdm",
+    "log_analyst": "logs",
+    "web_researcher": "web",
+    "memory_curator": "memory",
+    "safety_reviewer": "safety",
+    "coordinator": "coordinator",
+    "synthesis": "synthesis",
+}
+
+
+def render_council(act: activity_mod.Activity) -> Panel:
+    """The council graph, drawn from its own telemetry.
+
+    This is not a picture of the model. Ollama exposes no weights, activations
+    or attention, so anything resembling one would be decoration presented as
+    data. What is real, and what this draws, is MIMIR's own topology: the
+    structure comes from the code, the edge weights come from measured calls,
+    latency, tool use and evidence.
+    """
+    council = act.council
+    if not council.nodes:
+        return Panel(
+            Text(
+                "no model calls in the last hour\n"
+                "the council graph is drawn from telemetry, so it needs traffic",
+                style="dim",
+            ),
+            title="council flow",
+            border_style="dim",
+        )
+
+    body = Text()
+    total = council.total_latency_ms
+
+    def node_line(node: activity_mod.CouncilNode, prefix: str, width: int = 11) -> None:
+        label = _SPECIALIST_SHORT.get(node.specialist, node.specialist)[:width]
+        body.append(prefix, style="dim")
+        body.append(f"{label:<{width}}", style="bold yellow" if node.active else "bold")
+        body.append(f"{node.calls:>4}x ", style="dim")
+        body.append(f"{node.mean_latency_ms / 1000:5.1f}s ", style="")
+        body.append_text(_bar(node.total_latency_ms / total, width=5, warn=0.4, crit=0.6))
+        body.append(f" {node.tool_calls:>3}t" if node.tool_calls else "   -", style="dim")
+        if node.failed:
+            body.append(f" {node.failed}!", style="red")
+        elif node.active:
+            body.append(" <", style="yellow bold")
+        body.append("\n")
+
+    entry, workers, exit_node = council.entry, council.workers, council.exit
+
+    # The decorative "question" header and spacer rows were the first thing to
+    # go when the panel ran out of height: they carry no measurement, and losing
+    # the evidence row and the telemetry footer to make room for them would be
+    # trading data for ornament.
+    if entry is not None:
+        node_line(entry, "  ")
+    for index, node in enumerate(workers):
+        body.append("  " + ("\u251c\u2500 " if index < len(workers) - 1 else "\u2514\u2500 "),
+                    style="dim")
+        label = _SPECIALIST_SHORT.get(node.specialist, node.specialist)[:9]
+        body.append(f"{label:<9}", style="bold yellow" if node.active else "")
+        body.append(f"{node.calls:>4}x ", style="dim")
+        body.append(f"{node.mean_latency_ms / 1000:5.1f}s ", style="")
+        body.append_text(_bar(node.total_latency_ms / total, width=5, warn=0.4, crit=0.6))
+        body.append(f" {node.tool_calls:>3}t" if node.tool_calls else "   -", style="dim")
+        if node.failed:
+            body.append(f" {node.failed}!", style="red")
+        elif node.active:
+            body.append(" <", style="yellow bold")
+        body.append("\n")
+    if exit_node is not None:
+        node_line(exit_node, "  ")
+
+    if council.evidence_sources:
+        body.append("  evidence ", style="dim")
+        body.append(
+            "  ".join(f"{name[:13]} {count}" for name, count in council.evidence_sources[:2]),
+            style="dim",
+        )
+        body.append("\n")
+
+    health = act.telemetry
+    footer = Text()
+    footer.append(health.summary, style="green" if health.complete else "yellow")
+    footer.append(f"   {health.model_calls_total} calls recorded", style="dim")
+    idle = [
+        _SPECIALIST_SHORT.get(n, n)
+        for n in ("web_researcher", "sdm_investigator", "memory_curator")
+        if council.by_name(n) is None
+    ]
+    if idle:
+        # A specialist that never runs is either correctly unused for this
+        # workload or quietly broken, and the graph is where that shows.
+        footer.append(f"   never ran: {', '.join(idle)}", style="dim")
+
+    return Panel(
+        Group(body, footer),
+        title="council flow",
+        border_style="green" if health.complete else "yellow",
+    )
+
+
 def render_telemetry(act: activity_mod.Activity) -> Panel:
     """Measured cost per role over the last hour.
 
@@ -821,6 +929,7 @@ def build(
         )
         act.live_cases = activity_mod.live_cases(evaluating.started_at, settings)
     act.series = activity_mod.collect_series(settings)
+    act.council = activity_mod.collect_council(settings)
 
     lines = activity_mod.tail_log(log_path, lines=6)
     running = act.in_flight is not None
@@ -844,7 +953,7 @@ def build(
 
     lower = Layout(name="lower", size=14 if has_series else 12)
     lower.split_row(
-        Layout(render_telemetry(act), name="telemetry"),
+        Layout(render_council(act), name="council"),
         Layout(
             render_series(act) if has_series else render_events(lines, log_path),
             name="series" if has_series else "events",

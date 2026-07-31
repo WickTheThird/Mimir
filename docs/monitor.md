@@ -98,11 +98,43 @@ more statistical resolution than that sample supports. Runs stored under
 provenance schema 1, and contaminated runs, are excluded from series grouping
 entirely.
 
-## Telemetry
+## Council flow
 
-The telemetry panel shows measured cost per role over the last hour: call count,
-mean latency, share of total inference time, and tokens in and out. Failures and
-retries appear beside the token counts.
+```
+  coordinator  44x   5.0s ░░░░░   -
+  ├─ k8s        94x   7.9s █░░░░  78t
+  ├─ logs       71x   6.9s █░░░░  82t
+  ├─ behaviour  76x   5.4s █░░░░  64t
+  ├─ repo       58x   5.6s █░░░░  53t
+  ├─ safety     11x  11.7s ░░░░░   -
+  └─ memory      4x   9.2s ░░░░░   3t
+  synthesis    45x  13.7s █░░░░   -
+  evidence memory_curato 307  search_reposi 178
+  43/43 recent sessions instrumented   403 calls recorded
+  never ran: web, sdm
+```
+
+**This is not a picture of the model.** Ollama exposes no weights, activations
+or attention, so a diagram of neurons or attention heads would be decoration
+presented as data. What MIMIR does expose is its own topology, and that is what
+this draws.
+
+Structure comes from the code: who may run, and in what order. Weights come from
+the database: call count, mean latency, share of total inference time, tool
+calls, failures, and evidence attributed to each producer. Neither half is
+guessed.
+
+A specialist currently issuing model calls is highlighted and marked `<`. That
+is inferred from telemetry rather than from a liveness signal, so it lags by
+about one call; the alternative is instrumenting the graph for the display's
+benefit, which would let the display disagree with the audit trail.
+
+The `never ran` line names specialists absent from the window entirely. A
+specialist that never fires is either correctly unused for this workload or
+quietly broken, and the graph is where that distinction becomes visible.
+
+Labels are abbreviated rather than truncated (`k8s`, not `kubernete`): an
+abbreviation reads as deliberate, a chopped word reads as a bug.
 
 This panel could not exist before the telemetry repair. `model_calls` held zero
 rows, so per-role latency and token cost were unknowable and the only available
