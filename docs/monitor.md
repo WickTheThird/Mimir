@@ -2,6 +2,7 @@
 
 ```bash
 mimir monitor                        # live, refreshes every 2s
+mimir monitor --view runs            # evaluation: cases in flight, run series
 mimir monitor -n 5                   # slower refresh
 mimir monitor --log /tmp/run.log     # tail a specific log
 mimir monitor --once                 # one frame, for scripts and screenshots
@@ -58,6 +59,47 @@ extrapolating from it produces a confident estimate built on nothing.
 A stall warning appears when the gap since the last completed case exceeds three
 times the observed mean. A fixed threshold would either cry wolf on a slow model
 or stay silent on a fast one.
+
+## The runs view
+
+```bash
+mimir monitor --view runs
+```
+
+A separate view rather than more panels on the overview. The overview answers
+"is this machine healthy"; this answers "is this experiment trustworthy", and
+one screen holding both makes neither readable.
+
+**Cases in flight.** Each case of the running evaluation as it completes, with
+its case id, task type, confidence, evidence count, tool calls and duration.
+Cases are matched to sessions by prompt, because the harness writes no
+`eval_results` row until the whole run finishes.
+
+There is deliberately **no pass or fail column**. Scoring happens in process and
+is not on disk until the run ends, so a verdict shown here would be invented.
+What is displayed is what was measured. The footer reports mean tool calls and
+how many cases were answered with no tools at all, which is the signal that
+separated a 7B run from a 1.5B run far more sharply than the pass count did.
+
+**Run series.** Completed runs sharing a corpus, a commit **and** a model, with
+mean, range, spread, standard deviation and stability rate. Grouping on all
+three matters: averaging across a corpus or commit change produces the mean of
+two different experiments.
+
+Below that, only the cases that disagreed between runs, with each run's outcome
+and the majority verdict:
+
+```
+unstable case                          1  2  3   majority
+inv-001-locate-risk-classifier         P  F  F   F 67%
+inv-009-ambiguous-namespace            F  P  F   F 67%
+```
+
+Stability rate is the fraction of cases with the same outcome in every run.
+With three runs a case can only agree 3/3 or 2/3, and the display does not imply
+more statistical resolution than that sample supports. Runs stored under
+provenance schema 1, and contaminated runs, are excluded from series grouping
+entirely.
 
 ## Telemetry
 

@@ -590,6 +590,176 @@ def render_telemetry(act: activity_mod.Activity) -> Panel:
     )
 
 
+def render_live_cases(act: activity_mod.Activity, limit: int = 14) -> Panel:
+    """Cases of the run in flight, as they complete.
+
+    No pass or fail column. Scoring happens in process and is not written until
+    the run ends, so any verdict here would be invented. Confidence, evidence,
+    tool calls and duration are measured, and are shown instead.
+    """
+    cases = act.live_cases
+    if not cases:
+        return Panel(
+            Text("no evaluation in flight", style="dim"),
+            title="cases",
+            border_style="dim",
+        )
+
+    table = Table.grid(padding=(0, 1))
+    table.add_column(width=3, justify="right")
+    table.add_column(width=36, no_wrap=True, overflow="ellipsis")
+    table.add_column(width=22, no_wrap=True, overflow="ellipsis")
+    table.add_column(width=6, justify="right")
+    table.add_column(width=5, justify="right")
+    table.add_column(width=5, justify="right")
+    table.add_column(width=7, justify="right")
+    table.add_row(
+        Text("#", style="dim"), Text("case", style="dim"),
+        Text("task type", style="dim"), Text("conf", style="dim"),
+        Text("ev", style="dim"), Text("tool", style="dim"),
+        Text("time", style="dim"),
+    )
+
+    shown = cases[-limit:]
+    offset = len(cases) - len(shown)
+    for index, case in enumerate(shown, start=offset + 1):
+        if case.running:
+            marker, style = "▸", "yellow bold"
+        elif case.error:
+            marker, style = "!", "red"
+        else:
+            marker, style = " ", ""
+        confidence = Text("-", style="dim")
+        if case.confidence is not None:
+            # Low confidence is correct on a trap case and wrong on a
+            # locate-the-symbol case, so this is coloured by magnitude only and
+            # never labelled good or bad.
+            confidence = Text(
+                f"{case.confidence:.2f}",
+                style="green" if case.confidence >= 0.5
+                else ("yellow" if case.confidence >= 0.2 else "red"),
+            )
+        table.add_row(
+            Text(f"{index}{marker}", style=style),
+            Text(case.case_id, style=style or "bold"),
+            Text(case.task_type or "-", style="dim"),
+            confidence,
+            Text(str(case.evidence), style="dim"),
+            Text(str(case.tool_calls), style="dim"),
+            Text(_duration(case.duration_s), style="dim"),
+        )
+
+    done = [c for c in cases if not c.running]
+    footer = Text()
+    if done:
+        mean_tools = sum(c.tool_calls for c in done) / len(done)
+        zero_tool = sum(1 for c in done if c.tool_calls == 0)
+        footer.append(f"{len(done)} complete   ", style="dim")
+        footer.append(f"mean {mean_tools:.1f} tool calls   ", style="dim")
+        footer.append(
+            f"{zero_tool} answered with no tools",
+            style="yellow" if zero_tool else "dim",
+        )
+    return Panel(Group(table, footer), title="cases in flight", border_style="cyan")
+
+
+def render_series(act: activity_mod.Activity) -> Panel:
+    """Repeats of the same experiment, and where they disagree.
+
+    Only runs sharing a corpus, a commit and a model are grouped. Averaging
+    across a corpus change or a commit change would produce the mean of two
+    different experiments.
+    """
+    series = act.series
+    if not series.runs:
+        return Panel(
+            Text(
+                "no comparable completed runs yet\n"
+                "a series needs two or more runs sharing corpus, commit and model",
+                style="dim",
+            ),
+            title="run series",
+            border_style="dim",
+        )
+
+    header = Table.grid(padding=(0, 1))
+    header.add_column(width=4)
+    header.add_column(width=20, no_wrap=True)
+    header.add_column(width=9, justify="right")
+    header.add_column(width=16)
+    header.add_row(
+        Text("run", style="dim"), Text("id", style="dim"),
+        Text("passed", style="dim"), Text("", style="dim"),
+    )
+    for run in series.runs:
+        header.add_row(
+            Text(run.label, style="bold"),
+            Text(run.run_id, style="dim"),
+            Text(f"{run.passed}/{run.total}"),
+            _bar(run.pass_rate, width=14, warn=0.6, crit=0.4),
+        )
+
+    stats = Text()
+    if len(series.runs) >= 2:
+        stats.append(f"mean {series.mean:.1f}   ", style="")
+        stats.append(
+            f"range {min(series.counts)}-{max(series.counts)} "
+            f"(spread {series.spread})   ",
+            style="yellow bold" if series.spread >= 3 else "dim",
+        )
+        stats.append(f"sd {series.stdev:.1f}", style="dim")
+        rate = series.stability_rate()
+        if rate is not None:
+            stats.append(f"   stability {rate * 100:.0f}%", style="dim")
+    else:
+        stats.append("one run so far; a single run is not a measurement", style="dim")
+
+    parts: list[RenderableType] = [header, stats]
+
+    unstable = act.series.unstable_cases()
+    if unstable:
+        grid = Table.grid(padding=(0, 1))
+        grid.add_column(width=38, no_wrap=True, overflow="ellipsis")
+        for _ in series.runs:
+            grid.add_column(width=2, justify="center")
+        grid.add_column(width=10)
+        grid.add_row(
+            Text("unstable case", style="dim"),
+            *[Text(r.label.lstrip("#"), style="dim") for r in series.runs],
+            Text("majority", style="dim"),
+        )
+        for case_id, outcomes, majority, agreement in unstable[:8]:
+            cells = []
+            for outcome in outcomes:
+                if outcome is None:
+                    cells.append(Text("-", style="dim"))
+                else:
+                    cells.append(
+                        Text("P" if outcome else "F", style="green" if outcome else "red")
+                    )
+            verdict = Text(
+                f"{'P' if majority else 'F'} {agreement * 100:.0f}%",
+                style="green" if majority else "red",
+            )
+            grid.add_row(Text(case_id), *cells, verdict)
+        parts.append(grid)
+        parts.append(
+            Text(
+                f"{len(unstable)} case(s) changed outcome between identical runs",
+                style="yellow",
+            )
+        )
+    elif len(series.runs) >= 2:
+        parts.append(Text("every case agreed across all runs", style="green"))
+
+    footer = Text()
+    footer.append(f"corpus {series.corpus_hash}   ", style="dim")
+    footer.append(f"commit {series.commit}", style="dim")
+    parts.append(footer)
+
+    return Panel(Group(*parts), title="run series", border_style="magenta")
+
+
 def render_events(lines: list[str], source: Path | None) -> Panel:
     if not lines:
         hint = (
@@ -613,10 +783,10 @@ def render_events(lines: list[str], source: Path | None) -> Panel:
     return Panel(body, title=f"events  {source}" if source else "events", border_style="dim")
 
 
-def _header(settings: Settings, interval: float) -> Panel:
+def _header(settings: Settings, interval: float, *, view: str = "overview") -> Panel:
     line = Text()
     line.append("MIMIR", style="bold white")
-    line.append("  monitor", style="dim")
+    line.append(f"  monitor  {view}", style="dim")
     line.append(f"   {time.strftime('%H:%M:%S')}", style="dim")
     line.append(f"   home {settings.home}", style="dim")
     line.append(f"   refresh {interval:g}s   q to quit", style="dim")
@@ -629,6 +799,7 @@ def build(
     interval: float,
     *,
     first: bool = False,
+    view: str = "overview",
 ) -> Layout:
     sample = machine_mod.sample(interval=0.2 if first else 0.0)
     state = runtime_mod.probe(settings)
@@ -641,6 +812,13 @@ def build(
         act.in_flight = activity_mod.in_flight_eval(
             evaluating.pid, evaluating.started_at, _model_case_count(), settings
         )
+        if view == "runs":
+            act.live_cases = activity_mod.live_cases(evaluating.started_at, settings)
+    if view == "runs":
+        act.series = activity_mod.collect_series(settings)
+
+    if view == "runs":
+        return _runs_layout(settings, act, state, interval)
     lines = activity_mod.tail_log(log_path, lines=6)
 
     layout = Layout()
@@ -665,6 +843,31 @@ def build(
     return layout
 
 
+def _runs_layout(
+    settings: Settings,
+    act: activity_mod.Activity,
+    state: runtime_mod.RuntimeState,
+    interval: float,
+) -> Layout:
+    """Evaluation-focused view: what is running, and how repeats compare.
+
+    A separate view rather than more panels on the overview. The overview
+    answers "is this machine healthy"; this answers "is this experiment
+    trustworthy", and cramming both into one screen makes neither readable.
+    """
+    layout = Layout()
+    layout.split_column(
+        Layout(_header(settings, interval, view="runs"), size=3, name="header"),
+        Layout(name="top", size=10),
+        Layout(render_live_cases(act), name="cases"),
+    )
+    layout["top"].split_row(
+        Layout(render_evaluation(act), name="evaluation"),
+        Layout(render_series(act), name="series"),
+    )
+    return layout
+
+
 def run(
     *,
     settings: Settings | None = None,
@@ -672,6 +875,7 @@ def run(
     interval: float = 2.0,
     once: bool = False,
     console: Console | None = None,
+    view: str = "overview",
 ) -> None:
     """Render once, or loop until interrupted."""
     active = settings or get_settings()
@@ -679,11 +883,11 @@ def run(
     target = log_path or active.observability.log_file
 
     if once:
-        out.print(build(active, target, interval, first=True))
+        out.print(build(active, target, interval, first=True, view=view))
         return
 
     with Live(
-        build(active, target, interval, first=True),
+        build(active, target, interval, first=True, view=view),
         console=out,
         refresh_per_second=4,
         screen=True,
@@ -691,6 +895,6 @@ def run(
         try:
             while True:
                 time.sleep(interval)
-                live.update(build(active, target, interval))
+                live.update(build(active, target, interval, view=view))
         except KeyboardInterrupt:
             return
