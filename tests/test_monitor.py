@@ -370,3 +370,88 @@ class TestEvaluationPanelSchemas:
         text = _rendered(render_evaluation(act))
         assert "INCOMPLETE" in text
         assert "quality yes" in text.replace("  ", " ")
+
+
+class TestSeriesStatistics:
+    """Repeats of one experiment. Errors here would be silent and believed."""
+
+    def _series(self, *runs):
+        s = activity.Series(corpus_hash="c", commit="abc")
+        for i, results in enumerate(runs, start=1):
+            s.runs.append(
+                activity.SeriesRun(
+                    run_id=f"eval_{i}", label=f"#{i}", model="qwen2.5:7b",
+                    passed=sum(1 for v in results.values() if v),
+                    total=len(results), created_at=float(i), results=results,
+                )
+            )
+        return s
+
+    def test_spread_and_mean_describe_what_was_seen(self):
+        s = self._series(
+            {"a": True, "b": True, "c": True},
+            {"a": True, "b": False, "c": True},
+            {"a": False, "b": False, "c": True},
+        )
+        assert s.counts == [3, 2, 1]
+        assert s.mean == pytest.approx(2.0)
+        assert s.spread == 2
+
+    def test_a_single_run_has_no_spread_to_report(self):
+        s = self._series({"a": True})
+        assert s.spread == 0
+        assert s.stdev == 0.0
+        assert s.stability_rate() is None, "one run cannot establish stability"
+
+    def test_only_disagreeing_cases_are_listed(self):
+        s = self._series(
+            {"stable_pass": True, "flips": True, "stable_fail": False},
+            {"stable_pass": True, "flips": False, "stable_fail": False},
+            {"stable_pass": True, "flips": True, "stable_fail": False},
+        )
+        unstable = s.unstable_cases()
+        assert [c[0] for c in unstable] == ["flips"]
+
+    def test_majority_and_agreement(self):
+        s = self._series(
+            {"x": True}, {"x": False}, {"x": True},
+        )
+        case_id, outcomes, majority, agreement = s.unstable_cases()[0]
+        assert case_id == "x"
+        assert outcomes == [True, False, True]
+        assert majority is True
+        assert agreement == pytest.approx(2 / 3)
+
+    def test_a_tie_resolves_to_pass_and_is_reported_as_half(self):
+        """With an even number of runs a tie is not a majority. It is reported
+        at 50% agreement so nobody reads it as a settled outcome."""
+        s = self._series({"x": True}, {"x": False})
+        _, _, majority, agreement = s.unstable_cases()[0]
+        assert majority is True
+        assert agreement == pytest.approx(0.5)
+
+    def test_stability_rate_counts_fully_agreeing_cases(self):
+        s = self._series(
+            {"a": True, "b": True, "c": False},
+            {"a": True, "b": False, "c": False},
+            {"a": True, "b": True, "c": False},
+        )
+        assert s.stability_rate() == pytest.approx(2 / 3)
+
+
+class TestLiveCases:
+    def test_no_pass_or_fail_is_claimed_before_scoring(self):
+        """Scoring happens in process and is not written until the run ends.
+        A verdict shown here would be invented."""
+        case = activity.LiveCase(
+            case_id="inv-001", session_id="s", prompt="p", task_type="t",
+            confidence=0.35, evidence=7, tool_calls=2, duration_s=19.0,
+        )
+        assert not hasattr(case, "passed")
+
+    def test_a_running_case_is_distinguished_from_a_finished_one(self):
+        running = activity.LiveCase(
+            case_id="x", session_id="s", prompt="p", task_type="t",
+            confidence=None, evidence=0, tool_calls=0, duration_s=3.0, running=True,
+        )
+        assert running.running and running.confidence is None

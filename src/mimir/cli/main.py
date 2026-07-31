@@ -759,6 +759,12 @@ def monitor(
     once: bool = typer.Option(
         False, "--once", help="Render a single frame and exit. Useful in scripts."
     ),
+    view: str = typer.Option(
+        "overview",
+        "--view",
+        "-v",
+        help="overview (machine and models) or runs (evaluation cases and series).",
+    ),
 ) -> None:
     """Live view of MIMIR activity, model runtime, and host resources.
 
@@ -768,12 +774,16 @@ def monitor(
     """
     from mimir.monitor import dashboard
 
+    if view not in ("overview", "runs"):
+        console.print(Text(f"unknown view {view!r}; use overview or runs", style="red"))
+        raise typer.Exit(2)
     dashboard.run(
         settings=get_settings(),
         log_path=log,
         interval=interval,
         once=once,
         console=console,
+        view=view,
     )
 
 
