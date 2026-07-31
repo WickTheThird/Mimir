@@ -72,6 +72,7 @@ Longer documentation lives in [docs/](docs/):
 - [docs/warp.md](docs/warp.md)
 - [docs/operations.md](docs/operations.md)
 - [docs/evaluation.md](docs/evaluation.md)
+- [docs/monitor.md](docs/monitor.md)
 
 ## Safety posture
 

@@ -749,6 +749,35 @@ def keys_create(label: str = typer.Option("", "--label")) -> None:
 
 
 @app.command()
+def monitor(
+    interval: float = typer.Option(
+        2.0, "--interval", "-n", help="Seconds between refreshes.", min=0.5
+    ),
+    log: Path | None = typer.Option(
+        None, "--log", help="Log file to tail. Defaults to observability.log_file."
+    ),
+    once: bool = typer.Option(
+        False, "--once", help="Render a single frame and exit. Useful in scripts."
+    ),
+) -> None:
+    """Live view of MIMIR activity, model runtime, and host resources.
+
+    Read-only. The database is opened read-only and the runtime is polled with
+    status endpoints, never a generate call, so watching a benchmark cannot
+    change its result.
+    """
+    from mimir.monitor import dashboard
+
+    dashboard.run(
+        settings=get_settings(),
+        log_path=log,
+        interval=interval,
+        once=once,
+        console=console,
+    )
+
+
+@app.command()
 def evaluate(
     corpus: Path | None = typer.Option(None, "--corpus", help="Corpus YAML file or directory."),
     deterministic_only: bool = typer.Option(
@@ -820,8 +849,10 @@ def evaluate(
             )
         else:
             console.print(
-                "[dim]  live tools disabled; Kubernetes, SDM, and database helpers "
-                "are excluded so scores are reproducible[/dim]"
+                "[dim]  offline: allowlisted tools only (repository, logs, memory, "
+                "skills, sandbox, internal). Web, Kubernetes, SDM, databases and "
+                "shell are excluded, and outbound network calls are blocked and "
+                "counted.[/dim]"
             )
 
         async def _scored() -> Any:
