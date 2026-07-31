@@ -98,11 +98,75 @@ more statistical resolution than that sample supports. Runs stored under
 provenance schema 1, and contaminated runs, are excluded from series grouping
 entirely.
 
-## Telemetry
+## Motion
 
-The telemetry panel shows measured cost per role over the last hour: call count,
-mean latency, share of total inference time, and tokens in and out. Failures and
-retries appear beside the token counts.
+The dashboard animates in three places, and in each the movement carries
+information that a static number cannot.
+
+**Sparklines.** CPU, memory and throughput show a trend beside the current
+value; the evaluation panel shows per-case durations across the run. An
+instantaneous reading cannot distinguish load that is climbing from a spike that
+has already passed, and a run that is slowing down looks identical to one that
+is not until you can see the shape. The per-case trend is the display that would
+have made a three-run decline visible while it was happening rather than three
+runs later.
+
+Sparklines scale to the observed range, not to a fixed ceiling, so a flat line
+means genuinely flat rather than "too small to see". Fewer than two samples
+draws the word `collecting`: one point is not a trend, and rendering it as a
+full bar would imply a maximum that was never observed.
+
+Machine trends come from the monitor's own sampling and reset when it restarts.
+Per-case durations come from the database and survive a restart, because they
+describe MIMIR rather than the display.
+
+**The liveness pulse.** `◐◓◑◒` turns beside a specialist that is currently
+issuing model calls, and beside the run header while cases are advancing.
+Everything idle shows a static `·`. This is the difference between *slow* and
+*hung*, which is otherwise invisible: a long case and a wedged process produce
+identical static output.
+
+A spinner that turns while nothing is happening would be an animation
+pretending to be a status, so the pulse is driven by observed telemetry
+recency rather than by the render loop.
+
+## Council flow
+
+```
+  coordinator  44x   5.0s ░░░░░   -
+  ├─ k8s        94x   7.9s █░░░░  78t
+  ├─ logs       71x   6.9s █░░░░  82t
+  ├─ behaviour  76x   5.4s █░░░░  64t
+  ├─ repo       58x   5.6s █░░░░  53t
+  ├─ safety     11x  11.7s ░░░░░   -
+  └─ memory      4x   9.2s ░░░░░   3t
+  synthesis    45x  13.7s █░░░░   -
+  evidence memory_curato 307  search_reposi 178
+  43/43 recent sessions instrumented   403 calls recorded
+  never ran: web, sdm
+```
+
+**This is not a picture of the model.** Ollama exposes no weights, activations
+or attention, so a diagram of neurons or attention heads would be decoration
+presented as data. What MIMIR does expose is its own topology, and that is what
+this draws.
+
+Structure comes from the code: who may run, and in what order. Weights come from
+the database: call count, mean latency, share of total inference time, tool
+calls, failures, and evidence attributed to each producer. Neither half is
+guessed.
+
+A specialist currently issuing model calls is highlighted and marked `<`. That
+is inferred from telemetry rather than from a liveness signal, so it lags by
+about one call; the alternative is instrumenting the graph for the display's
+benefit, which would let the display disagree with the audit trail.
+
+The `never ran` line names specialists absent from the window entirely. A
+specialist that never fires is either correctly unused for this workload or
+quietly broken, and the graph is where that distinction becomes visible.
+
+Labels are abbreviated rather than truncated (`k8s`, not `kubernete`): an
+abbreviation reads as deliberate, a chopped word reads as a bug.
 
 This panel could not exist before the telemetry repair. `model_calls` held zero
 rows, so per-role latency and token cost were unknowable and the only available
