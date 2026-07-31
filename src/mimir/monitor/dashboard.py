@@ -11,6 +11,8 @@ placeholder that could be mistaken for a measurement.
 from __future__ import annotations
 
 import time
+from collections import deque
+from collections.abc import Sequence
 from pathlib import Path
 
 from rich.align import Align
@@ -27,6 +29,58 @@ from mimir.monitor import machine as machine_mod
 from mimir.monitor import runtime as runtime_mod
 
 GIB = float(1 << 30)
+
+_SPARK = "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+_PULSE = "\u25d0\u25d3\u25d1\u25d2"
+
+_HISTORY: dict[str, deque[float]] = {}
+_FRAME = 0
+
+
+def _record(key: str, value: float, *, keep: int = 48) -> deque[float]:
+    """Append a sample to an in-process ring buffer.
+
+    History lives in the monitor rather than the database because it describes
+    the display's own sampling, not MIMIR's behaviour. Persisting it would
+    invite it being mistaken for a measurement the system made.
+    """
+    series = _HISTORY.setdefault(key, deque(maxlen=keep))
+    series.append(value)
+    return series
+
+
+def _sparkline(values: Sequence[float], *, width: int = 24) -> Text:
+    """A trend, drawn from real samples.
+
+    Scaled to the observed range rather than to a fixed ceiling, so a flat line
+    means genuinely flat rather than "too small to see". A single sample draws
+    nothing: one point is not a trend, and rendering it as a full bar would
+    imply a maximum that was never observed.
+    """
+    points = list(values)[-width:]
+    if len(points) < 2:
+        return Text("collecting", style="dim")
+    low, high = min(points), max(points)
+    span = high - low
+    if span <= 0:
+        return Text("\u2581" * len(points), style="dim")
+    return Text(
+        "".join(_SPARK[min(7, int((v - low) / span * 7.999))] for v in points),
+        style="cyan",
+    )
+
+
+def _pulse(active: bool) -> Text:
+    """Motion only when something is genuinely happening.
+
+    A spinner that turns while the system is idle is an animation pretending to
+    be a status. This returns a static marker unless there is real activity to
+    report.
+    """
+    if not active:
+        return Text("\u00b7", style="dim")
+    return Text(_PULSE[_FRAME % len(_PULSE)], style="yellow bold")
+
 
 _MODEL_CASE_COUNT: int | None = None
 
@@ -162,6 +216,8 @@ def render_work(act: activity_mod.Activity, sample: machine_mod.MachineSample) -
     stats.append(f"{act.sessions_last_hour} sessions/hour")
     if rate is not None:
         stats.append(f"   {rate:.1f}/min recent", style="dim")
+        stats.append("  ", style="")
+        stats.append_text(_sparkline(_record("rate", rate), width=14))
     _kv(body, "throughput", stats)
 
     audit = Text()
@@ -279,11 +335,15 @@ def render_machine(sample: machine_mod.MachineSample) -> Panel:
     body = _grid()
 
     if sample.cpu_percent.known and sample.cpu_percent.value is not None:
+        history = _record("cpu", sample.cpu_percent.value)
         line = Text()
         line.append_text(_bar(sample.cpu_percent.value / 100.0))
         line.append(f" {sample.cpu_percent.value:5.1f}%  ", style="")
         line.append(f"{sample.cpu_count} cores", style="dim")
         _kv(body, "cpu", line)
+        # A trend answers what an instantaneous reading cannot: whether load is
+        # climbing, flat, or was a spike that has already passed.
+        _kv(body, "", _sparkline(history))
     else:
         _kv(body, "cpu", _unavailable(sample.cpu_percent.unavailable))
 
@@ -296,6 +356,7 @@ def render_machine(sample: machine_mod.MachineSample) -> Panel:
         if sample.swap_used_bytes > GIB:
             line.append(f"   swap {_bytes(sample.swap_used_bytes)}", style="yellow")
         _kv(body, "memory", line)
+        _kv(body, "", _sparkline(_record("ram", sample.ram_used_bytes / GIB)))
     else:
         _kv(body, "memory", _unavailable(sample.ram_percent.unavailable))
 
@@ -354,7 +415,10 @@ def render_in_flight(
     body = _grid()
 
     header = Text()
-    header.append("IN FLIGHT", style="yellow bold")
+    # Motion here is the difference between "slow" and "hung": the pulse turns
+    # only while a case has been observed advancing recently.
+    header.append_text(_pulse(bool(act.council.active_names) or (flight.idle_s or 0) < 60))
+    header.append(" IN FLIGHT", style="yellow bold")
     header.append(f"  pid {flight.pid}  {_duration(flight.elapsed_s)} elapsed", style="dim")
     _kv(body, "run", header)
 
@@ -376,6 +440,17 @@ def render_in_flight(
     if eta is not None:
         pace.append(f"   eta {_duration(eta)}", style="dim")
     _kv(body, "pace", pace)
+
+    # Per-case durations come from the database, not from the display's own
+    # sampling, so the trend survives restarting the monitor mid-run. This is
+    # the shape that would have made the A1-A3 decline visible while it was
+    # happening rather than three runs later.
+    durations = [c.duration_s for c in act.live_cases if not c.running]
+    if len(durations) >= 2:
+        trend = Text()
+        trend.append_text(_sparkline(durations, width=22))
+        trend.append(f"  {min(durations):.0f}-{max(durations):.0f}s", style="dim")
+        _kv(body, "case times", trend)
 
     idle = flight.idle_s
     if idle is not None:
@@ -571,6 +646,8 @@ def render_council(act: activity_mod.Activity) -> Panel:
     def node_line(node: activity_mod.CouncilNode, prefix: str, width: int = 11) -> None:
         label = _SPECIALIST_SHORT.get(node.specialist, node.specialist)[:width]
         body.append(prefix, style="dim")
+        body.append_text(_pulse(node.active))
+        body.append(" ", style="")
         body.append(f"{label:<{width}}", style="bold yellow" if node.active else "bold")
         body.append(f"{node.calls:>4}x ", style="dim")
         body.append(f"{node.mean_latency_ms / 1000:5.1f}s ", style="")
@@ -591,8 +668,10 @@ def render_council(act: activity_mod.Activity) -> Panel:
     if entry is not None:
         node_line(entry, "  ")
     for index, node in enumerate(workers):
-        body.append("  " + ("\u251c\u2500 " if index < len(workers) - 1 else "\u2514\u2500 "),
+        body.append("  " + ("\u251c\u2500" if index < len(workers) - 1 else "\u2514\u2500"),
                     style="dim")
+        body.append_text(_pulse(node.active))
+        body.append(" ", style="")
         label = _SPECIALIST_SHORT.get(node.specialist, node.specialist)[:9]
         body.append(f"{label:<9}", style="bold yellow" if node.active else "")
         body.append(f"{node.calls:>4}x ", style="dim")
@@ -916,6 +995,9 @@ def build(
     is in flight, the series appears once repeats exist to compare. A flag would
     make the interesting state the one you have to know to ask for.
     """
+    global _FRAME
+    _FRAME += 1
+
     sample = machine_mod.sample(interval=0.2 if first else 0.0)
     state = runtime_mod.probe(settings)
     act = activity_mod.collect(settings)

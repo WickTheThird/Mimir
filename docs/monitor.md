@@ -98,6 +98,38 @@ more statistical resolution than that sample supports. Runs stored under
 provenance schema 1, and contaminated runs, are excluded from series grouping
 entirely.
 
+## Motion
+
+The dashboard animates in three places, and in each the movement carries
+information that a static number cannot.
+
+**Sparklines.** CPU, memory and throughput show a trend beside the current
+value; the evaluation panel shows per-case durations across the run. An
+instantaneous reading cannot distinguish load that is climbing from a spike that
+has already passed, and a run that is slowing down looks identical to one that
+is not until you can see the shape. The per-case trend is the display that would
+have made a three-run decline visible while it was happening rather than three
+runs later.
+
+Sparklines scale to the observed range, not to a fixed ceiling, so a flat line
+means genuinely flat rather than "too small to see". Fewer than two samples
+draws the word `collecting`: one point is not a trend, and rendering it as a
+full bar would imply a maximum that was never observed.
+
+Machine trends come from the monitor's own sampling and reset when it restarts.
+Per-case durations come from the database and survive a restart, because they
+describe MIMIR rather than the display.
+
+**The liveness pulse.** `◐◓◑◒` turns beside a specialist that is currently
+issuing model calls, and beside the run header while cases are advancing.
+Everything idle shows a static `·`. This is the difference between *slow* and
+*hung*, which is otherwise invisible: a long case and a wedged process produce
+identical static output.
+
+A spinner that turns while nothing is happening would be an animation
+pretending to be a status, so the pulse is driven by observed telemetry
+recency rather than by the render loop.
+
 ## Council flow
 
 ```

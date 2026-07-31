@@ -529,3 +529,47 @@ class TestCouncilGraph:
         assert "coordinator" in text and "k8s" in text and "synthesis" in text
         assert "72t" in text, "tool-call weight must be shown"
         assert "43x" in text, "call count must be shown"
+
+
+class TestTrends:
+    """Motion must encode information, or it is an animation pretending to be
+    a status."""
+
+    def test_one_sample_is_not_a_trend(self):
+        from mimir.monitor.dashboard import _sparkline
+
+        assert _sparkline([]).plain == "collecting"
+        assert _sparkline([42.0]).plain == "collecting"
+
+    def test_a_flat_series_draws_flat(self):
+        """Scaling to the observed range means a flat line reads as genuinely
+        flat, rather than being stretched to look like variation."""
+        from mimir.monitor.dashboard import _sparkline
+
+        assert set(_sparkline([5.0] * 6).plain) == {"▁"}
+
+    def test_extremes_map_to_the_ends_of_the_ramp(self):
+        from mimir.monitor.dashboard import _sparkline
+
+        drawn = _sparkline([0.0, 50.0, 100.0]).plain
+        assert drawn[0] == "▁" and drawn[-1] == "█"
+
+    def test_only_the_most_recent_samples_are_drawn(self):
+        from mimir.monitor.dashboard import _sparkline
+
+        assert len(_sparkline(list(range(100)), width=20).plain) == 20
+
+    def test_the_pulse_is_static_when_nothing_is_active(self):
+        """A spinner turning over an idle system is a lie about liveness."""
+        from mimir.monitor.dashboard import _pulse
+
+        assert _pulse(False).plain == "·"
+        assert _pulse(True).plain != "·"
+
+    def test_history_is_bounded(self):
+        from mimir.monitor.dashboard import _record
+
+        for i in range(500):
+            series = _record("test_metric", float(i), keep=10)
+        assert len(series) == 10
+        assert series[-1] == 499.0
