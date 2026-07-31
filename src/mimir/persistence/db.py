@@ -157,6 +157,26 @@ class Database:
                     applied.append(ddl)
                     log.info("persistence.migrate.column_added", table=table.name,
                              column=column.name)
+
+            # Indexes too, not just columns. A uniqueness constraint added to
+            # guarantee idempotency is worthless if it only exists on databases
+            # created after the change.
+            inspector = inspect(self.engine)
+            for table in Base.metadata.sorted_tables:
+                if table.name not in existing_tables:
+                    continue
+                have = {idx["name"] for idx in inspector.get_indexes(table.name)}
+                for index in table.indexes:
+                    if index.name in have:
+                        continue
+                    try:
+                        index.create(bind=conn)
+                        applied.append(f"CREATE INDEX {index.name}")
+                        log.info("persistence.migrate.index_added",
+                                 table=table.name, index=index.name)
+                    except SQLAlchemyError as exc:
+                        log.warning("persistence.migrate.index_failed",
+                                    table=table.name, index=index.name, error=str(exc))
         return applied
 
     def _add_column_ddl(self, table: str, column: str, type_: Any) -> str:

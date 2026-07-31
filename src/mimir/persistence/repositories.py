@@ -76,6 +76,7 @@ _STATE_OWNED_FIELDS: frozenset[str] = frozenset(
         "evidence",
         "commands_planned",
         "commands_executed",
+        "model_calls",
         "approvals",
         "approval_decisions",
         "selected_skills",
@@ -1297,6 +1298,7 @@ class PersistenceService:
             self._save_messages(db, session_id, state.messages)
             self._save_commands(db, session_id, state.commands_planned)
             self._save_executions(db, session_id, state.commands_executed)
+            self._save_model_calls(db, session_id, state.model_calls)
             self._save_approvals(db, state)
             self._save_evidence(db, session_id, state.evidence)
             self._save_web_sources(db, session_id, state.web_sources)
@@ -1561,6 +1563,57 @@ class PersistenceService:
                 update={"session_id": session_id}
             )
             db.add(execution_to_row(record, redact_enabled=self._redact))
+
+    def _save_model_calls(
+        self, db: OrmSession, session_id: str, calls: Sequence[dict[str, Any]]
+    ) -> None:
+        """Write model telemetry in the same transaction as the session row.
+
+        The table, the repository method and the router's call log all existed
+        independently for a long time and were never joined, so model_calls held
+        zero rows across a hundred sessions. Writing it here, beside executions,
+        keeps telemetry on the same footing as the audit trail.
+        """
+        existing = {
+            row[0]
+            for row in db.execute(
+                select(ModelCallRow.invocation_id).where(
+                    ModelCallRow.session_id == session_id
+                )
+            )
+        }
+        for call in calls:
+            payload = dict(call)
+            invocation_id = payload.get("invocation_id")
+            if invocation_id and invocation_id in existing:
+                # save_state can run more than once for a session. Keying on the
+                # router-minted id makes re-persisting a no-op rather than a
+                # doubling of every latency and token figure.
+                continue
+            if invocation_id:
+                existing.add(invocation_id)
+            db.add(
+                ModelCallRow(
+                    session_id=session_id,
+                    invocation_id=invocation_id,
+                    alias=payload.get("alias", ""),
+                    model=payload.get("model", ""),
+                    runtime=payload.get("runtime", ""),
+                    task_class=payload.get("task_class") or None,
+                    specialist=payload.get("specialist") or None,
+                    latency_ms=float(payload.get("latency_ms") or 0.0),
+                    prompt_tokens=payload.get("prompt_tokens"),
+                    completion_tokens=payload.get("completion_tokens"),
+                    total_tokens=payload.get("total_tokens"),
+                    context_size=payload.get("context_size"),
+                    tool_calls=int(payload.get("tool_calls") or 0),
+                    retries=int(payload.get("attempt") or 0),
+                    ok=bool(payload.get("ok", True)),
+                    error=payload.get("error"),
+                    created_at=float(payload.get("started_at") or time.time()),
+                    metadata_json=payload.get("metadata") or {},
+                )
+            )
 
     def _save_approvals(self, db: OrmSession, state: InvestigationState) -> None:
         decisions = {d.approval_id: d for d in state.approval_decisions}

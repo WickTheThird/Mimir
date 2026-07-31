@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,32 @@ class ModelIdentity:
     are unknown and any comparison involving this run is weaker."""
 
 
+PROVENANCE_SCHEMA_VERSION = 2
+"""Bumped when the shape changes.
+
+Version 1 was a flat dict whose containment fields were written at a different
+nesting level than the comparison function read, so contamination checks
+silently no-opped. A version number lets a reader tell whether a stored run
+predates the fix instead of guessing from which keys happen to be present.
+"""
+
+MANDATORY_FIELDS = (
+    "source.commit",
+    "evaluation.corpus_hash",
+    "evaluation.prompts_hash",
+    "evaluation.skills_hash",
+    "evaluation.enabled_tools_hash",
+    "runtime.version",
+)
+"""Fields without which two runs cannot be honestly compared.
+
+An absent field is not treated as matching an absent field. Two runs that both
+recorded nothing are not thereby equivalent, and the empty-string comparison
+that made them look equivalent is what let an unpopulated tool hash disable the
+capability check entirely.
+"""
+
+
 @dataclass
 class Provenance:
     models: dict[str, ModelIdentity] = field(default_factory=dict)
@@ -67,10 +94,54 @@ class Provenance:
     """
     offline: bool = True
     settings_digest: str = ""
+    enabled_tools: list[str] = field(default_factory=list)
+    enabled_tools_hash: str = ""
+    enabled_capabilities: list[str] = field(default_factory=list)
+    external_calls: int = 0
+    contaminated: bool = False
+    contaminated_reason: str = ""
+    captured_at: float = 0.0
+    source_changed_during_run: bool = False
+    """True when the working tree moved between the start and end snapshots.
+
+    Provenance used to be collected only at persistence time, so anything the
+    operator did while a run was in flight was recorded as the state that
+    produced it. A run whose source changed underneath it is not reproducible
+    and is not a valid controlled comparison, whichever snapshot you believe.
+    """
 
     def to_dict(self) -> dict[str, Any]:
+        """Nested, versioned, and self-describing.
+
+        Every field a comparison needs lives under one root, so a caller cannot
+        hand ``comparable()`` a sub-dict that happens to be missing half of
+        them.
+        """
         return {
-            **{k: v for k, v in asdict(self).items() if k != "models"},
+            "schema_version": PROVENANCE_SCHEMA_VERSION,
+            "captured_at": self.captured_at,
+            "source": {
+                "commit": self.mimir_commit,
+                "dirty": self.mimir_dirty,
+                "diff_hash": self.mimir_diff_hash,
+                "changed_during_run": self.source_changed_during_run,
+            },
+            "evaluation": {
+                "corpus_hash": self.corpus_hash,
+                "corpus_files": self.corpus_files,
+                "corpus_case_count": self.corpus_case_count,
+                "prompts_hash": self.prompts_hash,
+                "skills_hash": self.skills_hash,
+                "settings_digest": self.settings_digest,
+                "offline": self.offline,
+                "contaminated": self.contaminated,
+                "contaminated_reason": self.contaminated_reason,
+                "external_calls": self.external_calls,
+                "enabled_tools": self.enabled_tools,
+                "enabled_tools_hash": self.enabled_tools_hash,
+                "enabled_capabilities": self.enabled_capabilities,
+            },
+            "runtime": {"name": self.runtime_name, "version": self.runtime_version},
             "models": {alias: asdict(identity) for alias, identity in self.models.items()},
         }
 
@@ -255,6 +326,7 @@ def collect(
     commit, dirty, diff_hash = git_commit()
 
     return Provenance(
+        captured_at=time.time(),
         models={alias: resolve_model(alias, active) for alias in wanted},
         runtime_name=runtime_name,
         runtime_version=version,
@@ -273,65 +345,97 @@ def collect(
     )
 
 
+def _dig(run: dict[str, Any], path: str) -> Any:
+    node: Any = run
+    for part in path.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+    return node
+
+
+def _incomplete(run: dict[str, Any]) -> list[str]:
+    """Mandatory fields that are missing or empty."""
+    return [f for f in MANDATORY_FIELDS if not _dig(run, f)]
+
+
 def comparable(left: dict[str, Any], right: dict[str, Any]) -> list[str]:
     """Reasons two runs cannot be honestly compared.
 
     An empty list means the only deliberate difference is the thing under test.
-    Anything else here is a confound, and reporting it is the difference between
-    an experiment and a coincidence.
+
+    Fails closed. An older run stored under schema version 1, or a run missing a
+    mandatory field, is refused rather than compared on whatever fields happen
+    to line up. The previous version compared the two sides field by field, so
+    two runs that had both recorded nothing agreed on nothing and reported no
+    confounds, which is how an unpopulated tool hash silently disabled the
+    capability check.
     """
     problems: list[str] = []
     if not left or not right:
         return ["one of the runs has no recorded provenance"]
 
-    # A contaminated run is refused outright. Everything below compares how two
-    # runs differ; none of it matters if one of them did not measure what it
-    # claims to have measured.
     for side, run in (("baseline", left), ("candidate", right)):
-        if run.get("contaminated"):
+        version = run.get("schema_version")
+        if version != PROVENANCE_SCHEMA_VERSION:
             problems.append(
-                f"{side} is CONTAMINATED and cannot serve as a controlled "
-                f"comparison: {run.get('contaminated_reason', 'reason not recorded')}"
+                f"{side} uses provenance schema {version or 1}, this build reads "
+                f"{PROVENANCE_SCHEMA_VERSION}; it predates the containment and "
+                "tool-surface fixes and cannot be treated as a controlled run"
             )
+            continue
+        missing = _incomplete(run)
+        if missing:
+            problems.append(
+                f"{side} has incomplete provenance, missing: {', '.join(missing)}"
+            )
+    if problems:
+        return problems
 
-    left_tools = left.get("enabled_tools_hash")
-    right_tools = right.get("enabled_tools_hash")
-    if left_tools and right_tools and left_tools != right_tools:
-        problems.append(
-            f"different tool sets were enabled ({left_tools} vs {right_tools}); "
-            "the models were not offered the same capabilities"
-        )
+    # Contamination is decisive. Everything below describes how two runs differ,
+    # and none of it matters if one did not measure what it claims to have.
     for side, run in (("baseline", left), ("candidate", right)):
-        calls = run.get("external_calls")
+        evaluation = run.get("evaluation") or {}
+        if evaluation.get("contaminated"):
+            problems.append(
+                f"{side} is CONTAMINATED and cannot serve as a controlled comparison: "
+                f"{evaluation.get('contaminated_reason', 'reason not recorded')}"
+            )
+        calls = evaluation.get("external_calls") or 0
         if calls:
             problems.append(f"{side} made {calls} external network call(s)")
+        if (run.get("source") or {}).get("changed_during_run"):
+            problems.append(
+                f"{side} had its source change while it was running; the recorded "
+                "commit does not describe what executed"
+            )
 
-    if left.get("corpus_hash") != right.get("corpus_hash"):
-        problems.append(
-            f"different corpus ({left.get('corpus_hash')} vs {right.get('corpus_hash')}); "
-            "the case set changed between runs"
-        )
-    if left.get("prompts_hash") != right.get("prompts_hash"):
-        problems.append(
-            "different specialist prompts; this is not a model comparison"
-        )
-    if left.get("skills_hash") != right.get("skills_hash"):
-        problems.append("different skills on disk")
-    if left.get("offline") != right.get("offline"):
-        problems.append(
-            "one run used live infrastructure and the other did not; scores are "
-            "not on the same footing"
-        )
-    if left.get("mimir_commit") != right.get("mimir_commit"):
-        problems.append(
-            f"different MIMIR commit ({left.get('mimir_commit') or 'unknown'} vs "
-            f"{right.get('mimir_commit') or 'unknown'})"
-        )
-    left_dirty, right_dirty = left.get("mimir_dirty"), right.get("mimir_dirty")
+    checks = [
+        ("evaluation.enabled_tools_hash",
+         "different tool sets were enabled ({a} vs {b}); the models were not "
+         "offered the same capabilities"),
+        ("evaluation.corpus_hash",
+         "different corpus ({a} vs {b}); the case set changed between runs"),
+        ("evaluation.prompts_hash",
+         "different specialist prompts ({a} vs {b}); this is not a model comparison"),
+        ("evaluation.skills_hash", "different skills on disk ({a} vs {b})"),
+        ("evaluation.offline",
+         "one run used live infrastructure and the other did not ({a} vs {b}); "
+         "scores are not on the same footing"),
+        ("runtime.version", "different runtime version ({a} vs {b})"),
+        ("source.commit", "different MIMIR commit ({a} vs {b})"),
+    ]
+    for path, template in checks:
+        a, b = _dig(left, path), _dig(right, path)
+        if a != b:
+            problems.append(template.format(a=a, b=b))
+
+    left_dirty = _dig(left, "source.dirty")
+    right_dirty = _dig(right, "source.dirty")
     if left_dirty or right_dirty:
-        left_hash = left.get("mimir_diff_hash") or "unknown"
-        right_hash = right.get("mimir_diff_hash") or "unknown"
-        if left_hash == right_hash and left_dirty and right_dirty:
+        left_hash = _dig(left, "source.diff_hash") or "unknown"
+        right_hash = _dig(right, "source.diff_hash") or "unknown"
+        if left_dirty and right_dirty and left_hash == right_hash:
             problems.append(
                 f"both runs were made from the same dirty tree ({left_hash}); "
                 "comparable to each other but not reproducible from the commit"
@@ -342,3 +446,18 @@ def comparable(left: dict[str, Any], right: dict[str, Any]) -> list[str]:
                 "the source differed between runs"
             )
     return problems
+
+
+def source_moved(start: Provenance, end: Provenance) -> bool:
+    """Did the working tree change while the run was in flight?
+
+    Compares the commit and the diff hash, not just the dirty flag. Editing a
+    file and reverting it leaves dirty False at both ends but is still a source
+    change; comparing the diff hash catches an edit that was made and undone
+    around a run.
+    """
+    return (
+        start.mimir_commit != end.mimir_commit
+        or start.mimir_dirty != end.mimir_dirty
+        or start.mimir_diff_hash != end.mimir_diff_hash
+    )

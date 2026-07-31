@@ -155,3 +155,85 @@ class TestFormatting:
     def test_bar_is_clamped(self):
         assert len(_bar(5.0, width=10).plain) == 10
         assert len(_bar(-1.0, width=10).plain) == 10
+
+
+class TestTelemetryInvariant:
+    """model invocations observed == model-call records persisted."""
+
+    def test_complete_when_counts_agree(self):
+        from mimir.eval.harness import EvalReport
+
+        report = EvalReport()
+        report.model_invocations = 12
+        report.model_calls_persisted = 12
+        assert report.telemetry_complete
+
+    def test_incomplete_does_not_fail_safety_acceptance(self):
+        """Missing telemetry is experimental debt, not evidence of an
+        unobserved mutation, so it must not block an otherwise safe run."""
+        from mimir.eval.harness import EvalReport
+
+        report = EvalReport()
+        report.model_invocations = 12
+        report.model_calls_persisted = 0
+        assert not report.telemetry_complete
+        assert report.acceptable, "safety acceptance is a separate question"
+
+    def test_invocation_id_is_not_derived_from_time(self):
+        """Two calls can start in the same float tick. Keying on a timestamp
+        makes duplicate telemetry indistinguishable from a genuine retry."""
+        from mimir.llm.base import ModelCallRecord
+
+        common = {
+            "alias": "deep", "model": "m", "started_at": 1234.5, "latency_s": 1.0,
+            "prompt_tokens": 1, "completion_tokens": 1, "tool_calls": 0,
+            "finish_reason": "stop",
+        }
+        assert ModelCallRecord(**common).invocation_id != ModelCallRecord(**common).invocation_id
+
+
+class TestReportMerging:
+    def test_absorb_carries_the_contamination_verdict(self):
+        """Extending results alone dropped every report-level field. A model run
+        that tripped containment was persisted as clean, because the
+        deterministic report's defaults look identical to a clean result."""
+        from mimir.eval.harness import EvalReport
+
+        combined = EvalReport(label="deterministic")
+        model = EvalReport(label="model")
+        model.external_calls = 3
+        model.blocked_hosts = ["google.com"]
+        model.contaminated_reason = "offline run attempted external access"
+        model.enabled_tools_hash = "abc123"
+        model.enabled_capabilities = ["repository"]
+
+        combined.absorb(model)
+        assert combined.contaminated_reason
+        assert combined.external_calls == 3
+        assert combined.blocked_hosts == ["google.com"]
+        assert combined.enabled_tools_hash == "abc123"
+        assert not combined.acceptable
+
+
+class TestCorpusLoading:
+    def test_a_malformed_file_raises_rather_than_shrinking_the_corpus(self, tmp_path):
+        """A bad indent once dropped thirteen cases and the run reported a
+        perfect score against a denominator nobody chose."""
+        from mimir.eval.harness import CorpusError, EvalHarness
+
+        (tmp_path / "broken.yaml").write_text("cases:\n  - id: a\n- id: b\n")
+        with pytest.raises(CorpusError):
+            EvalHarness.load_corpus(tmp_path)
+
+    def test_a_single_malformed_case_is_still_skipped(self, tmp_path):
+        """Losing one case loudly beats losing all of them."""
+        from mimir.eval.harness import EvalHarness
+
+        (tmp_path / "mixed.yaml").write_text(
+            "cases:\n"
+            "  - id: good\n    kind: dangerous_command\n    prompt: list files\n"
+            "    argv: [ls]\n"
+            "  - id: bad\n    kind: not_a_real_kind\n    prompt: x\n    argv: [ls]\n"
+        )
+        cases = EvalHarness.load_corpus(tmp_path)
+        assert [c.id for c in cases] == ["good"]

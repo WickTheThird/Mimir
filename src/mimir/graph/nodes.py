@@ -695,6 +695,7 @@ async def finalise(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     """Last node. Merges everything and fires the session-complete hook."""
     session = merge_into_session(state)
     _harvest_executions(session, deps)
+    observed = _harvest_model_calls(session, deps)
     if session.completed_at is None:
         session.completed_at = time.time()
     hooks = deps.tool_context.hooks
@@ -706,6 +707,8 @@ async def finalise(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
         confidence=session.final_confidence,
         evidence=len(session.evidence),
         commands=len(session.commands_executed),
+        model_calls=len(session.model_calls),
+        model_invocations=observed,
         duration_s=round(session.duration_s, 2),
     )
     return {"session": session, "route": "done"}
@@ -732,6 +735,72 @@ def _harvest_executions(session: InvestigationState, deps: NodeDeps) -> None:
         if record.id not in known:
             session.record_execution(record)
             known.add(record.id)
+
+
+def _harvest_model_calls(session: InvestigationState, deps: NodeDeps) -> int:
+    """Copy this session's model invocations onto the state for persistence.
+
+    Returns the number observed. The router counts invocations at the call site
+    (`invocations_attempted`); this counts what was attributable to this
+    session. The persistence layer then writes them in the same transaction as
+    the session row, so the telemetry invariant
+
+        model invocations observed == model-call records persisted
+
+    can be asserted without depending on the order two writers happen to run in.
+
+    The first attempt wrote directly to the repository from here and failed the
+    session_id foreign key on every row, because the session is not on disk yet
+    at this point. That produced observed=9, persisted=0 - visible only because
+    the invariant was added at the same time as the instrumentation.
+    """
+    router = getattr(deps, "router", None)
+    if router is None:
+        return 0
+
+    mine = [
+        record
+        for record in getattr(router, "call_log", [])
+        if record.session_id == session.session_id
+    ]
+    known = {c.get("invocation_id") for c in session.model_calls}
+    for record in mine:
+        if record.invocation_id in known:
+            continue
+        known.add(record.invocation_id)
+        session.model_calls.append(
+            {
+                "invocation_id": record.invocation_id,
+                "alias": record.alias,
+                "model": record.model,
+                "runtime": record.runtime,
+                "task_class": record.task_class,
+                "specialist": record.specialist,
+                "latency_ms": record.latency_ms,
+                "prompt_tokens": record.prompt_tokens,
+                "completion_tokens": record.completion_tokens,
+                "total_tokens": record.total_tokens,
+                "context_size": record.context_window,
+                "tool_calls": record.tool_calls,
+                "attempt": record.attempt,
+                "ok": record.ok,
+                "error": record.error,
+                "started_at": record.started_at,
+                "metadata": {
+                    "digest": record.digest,
+                    "purpose": record.purpose,
+                    "status": record.status,
+                    "error_type": record.error_type,
+                    "completed_at": record.completed_at,
+                    "context_estimate": record.context_estimate,
+                    "trimmed": record.trimmed,
+                    "tool_calls_before": record.tool_calls_before,
+                    "tool_calls_after": record.tool_calls_after,
+                    "finish_reason": record.finish_reason,
+                },
+            }
+        )
+    return len(mine)
 
 
 def _render_memory_context(evidence: list[Evidence], limit: int = 6) -> str:

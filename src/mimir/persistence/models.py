@@ -363,12 +363,21 @@ class ModelCallRow(Base):
     """One LLM round trip: latency, tokens, alias (ADR 20 telemetry)."""
 
     __tablename__ = "model_calls"
-    __table_args__ = (Index("ix_model_calls_alias_created", "alias", "created_at"),)
+    __table_args__ = (
+        Index("ix_model_calls_alias_created", "alias", "created_at"),
+        # Identity comes from the router, not from a timestamp. Two calls can
+        # start within the same float tick, and inferring identity from time
+        # produces duplicate telemetry that is indistinguishable from real
+        # retries. save_state may run more than once for a session, so this is
+        # what makes re-persisting a no-op instead of a doubling.
+        Index("uq_model_calls_invocation", "session_id", "invocation_id", unique=True),
+    )
 
     row_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[str | None] = mapped_column(
         _ID, ForeignKey("sessions.id", ondelete="CASCADE"), index=True, default=None
     )
+    invocation_id: Mapped[str | None] = mapped_column(_ID, default=None)
     alias: Mapped[str] = mapped_column(_SHORT, index=True, default="")
     model: Mapped[str] = mapped_column(_MED, default="")
     runtime: Mapped[str] = mapped_column(String(32), index=True, default="")

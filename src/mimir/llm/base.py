@@ -374,7 +374,18 @@ def trim_to_context(
 
 @dataclass(slots=True)
 class ModelCallRecord:
-    """Telemetry row (ADR 20)."""
+    """One model invocation (ADR 20).
+
+    One record per *attempt*, not per successful call. A retried call is two
+    invocations of the runtime and costs two invocations of compute, and a
+    telemetry table that hides the first one understates both latency and load
+    while making the retry rate unmeasurable.
+
+    The identity fields matter for the same reason they matter in
+    :mod:`mimir.eval.provenance`: a model tag is not an identity. Recording the
+    digest alongside the tag is what lets a later reader tell whether two runs
+    of "qwen2.5:7b" were the same weights.
+    """
 
     alias: str
     model: str
@@ -388,6 +399,91 @@ class ModelCallRecord:
     purpose: str = ""
     error: str | None = None
 
+    # -- identity ---------------------------------------------------------
+    invocation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    """Stable id for this invocation, minted at the call site.
+
+    Persistence keys on (session_id, invocation_id) so re-persisting a session
+    is a no-op. Identity must not be inferred from a timestamp: two calls can
+    start within the same float tick, and time-based keys produce duplicate
+    telemetry that looks exactly like a genuine retry.
+    """
+
+    runtime: str = ""
+    digest: str = ""
+
+    # -- role -------------------------------------------------------------
+    task_class: str = ""
+    specialist: str = ""
+
+    # -- context ----------------------------------------------------------
+    context_window: int = 0
+    context_estimate: int = 0
+    """Estimated prompt tokens *before* trimming.
+
+    Recorded separately from prompt_tokens so that context pressure is visible:
+    a large gap means the prompt was trimmed and the model did not see
+    everything the specialist assembled.
+    """
+    trimmed: bool = False
+
+    # -- attempt ----------------------------------------------------------
+    attempt: int = 0
+    """Zero-based. attempt > 0 means this invocation followed a failure."""
+
+    tool_calls_before: int = 0
+    """Tool calls already made in this specialist turn when the call started."""
+
+    @property
+    def completed_at(self) -> float:
+        return self.started_at + self.latency_s
+
+    @property
+    def latency_ms(self) -> float:
+        return self.latency_s * 1000.0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def tool_calls_after(self) -> int:
+        return self.tool_calls_before + self.tool_calls
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
+
+    @property
+    def status(self) -> str:
+        if self.error is not None:
+            return "error"
+        return self.finish_reason or "ok"
+
+    @property
+    def error_type(self) -> str:
+        """A coarse class, so failures can be counted without grouping by prose.
+
+        Error strings carry ids and hostnames and never group. The category is
+        what a telemetry query actually needs.
+        """
+        if self.error is None:
+            return ""
+        lowered = self.error.lower()
+        if "timeout" in lowered or "timed out" in lowered:
+            return "timeout"
+        if "connect" in lowered or "refused" in lowered or "unreachable" in lowered:
+            return "connection"
+        if "context" in lowered and "length" in lowered:
+            return "context_length"
+        if "not found" in lowered or "404" in lowered:
+            return "model_not_found"
+        if "rate" in lowered and "limit" in lowered:
+            return "rate_limit"
+        if "json" in lowered or "parse" in lowered or "schema" in lowered:
+            return "malformed_output"
+        return "other"
+
     @classmethod
     def from_response(
         cls,
@@ -396,6 +492,7 @@ class ModelCallRecord:
         session_id: str | None = None,
         purpose: str = "",
         started_at: float | None = None,
+        **fields: Any,
     ) -> ModelCallRecord:
         return cls(
             alias=response.alias,
@@ -408,4 +505,5 @@ class ModelCallRecord:
             finish_reason=response.finish_reason,
             session_id=session_id,
             purpose=purpose,
+            **fields,
         )

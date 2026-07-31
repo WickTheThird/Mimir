@@ -43,6 +43,18 @@ from mimir.logging import get_logger
 
 log = get_logger(__name__)
 
+
+def _specialist_from_purpose(purpose: str) -> str:
+    """Extract the specialist from a purpose string like 'specialist:log_analyst'.
+
+    Purpose is free text used for logging. Parsing it is what lets telemetry be
+    grouped by specialist without threading another parameter through every
+    call site.
+    """
+    if not purpose.startswith("specialist:"):
+        return ""
+    return purpose.split(":", 2)[1]
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -76,6 +88,14 @@ class ModelRouter:
         self.settings = settings or get_settings()
         self._models: dict[str, ChatModel] = {}
         self.call_log: list[ModelCallRecord] = []
+        self.invocations_attempted = 0
+        """Every runtime call this router has issued, including retried ones.
+
+        This is the left-hand side of the telemetry invariant: it is incremented
+        at the call site itself, so it cannot drift from reality the way a count
+        derived from the log could. len(call_log) must equal it.
+        """
+        self._digests: dict[str, str] = {}
 
     # -- resolution ------------------------------------------------------
 
@@ -105,6 +125,22 @@ class ModelRouter:
     def for_task(self, task_class: str = TaskClass.DEFAULT) -> ChatModel:
         return self.get(self.alias_for_task(task_class))
 
+    def digest_for(self, alias: str) -> str:
+        """Resolve and cache the served digest for an alias.
+
+        Resolved once per process, not per call: the digest cannot change under
+        a running runtime without a reload, and querying it on every invocation
+        would add a network round trip to every model call.
+        """
+        if alias not in self._digests:
+            try:
+                from mimir.eval.provenance import resolve_model
+
+                self._digests[alias] = resolve_model(alias, self.settings).digest
+            except Exception:  # noqa: BLE001 - telemetry must never break a call
+                self._digests[alias] = ""
+        return self._digests[alias]
+
     # -- calls -----------------------------------------------------------
 
     async def chat(
@@ -116,11 +152,14 @@ class ModelRouter:
         session_id: str | None = None,
         purpose: str = "",
         retries: int = 1,
+        tool_calls_before: int = 0,
     ) -> ChatResponse:
         model = self.for_task(task_class)
         budget = int(model.context_window * 0.75)
         trimmed = list(messages)
-        if messages_token_estimate(trimmed) > budget:
+        estimate = messages_token_estimate(trimmed)
+        was_trimmed = estimate > budget
+        if was_trimmed:
             trimmed = trim_to_context(trimmed, budget)
             log.info(
                 "context_trimmed",
@@ -129,36 +168,60 @@ class ModelRouter:
                 budget=budget,
             )
 
-        started = time.time()
+        # Shared by every attempt, so a record can always be attributed to the
+        # role and specialist that caused it rather than to an anonymous alias.
+        common = {
+            "runtime": model.profile.runtime if hasattr(model, "profile") else "",
+            "digest": self.digest_for(model.alias),
+            "task_class": task_class,
+            "specialist": _specialist_from_purpose(purpose),
+            "context_window": model.context_window,
+            "context_estimate": estimate,
+            "trimmed": was_trimmed,
+            "tool_calls_before": tool_calls_before,
+        }
+
         last_error: ModelError | None = None
         for attempt in range(retries + 1):
+            # One record per attempt. A retried call really is two invocations
+            # of the runtime and costs two invocations of compute; collapsing
+            # them understates load and makes the retry rate unmeasurable.
+            started = time.time()
+            self.invocations_attempted += 1
             try:
                 response = await model.chat(trimmed, options)
             except ModelError as exc:
                 last_error = exc
-                if not exc.retryable or attempt >= retries:
-                    self.call_log.append(
-                        ModelCallRecord(
-                            alias=model.alias,
-                            model=model.model,
-                            started_at=started,
-                            latency_s=time.time() - started,
-                            prompt_tokens=0,
-                            completion_tokens=0,
-                            tool_calls=0,
-                            finish_reason="error",
-                            session_id=session_id,
-                            purpose=purpose,
-                            error=exc.message,
-                        )
+                self.call_log.append(
+                    ModelCallRecord(
+                        alias=model.alias,
+                        model=model.model,
+                        started_at=started,
+                        latency_s=time.time() - started,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        tool_calls=0,
+                        finish_reason="error",
+                        session_id=session_id,
+                        purpose=purpose,
+                        error=exc.message,
+                        attempt=attempt,
+                        **common,
                     )
+                )
+                if not exc.retryable or attempt >= retries:
                     raise
                 log.warning("model_retry", alias=model.alias, attempt=attempt + 1,
                             error=exc.message)
                 continue
             self.call_log.append(
                 ModelCallRecord.from_response(
-                    response, session_id=session_id, purpose=purpose, started_at=started
+                    response,
+                    session_id=session_id,
+                    purpose=purpose,
+                    started_at=started,
+                    attempt=attempt,
+                    **common,
                 )
             )
             return response

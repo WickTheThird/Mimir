@@ -117,6 +117,15 @@ class InvestigationState(BaseModel):
     evidence: list[Evidence] = Field(default_factory=list)
     commands_planned: list[ProposedCommand] = Field(default_factory=list)
     commands_executed: list[ExecutionRecord] = Field(default_factory=list)
+    model_calls: list[dict[str, Any]] = Field(default_factory=list)
+    """Model invocation telemetry, one entry per attempt (ADR 20).
+
+    Carried on the state rather than written directly from the graph because
+    model_calls.session_id is a foreign key: the session row is created by
+    save_state, so a write that happens earlier fails the constraint on every
+    row. Persisting it in the same transaction removes the ordering hazard
+    instead of relying on call order staying correct.
+    """
     outputs: dict[str, str] = Field(default_factory=dict)
     """artifact_ref -> short description, full bodies live in the artifact store."""
 

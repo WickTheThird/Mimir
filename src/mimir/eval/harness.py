@@ -180,6 +180,54 @@ class EvalReport:
     results: list[CaseResult] = field(default_factory=list)
     model_alias: str = ""
     label: str = ""
+    model_invocations: int = 0
+    model_calls_persisted: int = 0
+    enabled_tools: list[str] = field(default_factory=list)
+    provenance_start: Any = None
+    """Snapshot taken when the run began, not when it was stored."""
+
+    def absorb(self, other: EvalReport) -> None:
+        """Merge another report's results *and* its report-level verdicts.
+
+        Extending ``results`` alone silently discarded containment and
+        contamination. The deterministic report's defaults - zero external
+        calls, no contamination reason - are indistinguishable from a clean
+        result, so a model run that tripped containment was persisted as clean.
+        A safety verdict must never be lost by a merge that looks like
+        bookkeeping.
+
+        Contamination is combined worst-case: any contaminated part
+        contaminates the whole, because the run as stored is the unit that gets
+        compared.
+        """
+        self.results.extend(other.results)
+        self.external_calls += other.external_calls
+        self.blocked_hosts = sorted({*self.blocked_hosts, *other.blocked_hosts})
+        self.model_invocations += other.model_invocations
+        self.model_calls_persisted += other.model_calls_persisted
+        if other.contaminated_reason:
+            self.contaminated_reason = (
+                f"{self.contaminated_reason}; {other.contaminated_reason}"
+                if self.contaminated_reason
+                else other.contaminated_reason
+            )
+        # The tool set is a property of the part that could use tools. A
+        # deterministic report never has one, so the model report's fingerprint
+        # is the run's fingerprint rather than an average of the two.
+        if other.enabled_tools_hash:
+            self.enabled_tools_hash = other.enabled_tools_hash
+            self.enabled_capabilities = list(other.enabled_capabilities)
+
+    @property
+    def telemetry_complete(self) -> bool:
+        """model invocations observed == model-call records persisted.
+
+        Kept separate from :attr:`acceptable` on purpose. Missing model
+        telemetry is serious experimental debt, but unlike an unrecorded shell
+        command it does not indicate an unobserved mutation, so it must not
+        block a run that was otherwise safe and contained.
+        """
+        return self.model_invocations == self.model_calls_persisted
 
     @property
     def passed(self) -> int:
@@ -306,6 +354,10 @@ class EvalReport:
         )
 
 
+class CorpusError(RuntimeError):
+    """A corpus file could not be read, so the case set is not what was asked for."""
+
+
 class EvalHarness:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -335,11 +387,32 @@ class EvalHarness:
             return None
 
         try:
-            from mimir.eval.provenance import collect
+            from mimir.eval.provenance import collect, source_moved
 
-            provenance = collect(
+            # Prefer the snapshot taken when the run started. Collecting only at
+            # persistence time recorded whatever the operator did *during* the
+            # run as the state that produced it: a clean run was stored as dirty
+            # with a diff hash belonging to code it never executed.
+            start = report.provenance_start or collect(
                 settings=self.settings, corpus_dir=corpus_dir, offline=offline
-            ).to_dict()
+            )
+            end = collect(settings=self.settings, corpus_dir=corpus_dir, offline=offline)
+            start.source_changed_during_run = source_moved(start, end)
+            if start.source_changed_during_run:
+                log.warning(
+                    "eval_source_changed_during_run",
+                    start_commit=start.mimir_commit,
+                    end_commit=end.mimir_commit,
+                )
+            # The tool surface is a property of the run, not of the checkout, so
+            # it comes from what the runner actually had enabled.
+            start.enabled_tools = list(report.enabled_tools)
+            start.enabled_tools_hash = report.enabled_tools_hash
+            start.enabled_capabilities = list(report.enabled_capabilities)
+            start.external_calls = report.external_calls
+            start.contaminated = bool(report.contaminated_reason)
+            start.contaminated_reason = report.contaminated_reason
+            provenance = start.to_dict()
         except Exception as exc:  # noqa: BLE001 - a run without provenance still beats none
             log.warning("provenance_unavailable", error=str(exc))
             provenance = {}
@@ -464,16 +537,24 @@ class EvalHarness:
     def _parse(path: Path) -> list[EvalCase]:
         """Parse one corpus file.
 
-        A malformed case is skipped with its file, id, and reason named, rather
-        than raising. One typo in one file used to take the entire corpus down,
-        which means a broken case silently disables every other case's ability
-        to gate. Losing one case loudly is far better than losing all of them.
+        A malformed *case* is skipped with its file, id, and reason named. One
+        typo used to take the entire corpus down, which means a broken case
+        silently disables every other case's ability to gate. Losing one case
+        loudly is far better than losing all of them.
+
+        A malformed *file* is different and raises. The number of cases lost is
+        unknown, so the run would score a smaller corpus and report a perfect
+        result against a denominator nobody chose. This happened: a bad indent
+        dropped thirteen regression cases and the corpus went from 53 to 40
+        with only a warning that scrolled past.
         """
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except yaml.YAMLError as exc:
-            log.warning("eval_corpus_unreadable", path=str(path), error=str(exc))
-            return []
+            raise CorpusError(
+                f"{path.name} is not valid YAML, so an unknown number of cases "
+                f"would be missing from this run: {exc}"
+            ) from exc
 
         out: list[EvalCase] = []
         for raw in data.get("cases", []) or []:
@@ -670,6 +751,13 @@ class EvalHarness:
             report.enabled_tools_hash, report.enabled_capabilities = (
                 self.enabled_tools_fingerprint(registry_used)
             )
+            report.enabled_tools = sorted(registry_used.names())
+        else:
+            log.warning(
+                "eval_tool_surface_unknown",
+                reason="the runner exposes no registry; the enabled tool surface "
+                "cannot be fingerprinted and the run is not comparable",
+            )
 
         for case in cases:
             if case.deterministic:
@@ -688,6 +776,14 @@ class EvalHarness:
                     )
                 )
                 continue
+
+            # Telemetry invariant, checked per case against what reached disk
+            # rather than against another in-memory counter. Two counters that
+            # share a code path agree by construction and prove nothing; the
+            # bug this guards against was a table that stayed empty while every
+            # in-memory structure looked correct.
+            report.model_invocations += len(state.model_calls)
+            report.model_calls_persisted += _persisted_model_calls(state.session_id)
 
             answer = state.final_answer
             text = (answer.answer if answer else "").lower()
@@ -802,6 +898,31 @@ class EvalHarness:
             )
             log.warning("eval_contaminated", reason=report.contaminated_reason)
         return report
+
+
+def _persisted_model_calls(session_id: str) -> int:
+    """Count model-call rows actually on disk for a session.
+
+    Read-only and best-effort: a telemetry check must never fail a run it is
+    only observing. An unreadable store returns zero, which reports as
+    incomplete telemetry rather than as silent agreement.
+    """
+    if not session_id:
+        return 0
+    try:
+        import sqlite3
+
+        path = get_settings().home / "mimir.db"
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2.0)
+        try:
+            row = conn.execute(
+                "select count(*) from model_calls where session_id = ?", (session_id,)
+            ).fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - observation must not break the run
+        return 0
 
 
 def classify_failure(

@@ -318,38 +318,97 @@ def test_hidden_corpus_is_excluded_by_default(settings, tmp_path):
     assert "hidden-001" in with_hidden
 
 
+def _provenance(**overrides):
+    """A complete, comparable provenance record in schema v2 shape."""
+    from mimir.eval.provenance import PROVENANCE_SCHEMA_VERSION
+
+    record = {
+        "schema_version": PROVENANCE_SCHEMA_VERSION,
+        "source": {"commit": "abc123", "dirty": False, "diff_hash": "",
+                   "changed_during_run": False},
+        "evaluation": {
+            "corpus_hash": "aaa", "prompts_hash": "bbb", "skills_hash": "ccc",
+            "offline": True, "contaminated": False, "contaminated_reason": "",
+            "external_calls": 0, "enabled_tools_hash": "ttt",
+            "enabled_tools": [], "enabled_capabilities": [],
+        },
+        "runtime": {"name": "ollama", "version": "0.32.5"},
+        "models": {},
+    }
+    for path, value in overrides.items():
+        section, _, key = path.partition(".")
+        if key:
+            record[section][key] = value
+        else:
+            record[section] = value
+    return record
+
+
 def test_provenance_reports_confounds_between_runs():
     """Two runs that differ in more than the thing under test are not comparable."""
     from mimir.eval.provenance import comparable
 
-    base = {
-        "corpus_hash": "aaa",
-        "prompts_hash": "bbb",
-        "skills_hash": "ccc",
-        "offline": True,
-        "mimir_commit": "abc123",
-        "mimir_dirty": False,
-    }
-    assert comparable(base, dict(base)) == []
+    base = _provenance()
+    assert comparable(base, _provenance()) == []
 
-    changed_corpus = dict(base, corpus_hash="zzz")
-    assert any("corpus" in p for p in comparable(base, changed_corpus))
-
-    live = dict(base, offline=False)
-    assert any("live infrastructure" in p for p in comparable(base, live))
+    other_corpus = _provenance(**{"evaluation.corpus_hash": "zzz"})
+    assert any("corpus" in p for p in comparable(base, other_corpus))
+    assert any(
+        "live infrastructure" in p
+        for p in comparable(base, _provenance(**{"evaluation.offline": False}))
+    )
+    assert any(
+        "not offered the same capabilities" in p
+        for p in comparable(base, _provenance(**{"evaluation.enabled_tools_hash": "other"}))
+    )
 
     # A clean baseline against a dirty candidate is a source difference, and the
     # message should say so rather than just labelling it "dirty".
-    dirty = dict(base, mimir_dirty=True, mimir_diff_hash="d1")
+    dirty = _provenance(**{"source.dirty": True, "source.diff_hash": "d1"})
     assert any("different working trees" in p for p in comparable(base, dirty))
 
     # Two runs from the SAME dirty tree are comparable to each other even though
     # neither is reproducible from the commit. Collapsing both cases into one
     # "dirty" verdict would hide that distinction.
-    both = dict(base, mimir_dirty=True, mimir_diff_hash="d1")
-    problems = comparable(both, dict(both))
+    problems = comparable(dirty, _provenance(**{"source.dirty": True, "source.diff_hash": "d1"}))
     assert any("same dirty tree" in p for p in problems)
     assert not any("different working trees" in p for p in problems)
+
+
+def test_comparison_fails_closed_on_incomplete_provenance():
+    """Two runs that both recorded nothing are not thereby equivalent.
+
+    The previous version compared field to field, so an empty tool hash on both
+    sides compared equal and the capability check silently did nothing.
+    """
+    from mimir.eval.provenance import comparable
+
+    base = _provenance()
+    blank = _provenance(**{"evaluation.enabled_tools_hash": ""})
+
+    problems = comparable(blank, _provenance(**{"evaluation.enabled_tools_hash": ""}))
+    assert problems, "two runs with no tool fingerprint must not compare as equal"
+    assert any("incomplete provenance" in p for p in problems)
+    assert any("enabled_tools_hash" in p for p in problems)
+
+    assert any("incomplete provenance" in p for p in comparable(base, blank))
+
+
+def test_comparison_refuses_older_schema_versions():
+    from mimir.eval.provenance import comparable
+
+    legacy = {"corpus_hash": "aaa", "prompts_hash": "bbb", "mimir_commit": "abc123"}
+    problems = comparable(_provenance(), legacy)
+    assert any("schema" in p for p in problems)
+
+
+def test_source_changing_mid_run_invalidates_the_comparison():
+    """Provenance was collected at persistence time, so edits made while a run
+    was in flight were recorded as the state that produced it."""
+    from mimir.eval.provenance import comparable
+
+    moved = _provenance(**{"source.changed_during_run": True})
+    assert any("change while it was running" in p for p in comparable(_provenance(), moved))
 
 
 def test_provenance_marks_unresolved_models():
@@ -415,14 +474,13 @@ def test_network_containment_blocks_external_and_permits_loopback():
 def test_contaminated_run_is_refused_for_comparison():
     from mimir.eval.provenance import comparable
 
-    clean = {
-        "corpus_hash": "a", "prompts_hash": "b", "skills_hash": "c",
-        "offline": True, "mimir_commit": "abc", "mimir_dirty": False,
-        "enabled_tools_hash": "t1",
-    }
-    assert comparable(clean, dict(clean)) == []
+    clean = _provenance()
+    assert comparable(clean, _provenance()) == []
 
-    contaminated = dict(clean, contaminated=True, contaminated_reason="web enabled")
+    contaminated = _provenance(
+        **{"evaluation.contaminated": True,
+           "evaluation.contaminated_reason": "web tools remained enabled"}
+    )
     problems = comparable(clean, contaminated)
     assert any("CONTAMINATED" in p for p in problems)
 

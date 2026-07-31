@@ -820,6 +820,14 @@ def evaluate(
     live_contexts = _validate_live_flags(allow_live, confirm_live_eval, live_context_allowlist)
 
     harness = EvalHarness(get_settings())
+    # Before any case runs. Provenance describes what launched the run; taking
+    # it at the end records anything the operator changed while it was in
+    # flight as though it had produced the result.
+    from mimir.eval.provenance import collect as collect_provenance
+
+    report_provenance = collect_provenance(
+        settings=get_settings(), corpus_dir=corpus, offline=not allow_live
+    )
     cases = EvalHarness.load_corpus(corpus, include_hidden=include_hidden)
     hidden_dir = EvalHarness.hidden_corpus_dir()
     if include_hidden and not hidden_dir.is_dir():
@@ -833,6 +841,7 @@ def evaluate(
     )
 
     report = harness.run_deterministic(cases)
+    report.provenance_start = report_provenance
     console.print(report.summary())
 
     if not deterministic_only and any(not c.deterministic for c in cases):
@@ -860,7 +869,7 @@ def evaluate(
 
         model_report = _run(_scored())
         console.print(model_report.summary())
-        report.results.extend(model_report.results)
+        report.absorb(model_report)
 
     # Persist unconditionally. ADR-002 section 5: a figure nobody can trace to a
     # stored run is aspirational, so every run gets an id.
