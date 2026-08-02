@@ -65,7 +65,10 @@ def _bind(fn: NodeFn, deps: NodeDeps) -> Callable[[GraphState], Awaitable[dict[s
 
 
 def _route_after_coordinate(state: GraphState) -> str:
-    return "ask_user" if state.get("route") == "ask_user" else "select_skills"
+    route = state.get("route")
+    if route in ("done", "ask_user"):
+        return route
+    return "select_skills"
 
 
 def _dispatch(state: GraphState) -> list[Send] | str:
@@ -113,7 +116,9 @@ def build_graph(deps: NodeDeps, *, parallel: bool = True) -> StateGraph:
     graph.add_conditional_edges(
         "coordinate",
         _route_after_coordinate,
-        {"ask_user": "ask_user", "select_skills": "select_skills"},
+        # "done" is the triage exit: conversational input answered directly,
+        # still recorded as a session so the audit trail stays complete.
+        {"ask_user": "ask_user", "select_skills": "select_skills", "done": "finalise"},
     )
     graph.add_edge("ask_user", END)
 

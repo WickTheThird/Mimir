@@ -20,6 +20,7 @@ from typing import Any
 
 from mimir.council.specialists import Specialist, build_council
 from mimir.graph.state import GraphState, StepPayload, merge_into_session
+from mimir.graph.triage import triage
 from mimir.llm.base import ModelError
 from mimir.llm.router import ModelRouter, StructuredOutputError, get_router
 from mimir.logging import get_logger
@@ -248,6 +249,27 @@ async def coordinate(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
         "Specialist names you may assign: "
         + ", ".join(s.value for s in SpecialistName if s != SpecialistName.COORDINATOR)
     )
+
+    # Cheapest possible path first. A greeting needs no context resolution, no
+    # classification, no specialists and no synthesis; running them cost over a
+    # minute and routed "hello" to the Kubernetes investigator.
+    verdict = triage(session.user_request)
+    if verdict.cheap:
+        session.task_type = TaskType.GENERAL_QUESTION
+        session.final_answer = FinalAnswer(
+            answer=verdict.reply,
+            confidence=1.0,
+            observed_facts=[],
+            inferences=[],
+        )
+        session.final_confidence = 1.0
+        log.info("triaged_without_investigation", kind=verdict.kind.value)
+        return {
+            "session": session,
+            "pending_steps": [],
+            "route": "done",
+            "notes": [f"triage: {verdict.kind.value}, no investigation needed"],
+        }
 
     coordinator = deps.specialist(SpecialistName.COORDINATOR)
     try:

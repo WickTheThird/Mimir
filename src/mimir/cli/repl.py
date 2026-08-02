@@ -22,6 +22,7 @@ from mimir.cli import render
 from mimir.cli.approvals import attach_cli_approvals
 from mimir.config import get_settings
 from mimir.graph.runner import EventType, InvestigationRunner
+from mimir.logging import configure_logging
 from mimir.models.state import EnvironmentContext, InvestigationState
 
 SLASH_COMMANDS = {
@@ -50,6 +51,16 @@ Read-only work runs without asking. Anything that changes state stops for approv
 
 async def run_repl(console: Console) -> None:
     settings = get_settings()
+    # Every other command surface quiets its logging; this one never did, so
+    # structured developer output (correlation ids, session ids, shadowed skill
+    # counts) was printed straight into a conversational prompt. The log file
+    # still receives everything at the configured level.
+    configure_logging(
+        level="WARNING",
+        json_logs=settings.observability.json_logs,
+        log_file=settings.observability.log_file,
+        force=True,
+    )
     runner = InvestigationRunner(settings=settings)
     attach_cli_approvals(runner.approvals, console)
 
