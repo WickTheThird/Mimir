@@ -507,3 +507,29 @@ def test_dispatching_tools_cannot_resolve_past_a_filtered_registry():
     ctx = ToolContext(registry=offline)
     assert _resolve_tool(ctx, "web", None) is None
     assert _resolve_tool(ctx, "web", "web_search") is None
+
+
+def test_empty_capabilities_means_none_not_unrestricted():
+    """A restriction that inverts at its strictest setting is a fail-open.
+
+    `caps = set(capabilities) if capabilities else None` treated an empty
+    declaration as "no filter", so the synthesis specialist - which declares no
+    capabilities at all - was exempt from capability filtering and offered logs
+    and skills tools. It never called one, but the same shape produced the
+    offline denylist that omitted the web.
+    """
+    from mimir.tools.base import load_all_tools
+
+    registry = load_all_tools()
+    assert registry.select(capabilities=[]) == [], "empty means nothing"
+    assert registry.select(capabilities=None), "None means no filter"
+
+
+def test_a_specialist_declaring_no_capabilities_is_offered_no_tools():
+    from mimir.council.specialists import Specialist
+    from mimir.eval.harness import EvalHarness
+    from mimir.models.specialist import SpecialistName
+
+    registry = EvalHarness().offline_registry()
+    assert Specialist(SpecialistName.SYNTHESIS, registry=registry).available_tools() == []
+    assert Specialist(SpecialistName.REPOSITORY_EXPLORER, registry=registry).available_tools()

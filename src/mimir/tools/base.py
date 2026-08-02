@@ -322,7 +322,14 @@ class ToolRegistry:
         include_mutating: bool = True,
         max_risk: RiskClass | None = None,
     ) -> list[ToolSpec[Any]]:
-        caps = set(capabilities) if capabilities else None
+        # None means "no capability filter". An empty sequence means "no
+        # capabilities", which must yield nothing. Collapsing the two made an
+        # empty declaration read as unrestricted, so the synthesis specialist -
+        # which declares no capabilities at all - was exempt from capability
+        # filtering and offered logs and skills tools. It never called one, but
+        # a restriction that inverts when it is at its strictest is the same
+        # fail-open shape as an offline denylist that omitted the web.
+        caps = None if capabilities is None else set(capabilities)
         wanted = set(names) if names else None
         out = []
         for spec in self.all():
