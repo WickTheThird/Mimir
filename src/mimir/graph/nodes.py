@@ -36,6 +36,12 @@ from mimir.models.specialist import (
 )
 from mimir.models.state import EnvironmentContext, InvestigationState, MemoryProposal
 from mimir.tools.base import REGISTRY, ToolContext, ToolRegistry
+from mimir.verify.claims import (
+    attach_resolved_citations,
+    check_answer,
+    demote_unsupported,
+    unsupported_brief,
+)
 
 log = get_logger(__name__)
 
@@ -579,16 +585,85 @@ async def synthesise(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
         answer = _fallback_answer(session, reports, disagreements, str(exc))
 
     answer.disagreements = list(dict.fromkeys([*answer.disagreements, *disagreements]))
-    if not answer.citations:
-        answer.citations = [
-            c.render() for e in session.ranked_evidence(limit=10) for c in e.citations
-        ][:10]
+
+    # The blanket citation attach that used to live here bolted the top ten
+    # evidence citations onto any answer that returned none, regardless of what
+    # it claimed. That is citation as ornament: it satisfied a presence check
+    # while carrying no relationship to the text. Support is now resolved
+    # per claim instead.
+    answer = await _enforce_claim_support(answer, session, synth, extra)
 
     session.final_answer = answer
     session.final_confidence = _final_confidence(answer, reports, session)
     session.completed_at = time.time()
 
     return {"session": session, "route": "curate_memory"}
+
+
+async def _enforce_claim_support(
+    answer: FinalAnswer,
+    session: InvestigationState,
+    synth: Any,
+    extra: list[str],
+) -> FinalAnswer:
+    """Resolve every stated fact against evidence, deterministically.
+
+    One repair attempt, then mechanical demotion. Repairing more than once
+    invites the model to keep rewording until something passes, which optimises
+    the checker rather than the answer, and costs a model call per attempt.
+
+    The check itself never consults a model. That is the point of the exercise:
+    the components of MIMIR that are already deterministic are the only ones
+    that do not change their mind between identical runs.
+    """
+    support = check_answer(answer, session.evidence)
+    session.metadata["claim_support"] = {
+        "factual_claims": support.total,
+        "unsupported_before": support.unsupported_count,
+        "dangling_citations_before": len(support.dangling_citations),
+        "repair_attempted": False,
+    }
+    if support.clean:
+        session.metadata["claim_support"]["citations_attached"] = (
+            attach_resolved_citations(answer, support, session.evidence)
+        )
+        return answer
+
+    try:
+        repaired: FinalAnswer = await synth.structured_report(
+            "Revise the final answer so every stated fact resolves to evidence.",
+            session,
+            FinalAnswer,
+            extra_context="\n\n".join([*extra, unsupported_brief(support)]),
+        )
+        session.metadata["claim_support"]["repair_attempted"] = True
+        repaired.disagreements = list(
+            dict.fromkeys([*repaired.disagreements, *answer.disagreements])
+        )
+        answer = repaired
+        support = check_answer(answer, session.evidence)
+    except (ModelError, StructuredOutputError) as exc:
+        log.warning("claim_repair_failed", error=str(exc))
+
+    answer, demoted, dropped = demote_unsupported(answer, support)
+    attached = attach_resolved_citations(answer, support, session.evidence)
+    session.metadata["claim_support"].update(
+        {
+            "unsupported_after": support.unsupported_count,
+            "demoted": demoted,
+            "citations_dropped": dropped,
+            "resolved_citations": len(support.resolved_citations),
+            "citations_attached": attached,
+        }
+    )
+    log.info(
+        "claim_support_enforced",
+        session_id=session.session_id,
+        summary=support.summary(),
+        demoted=demoted,
+        dropped=dropped,
+    )
+    return answer
 
 
 def _fallback_answer(
