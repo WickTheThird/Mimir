@@ -73,6 +73,7 @@ Longer documentation lives in [docs/](docs/):
 - [docs/operations.md](docs/operations.md)
 - [docs/evaluation.md](docs/evaluation.md)
 - [docs/monitor.md](docs/monitor.md)
+- [docs/ADR-003.md](docs/ADR-003.md)
 
 ## Safety posture
 
