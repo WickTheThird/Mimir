@@ -243,6 +243,10 @@ class SeriesRun:
     total: int
     created_at: float
     results: dict[str, bool] = field(default_factory=dict)
+    deterministic: set[str] = field(default_factory=set)
+    """Cases that ran without a model. They are reported separately because
+    mixing them into a reliability figure dilutes it: they are always stable,
+    so they only ever drag the number toward 100%."""
 
     @property
     def pass_rate(self) -> float:
@@ -303,6 +307,46 @@ class Series:
             agreeing = sum(1 for o in seen if o == majority)
             out.append((case_id, outcomes, majority, agreeing / len(seen)))
         return out
+
+    def pass_at_k(self, *, model_only: bool = True) -> tuple[int, int] | None:
+        """Cases solved at least once. "Is the capability there?"
+
+        Reported beside pass^k rather than instead of it. A high pass@k with a
+        low pass^k means the system can reach the answer but cannot be relied
+        on to, which points at routing and procedure rather than at the model's
+        knowledge.
+        """
+        cases = self._cases(model_only)
+        if not cases:
+            return None
+        solved = sum(
+            1 for cid in cases if any(r.results.get(cid) for r in self.runs if cid in r.results)
+        )
+        return solved, len(cases)
+
+    def pass_hat_k(self, *, model_only: bool = True) -> tuple[int, int] | None:
+        """Cases solved on every run. "Can this be trusted?"
+
+        This is the number to quote when someone asks whether MIMIR works. A
+        mean pass count hides the difference between eleven cases that always
+        work and eighteen that sometimes do.
+        """
+        cases = self._cases(model_only)
+        if not cases:
+            return None
+        always = sum(
+            1
+            for cid in cases
+            if all(r.results.get(cid) for r in self.runs if cid in r.results)
+        )
+        return always, len(cases)
+
+    def _cases(self, model_only: bool) -> list[str]:
+        every = {cid for r in self.runs for cid in r.results}
+        if not model_only:
+            return sorted(every)
+        deterministic = {cid for r in self.runs for cid in r.deterministic}
+        return sorted(every - deterministic)
 
     def stability_rate(self) -> float | None:
         """Fraction of cases with the same outcome in every run."""
@@ -752,14 +796,18 @@ def collect_series(settings: Settings | None = None, *, limit: int = 6) -> Serie
 
     for index, (run, _metadata) in enumerate(reversed(members[:limit])):
         try:
-            results = {
-                r[0]: bool(r[1])
-                for r in conn.execute(
-                    "select case_id, passed from eval_results where run_id = ?", (run[0],)
+            rows_ = list(
+                conn.execute(
+                    "select case_id, passed, duration_s from eval_results where run_id = ?",
+                    (run[0],),
                 )
-            }
+            )
+            results = {r[0]: bool(r[1]) for r in rows_}
+            # A deterministic case never invokes a model, so it finishes in
+            # microseconds. That is the only marker the results table carries.
+            deterministic = {r[0] for r in rows_ if (r[2] or 0.0) <= 0.5}
         except sqlite3.Error:
-            results = {}
+            results, deterministic = {}, set()
         series.runs.append(
             SeriesRun(
                 run_id=run[0],
@@ -769,6 +817,7 @@ def collect_series(settings: Settings | None = None, *, limit: int = 6) -> Serie
                 total=int(run[2] or 0),
                 created_at=float(run[4] or 0.0),
                 results=results,
+                deterministic=deterministic,
             )
         )
     conn.close()

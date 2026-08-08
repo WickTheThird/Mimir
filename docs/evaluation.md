@@ -103,6 +103,55 @@ existing evidence model; "hallucination" is a judgement. The current
 implementation is session-level rather than per-claim, and deliberately
 conservative: with no evidence at all, every claim counts as unsupported.
 
+## pass@k and pass^k
+
+A mean pass count hides the thing that matters. Across A4-A6:
+
+```
+                 pass@3          pass^3          gap
+model cases      85.7% (18/21)   52.4% (11/21)   33.3pp
+deterministic   100.0% (31/31)  100.0% (31/31)    0.0pp
+```
+
+`pass@k` asks whether the capability is there; `pass^k` asks whether it can be
+trusted. Eighteen of twenty-one cases are solvable and eleven are reliable, so
+the dominant problem is consistency rather than knowledge - which points at
+routing, procedure and consensus rather than at a bigger model. The three cases
+in the gap are the visible capability ceiling; a stronger model may also raise
+consistency on the seven unstable ones, so the two are not exclusive.
+
+Deterministic cases are excluded from the model figures. They are always
+stable, so including them only drags the number toward 100% and hides the
+behaviour being measured.
+
+## Confidence is a score, not a probability
+
+Measured over 236 scored cases:
+
+```
+                             AUC     Brier     ECE
+constant (base rate 0.661)   0.500   0.2241   0.000
+raw model confidence         0.558   0.4443   0.472
+```
+
+A constant beats the model's own confidence. It says 0.13 and is right 66% of
+the time. `FinalAnswer.confidence` is therefore an uncalibrated **score**, and
+`FinalAnswer.probability` is a separate nullable field that stays `None` until
+a calibration model has been validated under grouped cross-validation. ADR-003
+invariant 7 becomes structural: a field that does not exist cannot be misread.
+
+A learned estimator was tried and rejected. Out-of-fold AUC under grouping by
+`case_id` was 0.510, chance. A random split would have reported roughly 0.68
+by memorising case identity, since the 236 rows are 21 distinct cases repeated.
+
+Abstention on a reliability score was also rejected. Pooled risk-coverage rose
+convincingly, but the within-case test - do the runs that passed gather more
+evidence than the runs that failed *on the same case*? - gave 4 of 10 with a
+sign test of p = 1.000. The pooled effect is case difficulty, not a live
+signal, so a score threshold would refuse hard question types rather than bad
+answers. Deterministic preconditions remain viable because they are properties
+of a specific answer.
+
 ## Trap cases
 
 Trap cases assert an upper bound on confidence rather than on content, because

@@ -173,11 +173,29 @@ def render_answer(answer: FinalAnswer, confidence: float) -> Group:
         blocks.append(_bullets(answer.citations[:12], "dim"))
 
     label, style = confidence_label(confidence)
-    blocks.append(Text(f"\nconfidence: {confidence:.2f} ({label})", style=style))
+    # Shown as a score, not a probability. Measured AUC against correctness is
+    # 0.558 and ECE 0.472, so the magnitude carries no likelihood meaning and
+    # calling it "confidence: 0.13" invites the operator to read 13%.
+    blocks.append(Text(f"\nsupport score: {confidence:.2f} ({label})", style=style))
+    probability = getattr(answer, "probability", None)
+    if probability is not None:
+        blocks.append(
+            Text(f"calibrated probability of correctness: {probability:.0%}", style="cyan")
+        )
+    else:
+        blocks.append(
+            Text("score is uncalibrated and is not a probability", style="dim")
+        )
     return Group(*blocks)
 
 
 def confidence_label(confidence: float) -> tuple[str, str]:
+    """Advice bands for the raw support score.
+
+    Deliberately phrased as guidance about evidence rather than as a chance of
+    being right, because the score does not rank correctness well enough to
+    justify the latter.
+    """
     if confidence >= 0.75:
         return "well supported", "green"
     if confidence >= 0.5:

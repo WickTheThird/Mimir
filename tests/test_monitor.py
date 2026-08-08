@@ -655,3 +655,64 @@ class TestPersistedMetadataShape:
         combined.absorb(model)
         assert combined.model_invocations == 12
         assert combined.telemetry_complete
+
+
+class TestPassAtK:
+    """pass@k answers "is the capability there"; pass^k answers "can it be
+    trusted". Reporting only one of them, or only a mean, hides the gap that
+    matters."""
+
+    def _series(self, *runs, deterministic=()):
+        s = activity.Series(corpus_hash="c", commit="abc")
+        for i, results in enumerate(runs, start=1):
+            s.runs.append(
+                activity.SeriesRun(
+                    run_id=f"eval_{i}", label=f"#{i}", model="m",
+                    passed=sum(1 for v in results.values() if v),
+                    total=len(results), created_at=float(i), results=results,
+                    deterministic=set(deterministic),
+                )
+            )
+        return s
+
+    def test_a_case_solved_once_counts_for_at_k_but_not_hat_k(self):
+        s = self._series({"a": True}, {"a": False}, {"a": True})
+        assert s.pass_at_k() == (1, 1)
+        assert s.pass_hat_k() == (0, 1)
+
+    def test_a_case_never_solved_counts_for_neither(self):
+        s = self._series({"a": False}, {"a": False}, {"a": False})
+        assert s.pass_at_k() == (0, 1)
+        assert s.pass_hat_k() == (0, 1)
+
+    def test_deterministic_cases_are_excluded_by_default(self):
+        """They are always stable, so including them only drags the
+        reliability figure toward 100% and hides the model's behaviour."""
+        s = self._series(
+            {"model": True, "det": True},
+            {"model": False, "det": True},
+            {"model": True, "det": True},
+            deterministic=("det",),
+        )
+        assert s.pass_hat_k() == (0, 1), "only the model case is counted"
+        assert s.pass_hat_k(model_only=False) == (1, 2), "det case is stable"
+
+    def test_no_runs_reports_nothing_rather_than_zero(self):
+        s = activity.Series()
+        assert s.pass_at_k() is None
+        assert s.pass_hat_k() is None
+
+    def test_the_gap_is_what_distinguishes_capability_from_reliability(self):
+        """18/21 solvable but 11/21 reliable is a routing and procedure
+        problem, not a knowledge problem."""
+        runs = [{f"c{i}": True for i in range(11)} for _ in range(3)]
+        for i in range(11, 18):          # 7 unstable
+            runs[0][f"c{i}"] = True
+            runs[1][f"c{i}"] = False
+            runs[2][f"c{i}"] = True
+        for i in range(18, 21):          # 3 never solved
+            for r in runs:
+                r[f"c{i}"] = False
+        s = self._series(*runs)
+        assert s.pass_at_k() == (18, 21)
+        assert s.pass_hat_k() == (11, 21)

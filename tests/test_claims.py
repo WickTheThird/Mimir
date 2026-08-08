@@ -224,3 +224,30 @@ class TestGroundedCitations:
         attach_resolved_citations(answer, support, [real])
         assert answer.citations[0] == "manual/note.md"
         assert "src/real.py" in answer.citations
+
+
+class TestScoreVersusProbability:
+    """ADR-003 invariant 7, enforced structurally rather than by convention."""
+
+    def test_probability_is_none_until_a_calibration_model_earns_it(self):
+        from mimir.models.specialist import FinalAnswer
+
+        answer = FinalAnswer(answer="x", confidence=0.3)
+        assert answer.confidence == 0.3, "the raw score is always available"
+        assert answer.probability is None, (
+            "an uncalibrated score must not appear in a field named probability"
+        )
+
+    def test_the_renderer_does_not_call_the_score_a_probability(self):
+        import io
+
+        from rich.console import Console
+
+        from mimir.cli.render import render_answer
+        from mimir.models.specialist import FinalAnswer
+
+        console = Console(width=100, record=True, file=io.StringIO())
+        console.print(render_answer(FinalAnswer(answer="x", confidence=0.13), 0.13))
+        text = console.export_text()
+        assert "support score" in text
+        assert "not a probability" in text

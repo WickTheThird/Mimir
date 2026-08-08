@@ -152,7 +152,29 @@ class FinalAnswer(BaseModel):
     """Structured output of the Synthesis specialist (ADR 7.1 S10)."""
 
     answer: str
+
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    """An uncalibrated **score**, not a probability.
+
+    Measured over 236 scored cases: AUC 0.558 against correctness, Brier 0.444,
+    expected calibration error 0.472. A constant equal to the base rate scores
+    better. The model says 0.13 and is right 66% of the time, so this number
+    ranks weakly and its magnitude means nothing.
+
+    It is kept because it is a mildly useful feature, and named ``confidence``
+    for compatibility, but nothing may present it as a likelihood of being
+    correct.
+    """
+
+    probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    """Calibrated probability of correctness, or None.
+
+    Stays None until a calibration model exists and has been validated on
+    grouped cross-validation. ADR-003 invariant 7 forbids presenting model
+    confidence as probability unless calibrated; making that a separate,
+    nullable field enforces the rule structurally rather than by convention,
+    because a field that does not exist cannot be misread.
+    """
     observed_facts: list[str] = Field(default_factory=list)
     inferences: list[str] = Field(default_factory=list)
     unverified: list[str] = Field(default_factory=list)

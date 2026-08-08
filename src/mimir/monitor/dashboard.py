@@ -886,6 +886,31 @@ def render_series(act: activity_mod.Activity) -> Panel:
             _bar(run.pass_rate, width=14, warn=0.6, crit=0.4),
         )
 
+    parts: list[RenderableType] = [header]
+
+    # pass^k first: it is the number that answers "can this be trusted", and a
+    # mean pass count hides the difference between eleven cases that always
+    # work and eighteen that sometimes do.
+    k = len(series.runs)
+    at, hat = series.pass_at_k(), series.pass_hat_k()
+    if at and hat and k >= 2:
+        line = Text()
+        line.append(f"pass@{k} ", style="dim")
+        line.append(f"{at[0]}/{at[1]} ", style="")
+        line.append(f"{at[0] / at[1] * 100:.0f}%", style="green")
+        line.append(f"   pass^{k} ", style="dim")
+        line.append(f"{hat[0]}/{hat[1]} ", style="")
+        ratio = hat[0] / hat[1]
+        line.append(
+            f"{ratio * 100:.0f}%",
+            style="green" if ratio >= 0.8 else ("yellow" if ratio >= 0.5 else "red"),
+        )
+        gap = (at[0] - hat[0]) / at[1] * 100
+        if gap > 5:
+            line.append(f"   gap {gap:.0f}pp", style="yellow bold")
+        parts.append(line)
+        parts.append(Text("model cases only, deterministic excluded", style="dim"))
+
     stats = Text()
     if len(series.runs) >= 2:
         stats.append(f"mean {series.mean:.1f}   ", style="")
@@ -900,8 +925,7 @@ def render_series(act: activity_mod.Activity) -> Panel:
             stats.append(f"   stability {rate * 100:.0f}%", style="dim")
     else:
         stats.append("one run so far; a single run is not a measurement", style="dim")
-
-    parts: list[RenderableType] = [header, stats]
+    parts.append(stats)
 
     unstable = act.series.unstable_cases()
     if unstable:
