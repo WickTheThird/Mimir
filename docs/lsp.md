@@ -72,7 +72,32 @@ to one without it. The switch exists so an experiment can isolate one change at
 a time: with `enabled: false` the fingerprint matches the A4-A6 baseline
 byte for byte.
 
+## Supersession
+
+`find_symbol` and `find_references` are registered but **not offered** to
+specialists while their LSP equivalents exist. Offering both an exact engine
+and an approximation of the same job costs schema tokens on every call and
+invites the model to pick the worse one.
+
+```python
+@tool("find_symbol", ..., superseded_by=("lsp_definition",))
+```
+
+They remain callable directly. Only selection is filtered, and only while the
+replacement is registered - a registry without `lsp_definition` offers
+`find_symbol` again.
+
 ## Cost
+
+Tool schemas are sent on every call. The twelve tools added for language
+servers and code tasks took `repository_explorer` from 24 tools to 35, and its
+schema from roughly 5,000 to 7,664 tokens - measured prompts went from 4,757 to
+11,180, which is prefill paid on every one of forty-odd calls per run.
+
+Two deterministic cuts brought it back to 28 tools and 6,517 tokens: code
+mutation became its own capability (an investigation specialist is not offered
+`write_worktree_file`), and superseded tools are not offered. Further reduction
+needs curation rather than a rule.
 
 A server costs seconds to start and longer to index, so clients are cached per
 `(binary, repository root)` for the life of the process. Every request carries

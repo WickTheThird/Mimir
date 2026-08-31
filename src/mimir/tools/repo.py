@@ -1054,6 +1054,7 @@ class FindSymbolInput(BaseModel):
     capability=Capability.REPOSITORY,
     risk=RiskClass.R1,
     tags=("repository", "symbol"),
+    superseded_by=("lsp_definition",),
 )
 async def find_symbol(args: FindSymbolInput, ctx: ToolContext) -> ToolResult:
     symbol = args.symbol.strip()
@@ -1156,6 +1157,7 @@ class FindReferencesInput(BaseModel):
     capability=Capability.REPOSITORY,
     risk=RiskClass.R1,
     tags=("repository", "symbol"),
+    superseded_by=("lsp_references",),
 )
 async def find_references(args: FindReferencesInput, ctx: ToolContext) -> ToolResult:
     symbol = args.symbol.strip()

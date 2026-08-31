@@ -98,3 +98,59 @@ class TestRendering:
     def test_symbol_carries_a_citable_location(self):
         s = LspSymbol("f", "function", LspLocation("a.py", 3, 0))
         assert s.location.render() == "a.py:3"
+
+
+class TestSupersession:
+    """Never offer an approximate tool when an exact one is registered."""
+
+    def test_lsp_hides_the_ripgrep_equivalents(self):
+        """Registered, but not offered. The registry says what exists;
+        selection says what a specialist is shown."""
+        from mimir.eval.harness import EvalHarness
+
+        registry = EvalHarness().offline_registry()
+        assert "find_symbol" in registry.names(), "still registered"
+
+        names = {s.name for s in registry.select()}
+        assert "lsp_definition" in names and "lsp_references" in names
+        assert "find_symbol" not in names, (
+            "find_symbol is ripgrep plus a regex guessing at definitions; "
+            "offering it beside lsp_definition costs schema tokens on every "
+            "call and invites the model to pick the worse one"
+        )
+        assert "find_references" not in names
+
+    def test_a_superseded_tool_is_still_callable_directly(self):
+        """Hidden from selection, not removed. A caller that knows what it
+        wants can still reach it."""
+        from mimir.tools.base import load_all_tools
+
+        assert load_all_tools().get("find_symbol") is not None
+
+    def test_supersession_only_applies_when_the_replacement_exists(self):
+        from mimir.tools.base import ToolRegistry, load_all_tools
+
+        full = load_all_tools()
+        lonely = ToolRegistry()
+        lonely.register(full.get("find_symbol"))
+        assert [s.name for s in lonely.select()] == ["find_symbol"], (
+            "with no lsp_definition registered, find_symbol is the best available"
+        )
+
+
+class TestCodeIsNotRepository:
+    def test_investigation_specialists_are_not_offered_mutation_tools(self):
+        from mimir.council.specialists import Specialist
+        from mimir.eval.harness import EvalHarness
+        from mimir.models.specialist import SpecialistName
+
+        registry = EvalHarness().offline_registry()
+        offered = {
+            s.name
+            for s in Specialist(
+                SpecialistName.REPOSITORY_EXPLORER, registry=registry
+            ).available_tools()
+        }
+        for name in ("write_worktree_file", "create_task_worktree",
+                     "discard_task_worktree"):
+            assert name not in offered, f"{name} is code mutation, not investigation"

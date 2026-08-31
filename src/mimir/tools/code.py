@@ -93,7 +93,7 @@ class TestInput(BaseModel):
         "never in the operator's checkout, so the whole task is reversible by discarding it. "
         "Call this before writing any file."
     ),
-    capability=Capability.REPOSITORY,
+    capability=Capability.CODE,
     risk=RiskClass.R1,
     tags=("repository", "worktree", "code"),
 )
@@ -122,7 +122,7 @@ async def create_task_worktree(args: CreateInput, ctx: ToolContext) -> ToolResul
         "List the task worktrees that exist, with their branch and whether they have "
         "uncommitted changes."
     ),
-    capability=Capability.REPOSITORY,
+    capability=Capability.CODE,
     risk=RiskClass.R0,
     tags=("repository", "worktree"),
 )
@@ -145,7 +145,7 @@ async def list_task_worktrees(args: ListWorktreesInput, ctx: ToolContext) -> Too
         "outside the worktree. Use read_file_range first when editing an existing file, "
         "because this replaces the whole file."
     ),
-    capability=Capability.REPOSITORY,
+    capability=Capability.CODE,
     risk=RiskClass.R1,
     tags=("repository", "worktree", "code", "write"),
     mutating=True,
@@ -197,7 +197,7 @@ async def write_worktree_file(args: WriteInput, ctx: ToolContext) -> ToolResult:
         "Show what a task worktree changed against the commit it branched from, including "
         "untracked files. This is the review surface for the whole task."
     ),
-    capability=Capability.REPOSITORY,
+    capability=Capability.CODE,
     risk=RiskClass.R1,
     tags=("repository", "worktree", "review"),
 )
@@ -297,7 +297,7 @@ async def run_worktree_tests(args: TestInput, ctx: ToolContext) -> ToolResult:
         "Delete a task worktree and its branch, throwing away every change made in it. "
         "This is how an abandoned or rejected task is undone."
     ),
-    capability=Capability.REPOSITORY,
+    capability=Capability.CODE,
     risk=RiskClass.R1,
     tags=("repository", "worktree", "cleanup"),
     mutating=True,

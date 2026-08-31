@@ -40,6 +40,7 @@ class Capability(StrEnum):
     privileged surfaces stay loopback-only."""
 
     REPOSITORY = "repository"
+    CODE = "code"
     KUBERNETES = "kubernetes"
     SDM = "sdm"
     DATABASE = "database"
@@ -63,6 +64,7 @@ class Capability(StrEnum):
 OFFLINE_SAFE_CAPABILITIES: frozenset[Capability] = frozenset(
     {
         Capability.REPOSITORY,
+        Capability.CODE,
         Capability.LOGS,
         Capability.MEMORY,
         Capability.SKILLS,
@@ -198,6 +200,19 @@ class ToolSpec(Generic[InputT]):
     specialists: tuple[SpecialistName, ...] = ()
     """Which specialists may call this. Empty means all of them."""
 
+    superseded_by: tuple[str, ...] = ()
+    """Tools that do this job exactly, when they are available.
+
+    A superseded tool is hidden from selection whenever a replacement is
+    registered. Offering both an exact engine and an approximation of it costs
+    schema tokens on every call and invites the model to pick the worse one -
+    ``find_symbol`` is ripgrep plus a regex guessing at definitions, and
+    ``lsp_definition`` resolves the same question from a parse.
+
+    The tool stays callable directly; it is only removed from what the council
+    is offered.
+    """
+
     mutating: bool = False
     requires_approval: bool = False
     long_running: bool = False
@@ -330,6 +345,7 @@ class ToolRegistry:
         # a restriction that inverts when it is at its strictest is the same
         # fail-open shape as an offline denylist that omitted the web.
         caps = None if capabilities is None else set(capabilities)
+        registered = {spec.name for spec in self.all()}
         wanted = set(names) if names else None
         out = []
         for spec in self.all():
@@ -338,6 +354,8 @@ class ToolRegistry:
             if caps is not None and spec.capability not in caps:
                 continue
             if not spec.available_to(specialist):
+                continue
+            if spec.superseded_by and any(r in registered for r in spec.superseded_by):
                 continue
             if not include_mutating and spec.mutating:
                 continue
@@ -381,6 +399,7 @@ def tool(
     requires_approval: bool = False,
     long_running: bool = False,
     tags: Sequence[str] = (),
+    superseded_by: Sequence[str] = (),
     registry: ToolRegistry | None = None,
 ) -> Callable[[Handler], ToolSpec[Any]]:
     """Register an async handler as a typed tool.
@@ -417,6 +436,7 @@ def tool(
             requires_approval=requires_approval,
             long_running=long_running,
             tags=tuple(tags),
+            superseded_by=tuple(superseded_by),
         )
         (registry or REGISTRY).register(spec)
         return spec
