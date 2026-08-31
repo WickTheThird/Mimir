@@ -275,6 +275,22 @@ class SkillsConfig(BaseModel):
         return [Path(os.path.expanduser(str(p))) for p in v]
 
 
+class LspConfig(BaseModel):
+    """Language server integration.
+
+    Switchable because adding tools changes the tool surface, and a run with a
+    different tool surface is not comparable to one without it. Turning this
+    off reproduces the pre-LSP surface exactly, so an experiment can isolate
+    one change at a time rather than measuring two.
+    """
+
+    enabled: bool = True
+    timeout_s: float = 20.0
+    index_grace_s: float = 2.0
+    """Pause after opening a document before querying. Servers answer before
+    indexing completes, often with nothing."""
+
+
 class ObservabilityConfig(BaseModel):
     log_level: str = "INFO"
     json_logs: bool = False
@@ -315,6 +331,7 @@ class Settings(BaseSettings):
     api: ApiConfig = Field(default_factory=ApiConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    lsp: LspConfig = Field(default_factory=LspConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     graph: GraphConfig = Field(default_factory=GraphConfig)
 

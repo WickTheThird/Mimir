@@ -445,4 +445,15 @@ def load_all_tools() -> ToolRegistry:
             import_module(module)
         except ImportError as exc:  # pragma: no cover - optional extras
             log.warning("tool_module_unavailable", module=module, error=str(exc))
+
+    # Language server tools are opt-out. They change the tool surface, and a
+    # run with a different surface is not comparable to one without it, so an
+    # experiment can turn them off to reproduce an earlier fingerprint exactly.
+    try:
+        from mimir.config import get_settings
+
+        if get_settings().lsp.enabled:
+            import_module("mimir.tools.lsp")
+    except Exception as exc:  # noqa: BLE001 - never block the registry
+        log.warning("tool_module_unavailable", module="mimir.tools.lsp", error=str(exc))
     return REGISTRY
