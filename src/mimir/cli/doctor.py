@@ -56,6 +56,7 @@ async def run_doctor(console: Console) -> bool:
     checks.append(_repo_check(settings))
     checks.extend(await _model_checks())
     checks.append(_tools_check())
+    checks.append(_context_check(settings))
     checks.append(_knowledge_check(settings))
     checks.append(_skills_check())
     checks.append(_persistence_check())
@@ -180,6 +181,37 @@ def _tools_check() -> Check:
         by_capability[spec.capability.value] = by_capability.get(spec.capability.value, 0) + 1
     detail = ", ".join(f"{k}:{v}" for k, v in sorted(by_capability.items()))
     return Check("tools", "ok" if specs else "fail", f"{len(specs)} registered ({detail})")
+
+
+def _context_check(settings) -> Check:
+    """Is the runtime serving the context window we configured?
+
+    Ollama's OpenAI shim discards ``num_ctx`` and serves each model at its own
+    default. qwen3-coder:30b defaults to 262144, so a run configured for 32768
+    allocated a 24.5 GB KV cache and generated at 4 tok/s while provenance
+    recorded the configured value as fact. Caught here it costs one env var;
+    caught mid-run it costs the run.
+    """
+    from mimir.eval.provenance import resolve_model
+
+    problems = []
+    for alias in sorted(settings.models.profiles):
+        if settings.models.profiles[alias].runtime != "ollama":
+            continue
+        identity = resolve_model(alias, settings)
+        if identity.context_mismatch:
+            problems.append(
+                f"{alias} ({identity.name}) configured {identity.context_window} "
+                f"but served {identity.served_context}"
+            )
+    if problems:
+        return Check(
+            "context window",
+            "warn",
+            "; ".join(problems) + ". Set OLLAMA_CONTEXT_LENGTH on the server: "
+            "the OpenAI shim ignores num_ctx.",
+        )
+    return Check("context window", "ok", "runtime serves the configured window")
 
 
 def _knowledge_check(settings) -> Check:

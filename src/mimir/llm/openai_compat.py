@@ -292,7 +292,21 @@ class OpenAICompatModel(ChatModel):
 
 
 class OllamaModel(OpenAICompatModel):
-    """Ollama speaks the OpenAI API at /v1 but has two quirks worth encoding."""
+    """Ollama speaks the OpenAI API at /v1 but has quirks worth encoding.
+
+    The important one is not fixable here. Ollama's OpenAI shim has no field
+    for ``num_ctx`` and discards it from ``options``, so every model is served
+    at that model's own default context. For qwen2.5:7b that default is 32768,
+    which matched the configured value, and the gap was invisible. For
+    qwen3-coder:30b the default is 262144: Ollama allocated a 24.5 GB KV cache
+    for a context MIMIR never uses, 18 GB of weights became 42.5 GB resident,
+    and generation fell to 4 tok/s.
+
+    The server-side fix is ``OLLAMA_CONTEXT_LENGTH``. What matters here is that
+    MIMIR must not record a configured value the runtime ignored, so
+    :func:`mimir.eval.provenance.resolve_model` reads the *served* context back
+    and flags a mismatch rather than reporting the setting as fact.
+    """
 
     def _adapt_response_format(self, response_format: dict[str, Any]) -> dict[str, Any]:
         # Ollama's OpenAI shim accepts json_schema on recent builds and

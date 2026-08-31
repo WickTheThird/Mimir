@@ -40,6 +40,19 @@ class ModelIdentity:
     parameter_size: str = ""
     family: str = ""
     context_window: int = 0
+    """The configured window. What MIMIR asked for."""
+
+    served_context: int = 0
+    """The window the runtime is actually serving, read back from the runtime.
+
+    Recorded separately because Ollama's OpenAI shim discards ``num_ctx`` and
+    serves each model at its own default. qwen3-coder:30b defaults to 262144,
+    so a run configured for 32768 was served eight times that, allocated a
+    24.5 GB KV cache, and recorded the configured value as fact. A setting the
+    runtime ignores is worse than no setting, because it is written down.
+    """
+
+    context_mismatch: bool = False
     temperature: float = 0.0
     seed: int | None = None
     resolved: bool = False
@@ -290,6 +303,31 @@ def resolve_model(alias: str, settings: Settings | None = None) -> ModelIdentity
                             identity.digest = (entry.get("digest") or "")[:19]
                             break
             identity.resolved = True
+
+        # Read back what the runtime is actually serving. /api/ps reports the
+        # live context of a loaded model; a model that is not resident reports
+        # nothing, which is not a mismatch, only an unknown.
+        try:
+            running = httpx.get(f"{root}/api/ps", timeout=8.0)
+            if running.status_code == 200:
+                for entry in running.json().get("models", []):
+                    if entry.get("name") == profile.model or entry.get(
+                        "model"
+                    ) == profile.model:
+                        identity.served_context = int(entry.get("context_length") or 0)
+                        break
+        except (httpx.HTTPError, ValueError):
+            pass
+        if identity.served_context and identity.context_window:
+            identity.context_mismatch = identity.served_context != identity.context_window
+            if identity.context_mismatch:
+                log.warning(
+                    "context_window_mismatch",
+                    alias=alias,
+                    configured=identity.context_window,
+                    served=identity.served_context,
+                    hint="set OLLAMA_CONTEXT_LENGTH; the OpenAI shim ignores num_ctx",
+                )
     except (httpx.HTTPError, ValueError) as exc:
         log.info("provenance_model_unresolved", alias=alias, error=str(exc))
     return identity
@@ -409,6 +447,16 @@ def comparable(left: dict[str, Any], right: dict[str, Any]) -> list[str]:
                 f"{side} had its source change while it was running; the recorded "
                 "commit does not describe what executed"
             )
+
+    for side, run in (("baseline", left), ("candidate", right)):
+        for alias, identity in (run.get("models") or {}).items():
+            if isinstance(identity, dict) and identity.get("context_mismatch"):
+                problems.append(
+                    f"{side} ran {alias} at a context of "
+                    f"{identity.get('served_context')} while configured for "
+                    f"{identity.get('context_window')}; the recorded setting is not "
+                    "what the runtime served"
+                )
 
     checks = [
         ("evaluation.enabled_tools_hash",

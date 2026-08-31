@@ -533,3 +533,26 @@ def test_a_specialist_declaring_no_capabilities_is_offered_no_tools():
     registry = EvalHarness().offline_registry()
     assert Specialist(SpecialistName.SYNTHESIS, registry=registry).available_tools() == []
     assert Specialist(SpecialistName.REPOSITORY_EXPLORER, registry=registry).available_tools()
+
+
+def test_a_context_mismatch_refuses_the_comparison():
+    """A configured value the runtime ignored must not be reported as fact.
+
+    Ollama's OpenAI shim discards num_ctx and serves each model at its own
+    default. qwen3-coder:30b defaults to 262144, so a run configured for 32768
+    was served eight times that, allocated a 24.5 GB KV cache, ran at 4 tok/s,
+    and recorded 32768 as though it were true.
+    """
+    from mimir.eval.provenance import comparable
+
+    clean = _provenance()
+    clean["models"] = {"deep": {"name": "m", "context_window": 32768,
+                                "served_context": 32768, "context_mismatch": False}}
+    assert comparable(clean, dict(clean, models=dict(clean["models"]))) == []
+
+    mismatched = _provenance()
+    mismatched["models"] = {"deep": {"name": "m", "context_window": 32768,
+                                     "served_context": 262144, "context_mismatch": True}}
+    problems = comparable(clean, mismatched)
+    assert any("262144" in p for p in problems)
+    assert any("not what the runtime served" in p for p in problems)
