@@ -154,3 +154,64 @@ class TestCodeIsNotRepository:
         for name in ("write_worktree_file", "create_task_worktree",
                      "discard_task_worktree"):
             assert name not in offered, f"{name} is code mutation, not investigation"
+
+
+class TestReplIntrospection:
+    """The interactive prompt is the surface most people see. It used to state
+    what MIMIR is for and nothing about what it currently had, so a session
+    that had silently lost its language servers looked exactly like a healthy
+    one. These pin the prompt to live state rather than to prose.
+    """
+
+    def _rendered(self, function, *args):
+        import io
+
+        from rich.console import Console
+
+        console = Console(width=120, record=True, file=io.StringIO())
+        function(console, *args)
+        return console.export_text()
+
+    def test_the_banner_reports_the_tools_and_servers_actually_present(self):
+        from mimir.cli.repl import BANNER, _banner_facts
+        from mimir.config import get_settings
+        from mimir.tools.base import load_all_tools
+
+        facts = _banner_facts(get_settings())
+        assert facts["tools"] == str(len(load_all_tools().select())), (
+            "the count shown must be the count offered, not the count registered"
+        )
+        assert BANNER.format(version="test", **facts).count("{") == 0
+
+    def test_every_slash_command_has_a_handler(self):
+        """A command in the help table with no branch is worse than no command:
+        it advertises a capability that silently does nothing."""
+        import inspect
+
+        from mimir.cli import repl
+
+        source = inspect.getsource(repl._handle_slash)
+        for name in repl.SLASH_COMMANDS:
+            assert f'"{name}"' in source, f"{name} is advertised but never handled"
+
+    def test_lsp_status_names_the_install_command_for_a_missing_server(self):
+        from mimir.cli.repl import _print_lsp
+        from mimir.lsp.servers import SERVERS
+
+        text = self._rendered(_print_lsp)
+        missing = [s for s in SERVERS if not s.installed]
+        for spec in missing:
+            assert spec.install_hint.split()[0] in text
+
+    def test_tools_are_grouped_by_capability_and_report_their_risk(self):
+        from mimir.cli.repl import _print_tools
+
+        text = self._rendered(_print_tools, "")
+        assert "capability" in text and "risk" in text
+        assert "R0" in text
+
+    def test_an_unknown_capability_lists_the_known_ones(self):
+        from mimir.cli.repl import _print_tools
+
+        text = self._rendered(_print_tools, "not-a-capability")
+        assert "code" in text, "the error should teach the vocabulary"

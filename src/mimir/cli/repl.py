@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -27,6 +28,11 @@ from mimir.models.state import EnvironmentContext, InvestigationState
 
 SLASH_COMMANDS = {
     "/help": "show this help",
+    "/status": "model, tools, language servers, and what is loaded",
+    "/tools": "list the typed tools available, grouped by capability",
+    "/lsp": "language server status and how to install a missing one",
+    "/worktree": "list task worktrees, or /worktree diff <task>",
+    "/model": "show the bound models and the context actually served",
     "/context": "show or set the operating context",
     "/ns": "set the namespace, for example /ns payments",
     "/cluster": "set the cluster context",
@@ -44,9 +50,39 @@ SLASH_COMMANDS = {
 BANNER = """\
 MIMIR {version}  local operations investigation
 
-Ask a question in plain language. Type /help for commands, /quit to exit.
+{model}  {tools} tools  {servers}
+
+Ask a question in plain language. /help for commands, /status for what is loaded.
 Read-only work runs without asking. Anything that changes state stops for approval.
 """
+
+
+def _banner_facts(settings: Any) -> dict[str, str]:
+    """What is actually loaded, read at startup rather than described.
+
+    The banner used to say only what MIMIR is for. It said nothing about which
+    model was bound or which tools existed, so a session that had silently lost
+    its language servers looked identical to one that had them.
+    """
+    try:
+        from mimir.tools.base import load_all_tools
+
+        tools = len(load_all_tools().select())
+    except Exception:  # noqa: BLE001 - the banner must never block the prompt
+        tools = 0
+    try:
+        from mimir.lsp.servers import available_servers
+
+        found = sorted({s.language for s in available_servers()})
+        servers = f"lsp: {', '.join(found)}" if found else "no language servers"
+    except Exception:  # noqa: BLE001
+        servers = "lsp unavailable"
+    profile = settings.models.profiles.get(settings.models.routing.default)
+    return {
+        "model": profile.model if profile else "no model configured",
+        "tools": str(tools),
+        "servers": servers,
+    }
 
 
 async def run_repl(console: Console) -> None:
@@ -70,7 +106,9 @@ async def run_repl(console: Console) -> None:
         completer=WordCompleter(list(SLASH_COMMANDS), sentence=True),
     )
 
-    console.print(Text(BANNER.format(version=__version__), style="dim"))
+    console.print(
+        Text(BANNER.format(version=__version__, **_banner_facts(settings)), style="dim")
+    )
     environment = EnvironmentContext(
         cluster_context=settings.kubernetes.default_context,
         namespace=settings.kubernetes.default_namespace,
@@ -170,7 +208,17 @@ def _handle_slash(
     if command == "/new":
         return "new"
 
-    if command == "/help":
+    if command == "/status":
+        _print_status(console)
+    elif command == "/tools":
+        _print_tools(console, argument)
+    elif command == "/lsp":
+        _print_lsp(console)
+    elif command == "/model":
+        _print_models(console)
+    elif command == "/worktree":
+        _print_worktrees(console, argument)
+    elif command == "/help":
         table = Table(box=None, header_style="dim")
         table.add_column("command")
         table.add_column("what it does")
@@ -235,3 +283,188 @@ def main() -> None:
     from mimir.cli.render import make_console
 
     asyncio.run(run_repl(make_console()))
+
+
+# ---------------------------------------------------------------------------
+# capability introspection
+#
+# The prompt used to describe what MIMIR is for and nothing about what it
+# currently has. A session whose language servers had silently gone missing,
+# or whose model was serving a different context than configured, looked
+# exactly like a healthy one. These read live state rather than repeating the
+# documentation.
+# ---------------------------------------------------------------------------
+
+
+def _print_status(console: Console) -> None:
+    from mimir.config import get_settings
+
+    settings = get_settings()
+    table = Table(box=None, header_style="dim")
+    table.add_column("")
+    table.add_column("")
+
+    try:
+        from mimir.tools.base import load_all_tools
+
+        registry = load_all_tools()
+        specs = registry.all()
+        offered = len(registry.select())
+        table.add_row("tools", f"{len(specs)} registered, {offered} offered to specialists")
+    except Exception as exc:  # noqa: BLE001
+        table.add_row("tools", f"unavailable: {exc}")
+
+    profile = settings.models.profiles.get(settings.models.routing.default)
+    if profile is not None:
+        try:
+            from mimir.eval.provenance import resolve_model
+
+            identity = resolve_model(settings.models.routing.default, settings)
+            served = identity.served_context or 0
+            note = ""
+            if identity.context_mismatch:
+                note = f"  MISMATCH: serving {served}, configured {identity.context_window}"
+            table.add_row(
+                "model",
+                f"{profile.model} via {profile.runtime}, context "
+                f"{served or profile.context_window}{note}",
+            )
+        except Exception:  # noqa: BLE001
+            table.add_row("model", f"{profile.model} via {profile.runtime}")
+
+    try:
+        from mimir.lsp.servers import SERVERS, available_servers
+
+        found = sorted({s.language for s in available_servers()})
+        table.add_row(
+            "language servers",
+            f"{', '.join(found)}  ({len({s.language for s in SERVERS}) - len(found)} "
+            "language(s) without one)" if found else "none installed",
+        )
+    except Exception:  # noqa: BLE001
+        table.add_row("language servers", "unavailable")
+
+    try:
+        from mimir.skills.registry import SkillRegistry
+
+        table.add_row("skills", f"{len(SkillRegistry(settings).all())} loaded")
+    except Exception:  # noqa: BLE001
+        pass
+
+    table.add_row("home", str(settings.home))
+    console.print(table)
+
+
+def _print_tools(console: Console, capability: str) -> None:
+    from mimir.tools.base import load_all_tools
+
+    registry = load_all_tools()
+    specs = [s for s in registry.select() if not capability or s.capability.value == capability]
+    if not specs:
+        known = sorted({s.capability.value for s in registry.all()})
+        console.print(Text(f"no tools for {capability!r}. try: {', '.join(known)}", style="yellow"))
+        return
+
+    grouped: dict[str, list[Any]] = {}
+    for spec in specs:
+        grouped.setdefault(spec.capability.value, []).append(spec)
+
+    table = Table(box=None, header_style="dim")
+    table.add_column("capability")
+    table.add_column("risk")
+    table.add_column("tool")
+    for cap in sorted(grouped):
+        for i, spec in enumerate(sorted(grouped[cap], key=lambda s: s.name)):
+            table.add_row(cap if i == 0 else "", spec.risk.value, spec.name)
+    console.print(table)
+    hidden = len(registry.all()) - len(registry.select())
+    if hidden and not capability:
+        console.print(
+            Text(f"{hidden} tool(s) hidden because an exact replacement exists", style="dim")
+        )
+
+
+def _print_lsp(console: Console) -> None:
+    from mimir.lsp.servers import SERVERS
+
+    table = Table(box=None, header_style="dim")
+    for column in ("language", "server", "state", "install"):
+        table.add_column(column)
+    for spec in SERVERS:
+        table.add_row(
+            spec.language,
+            spec.binary,
+            Text("ready", style="green") if spec.installed else Text("missing", style="dim"),
+            "" if spec.installed else spec.install_hint,
+        )
+    console.print(table)
+
+
+def _print_models(console: Console) -> None:
+    from mimir.config import get_settings
+    from mimir.eval.provenance import resolve_model
+
+    settings = get_settings()
+    table = Table(box=None, header_style="dim")
+    for column in ("role", "model", "context", "digest"):
+        table.add_column(column)
+    for role, alias in sorted(settings.models.routing.model_dump().items()):
+        if not isinstance(alias, str):
+            continue
+        profile = settings.models.profiles.get(alias)
+        if profile is None:
+            continue
+        try:
+            identity = resolve_model(alias, settings)
+            served = identity.served_context or profile.context_window
+            context = Text(
+                str(served),
+                style="red" if identity.context_mismatch else "",
+            )
+            digest = identity.digest[:12]
+        except Exception:  # noqa: BLE001
+            context, digest = Text(str(profile.context_window)), ""
+        table.add_row(role.replace("_", " "), profile.model, context, digest)
+    console.print(table)
+
+
+def _print_worktrees(console: Console, argument: str) -> None:
+    from mimir.config import get_settings
+    from mimir.worktree import TaskWorktree, WorktreeError, WorktreeManager
+
+    manager = WorktreeManager(get_settings().home)
+    if argument.startswith("diff "):
+        name = argument.split(maxsplit=1)[1].strip()
+        matches = [w for w in manager.list() if name in str(w["name"])]
+        if not matches:
+            console.print(Text(f"no task worktree matching {name!r}", style="yellow"))
+            return
+        entry = matches[0]
+        root = Path(str(entry["path"]))
+        # Same base as diff_worktree uses: the working tree against its own
+        # HEAD. Task worktrees are written to, not committed in.
+        worktree = TaskWorktree(
+            name=str(entry["name"]), branch=str(entry["branch"]), root=root,
+            repo_root=root, base_commit="HEAD", created_at=0.0,
+        )
+        try:
+            console.print(Text(manager.diff(worktree, stat=True).strip()
+                               or "no uncommitted changes", style="dim"))
+        except WorktreeError as exc:
+            console.print(Text(str(exc), style="yellow"))
+        return
+
+    found = manager.list()
+    if not found:
+        console.print(Text("no task worktrees", style="dim"))
+        return
+    table = Table(box=None, header_style="dim")
+    for column in ("task", "branch", "state"):
+        table.add_column(column)
+    for entry in found:
+        table.add_row(
+            str(entry["name"]),
+            str(entry["branch"]),
+            Text("uncommitted changes", style="yellow") if entry["dirty"] else "clean",
+        )
+    console.print(table)
