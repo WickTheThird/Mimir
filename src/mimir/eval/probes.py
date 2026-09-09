@@ -88,6 +88,7 @@ def _chat(
     messages: list[dict[str, Any]],
     *,
     tools: list[dict[str, Any]] | None = None,
+    schema: dict[str, Any] | None = None,
     num_predict: int = 8,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> dict[str, Any]:
@@ -104,6 +105,8 @@ def _chat(
     }
     if tools:
         payload["tools"] = tools
+    if schema is not None:
+        payload["format"] = schema
     started = time.time()
     response = httpx.post(f"{_base(profile)}/api/chat", json=payload, timeout=timeout)
     response.raise_for_status()
@@ -279,6 +282,7 @@ def tool_adherence(
     *,
     sizes: tuple[int, ...] = (4_000, 7_000, 10_000, 13_000, 16_000, 20_000),
     replicates: int = 1,
+    constrained: bool = False,
     settings: Settings | None = None,
 ) -> ProbeResult:
     """Fraction of prompts that produce a tool call, against schema volume.
@@ -298,15 +302,19 @@ def tool_adherence(
     settings = settings or get_settings()
     profile = _profile(settings, alias)
     registry = load_all_tools()
-    base = [
-        spec.openai_schema()
-        for spec in (registry.get(name) for name in OPS_TOOLS)
-        if spec is not None
-    ]
+    base_specs = [s for s in (registry.get(name) for name in OPS_TOOLS) if s is not None]
+    base = [spec.openai_schema() for spec in base_specs]
 
     result = ProbeResult(
         name="tool_adherence", alias=alias, model=profile.model, replicates=replicates
     )
+    constrained_schema = None
+    if constrained:
+        from mimir.agent.constrained import build_schema, parse_step
+
+        result.notes.append("decoder: constrained against a schema")
+    else:
+        result.notes.append("decoder: the runtime's native tool-call channel")
     result.uncontrolled = [
         "the wording of the probe prompts",
         "padding tools are near-duplicates of real ones",
@@ -323,15 +331,25 @@ def tool_adherence(
         actual = len(json.dumps(schemas))
         called = 0
         total = 0
+        if constrained:
+            specs_here = [
+                spec for spec in base_specs
+                if any(s["function"]["name"] == spec.name for s in schemas)
+            ]
+            constrained_schema = build_schema(specs_here or base_specs)
         for replicate in range(max(1, replicates)):
             for prompt in _PROBE_PROMPTS:
-                body = _chat(
-                    profile,
-                    [{"role": "system", "content": system},
-                     {"role": "user", "content": prompt}],
-                    tools=schemas,
-                    num_predict=64,
-                )
+                messages = [{"role": "system", "content": system},
+                            {"role": "user", "content": prompt}]
+                if constrained:
+                    body = _chat(profile, messages, schema=constrained_schema,
+                                 num_predict=300)
+                    step = parse_step((body.get("message") or {}).get("content", ""))
+                    body["message"] = {
+                        "tool_calls": [] if step.finished else [{"function": {}}]
+                    }
+                else:
+                    body = _chat(profile, messages, tools=schemas, num_predict=64)
                 sample = _sample(f"{actual}c-r{replicate}", body, _estimate_tokens([]))
                 sample.extra.update({"schema_chars": actual, "tools": len(schemas),
                                      "prompt": prompt})
@@ -352,11 +370,21 @@ def tool_adherence(
     if len(ordered) >= 2:
         first = by_size[ordered[0]][0] / by_size[ordered[0]][1]
         last = by_size[ordered[-1]][0] / by_size[ordered[-1]][1]
-        result.notes.append(
-            f"smallest surface {first:.0%}, largest {last:.0%}: adherence degrades "
-            "with volume and is already imperfect at the smallest size, so this is "
-            "a slope rather than a cliff and no tool count makes it reliable"
-        )
+        summary = f"smallest surface {first:.0%}, largest {last:.0%}: "
+        if first >= 0.99 and last >= 0.99:
+            summary += (
+                "volume does not affect adherence, because the decoder cannot "
+                "emit anything else"
+            )
+        elif last < first:
+            summary += (
+                "adherence degrades with volume and is already imperfect at the "
+                "smallest size, so this is a slope rather than a cliff and no "
+                "tool count makes it reliable"
+            )
+        else:
+            summary += "no clear relationship at this sample size"
+        result.notes.append(summary)
     return result
 
 

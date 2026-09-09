@@ -227,6 +227,81 @@ class ModelRouter:
             return response
         raise last_error or ModelError("model call failed")
 
+    async def constrained(
+        self,
+        messages: Sequence[LLMMessage],
+        schema: dict[str, Any],
+        *,
+        task_class: str = TaskClass.DEFAULT,
+        session_id: str | None = None,
+        purpose: str = "",
+        max_tokens: int = 900,
+        tool_calls_before: int = 0,
+    ) -> str:
+        """One call whose output must satisfy ``schema``.
+
+        Goes through the runtime's native endpoint because that is where the
+        grammar constraint lives; the OpenAI-compatible surface does not carry
+        it. Recorded here rather than at the call site so a constrained
+        invocation counts exactly like any other, which is the invariant that
+        found the empty model_calls table.
+        """
+        import httpx
+
+        from mimir.llm.base import ModelCallRecord
+
+        model = self.for_task(task_class)
+        profile = getattr(model, "profile", None)
+        base = str(getattr(profile, "base_url", "")).rstrip("/").removesuffix("/v1")
+        if not base:
+            raise ModelError("constrained decoding needs a runtime base url")
+
+        payload = {
+            "model": model.model,
+            "messages": [m.to_openai() for m in messages],
+            "stream": False,
+            "format": schema,
+            "options": {"temperature": 0, "num_predict": max_tokens},
+        }
+        started = time.time()
+        self.invocations_attempted += 1
+        try:
+            async with httpx.AsyncClient(timeout=profile.request_timeout_s) as client:
+                response = await client.post(f"{base}/api/chat", json=payload)
+                response.raise_for_status()
+                body = response.json()
+        except httpx.HTTPError as exc:
+            self.call_log.append(
+                ModelCallRecord(
+                    alias=model.alias, model=model.model, started_at=started,
+                    latency_s=time.time() - started, prompt_tokens=0,
+                    completion_tokens=0, tool_calls=0, finish_reason="error",
+                    session_id=session_id, purpose=purpose, error=str(exc),
+                    attempt=0, task_class=task_class,
+                    context_window=model.context_window,
+                    tool_calls_before=tool_calls_before,
+                )
+            )
+            raise ModelError(f"constrained call failed: {exc}", retryable=True) from exc
+
+        content = ((body.get("message") or {}).get("content") or "").strip()
+        self.call_log.append(
+            ModelCallRecord(
+                alias=model.alias, model=model.model, started_at=started,
+                latency_s=time.time() - started,
+                prompt_tokens=int(body.get("prompt_eval_count") or 0),
+                completion_tokens=int(body.get("eval_count") or 0),
+                tool_calls=0 if not content else 1,
+                finish_reason=body.get("done_reason") or "stop",
+                session_id=session_id, purpose=purpose, attempt=0,
+                runtime=getattr(profile, "runtime", ""),
+                digest=self.digest_for(model.alias),
+                task_class=task_class, context_window=model.context_window,
+                tool_calls_before=tool_calls_before,
+            )
+        )
+        return content
+
     # -- structured output ------------------------------------------------
 
     async def structured(

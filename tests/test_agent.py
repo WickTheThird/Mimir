@@ -66,6 +66,10 @@ def _agent(turns, registry=None, root="/tmp/wt"):
         repo="billing",
         view="fix-thing-worktree",
         worktree_root=Path(root),
+        # These cover the streaming path deliberately. The constrained path has
+        # its own tests, and both have to keep working: a runtime without
+        # grammar support falls back to streaming.
+        constrained=False,
     )
     return agent, model, router
 

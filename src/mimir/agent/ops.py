@@ -75,14 +75,15 @@ there is no cliff. There is a slope:
    16,143 chars, 14 tools   40%
    20,220 chars, 18 tools   33%
 
-Two things follow, and the second matters more. A smaller surface really is
-better, so the budget stays. And no surface is reliable: at four tools one
-prompt in five still produces no tool call, so trimming the tool list cannot
-fix this and never could. The fix is constrained decoding, which makes a tool
-call the only thing the model can emit, or sampling more than once and letting
-the deterministic gate choose. At 53% per attempt, three attempts reach 90%.
+That table is the native tool-call channel. Constrained against a schema, the
+same six sizes measure 100% each, because the decoder cannot emit anything
+else. The loop decodes constrained by default and the whole slope disappears.
 
-mimir eval probe tool_adherence reproduces the table."""
+So this budget no longer protects adherence, and it is kept for the reason
+that survives: an unneeded tool still invites a worse choice, and choosing
+well is not something a grammar can enforce.
+
+mimir eval probe tool_adherence reproduces either table."""
 
 SYSTEM = """\
 You are MIMIR reading a Kubernetes estate on behalf of an operator. Everything

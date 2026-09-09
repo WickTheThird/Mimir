@@ -154,6 +154,7 @@ class AgentLoop:
         settings: Settings | None = None,
         max_steps: int = 20,
         task_class: str = "deep_investigation",
+        constrained: bool = True,
     ) -> None:
         self.router = router
         self.registry = registry
@@ -161,6 +162,9 @@ class AgentLoop:
         self.settings = settings or get_settings()
         self.max_steps = max_steps
         self.task_class = task_class
+        self.constrained = constrained
+        """Decode against a schema instead of trusting the tool-call channel."""
+
         self.specs = [s for s in (registry.get(n) for n in tools) if s is not None]
         self.system = system
         self.messages: list[LLMMessage] = [LLMMessage.system(system)]
@@ -263,16 +267,24 @@ class AgentLoop:
 
             model = self.router.for_task(self.task_class)
             started = time.time()
-            async for chunk in model.stream(self.messages, options):
-                if chunk.type is ChunkType.CONTENT:
-                    text_parts.append(chunk.text)
-                    yield AgentEvent(type=AgentEventType.TEXT, step=step, text=chunk.text)
-                elif chunk.type is ChunkType.TOOL_CALL and chunk.tool_call is not None:
-                    calls.append(chunk.tool_call)
-                elif chunk.type is ChunkType.ERROR:
-                    failed = chunk.error or "model error"
-
-            self._record(model, started, text_parts, calls, failed, step)
+            if self.constrained:
+                text_parts, calls, failed = await self._constrained_step(step)
+                if text_parts:
+                    yield AgentEvent(
+                        type=AgentEventType.TEXT, step=step, text=text_parts[0]
+                    )
+            else:
+                async for chunk in model.stream(self.messages, options):
+                    if chunk.type is ChunkType.CONTENT:
+                        text_parts.append(chunk.text)
+                        yield AgentEvent(
+                            type=AgentEventType.TEXT, step=step, text=chunk.text
+                        )
+                    elif chunk.type is ChunkType.TOOL_CALL and chunk.tool_call is not None:
+                        calls.append(chunk.tool_call)
+                    elif chunk.type is ChunkType.ERROR:
+                        failed = chunk.error or "model error"
+                self._record(model, started, text_parts, calls, failed, step)
 
             if failed:
                 self.outcome.stopped = "error"
@@ -351,6 +363,33 @@ class AgentLoop:
             result=result,
             elapsed_s=elapsed,
         )
+
+    async def _constrained_step(self, step: int) -> tuple[list[str], list[ToolCall], str]:
+        """One decoded step whose shape the runtime guarantees.
+
+        Nothing is recorded here because ModelRouter.constrained records its own
+        invocation, which keeps every path through this loop counted the same
+        way.
+        """
+        from mimir.agent.constrained import build_schema, parse_step
+        from mimir.llm.base import ModelError
+
+        schema = build_schema(self.specs, hidden=self.hidden())
+        try:
+            content = await self.router.constrained(
+                self.messages,
+                schema,
+                task_class=self.task_class,
+                session_id=self.ctx.session_id,
+                purpose=f"{self.label}:{self.task_class}",
+                tool_calls_before=self.outcome.tool_calls,
+            )
+        except ModelError as exc:
+            return [], [], exc.message
+
+        decoded = parse_step(content)
+        call = decoded.as_tool_call()
+        return ([decoded.say] if decoded.say else []), ([call] if call else []), ""
 
     def _hint(self, instruction: str) -> str:
         if self.glossary is None:
