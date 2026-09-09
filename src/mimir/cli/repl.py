@@ -8,6 +8,8 @@ output as evidence (ADR 5.1 step 7).
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import signal
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,7 @@ from rich.text import Text
 from mimir import __version__
 from mimir.cli import render
 from mimir.cli.approvals import attach_cli_approvals
+from mimir.cli.coding import CodingSession, render_timeline, start_coding_session
 from mimir.config import get_settings
 from mimir.graph.runner import EventType, InvestigationRunner
 from mimir.logging import configure_logging
@@ -28,6 +31,10 @@ from mimir.models.state import EnvironmentContext, InvestigationState
 
 SLASH_COMMANDS = {
     "/help": "show this help",
+    "/code": "start or reopen a code task, for example /code fix-retry-bounds",
+    "/diff": "what the current code task has changed",
+    "/why": "how the last answer was reached, step by step",
+    "/done": "leave the code task and go back to investigating",
     "/status": "model, tools, language servers, and what is loaded",
     "/tools": "list the typed tools available, grouped by capability",
     "/lsp": "language server status and how to install a missing one",
@@ -114,10 +121,12 @@ async def run_repl(console: Console) -> None:
         namespace=settings.kubernetes.default_namespace,
     )
     state: InvestigationState | None = None
+    coding: CodingSession | None = None
 
     while True:
         try:
-            line = await session_prompt.prompt_async(_prompt_text(environment))
+            prompt = coding.prompt if coding else _prompt_text(environment)
+            line = await session_prompt.prompt_async(prompt)
         except (EOFError, KeyboardInterrupt):
             break
         line = line.strip()
@@ -125,18 +134,67 @@ async def run_repl(console: Console) -> None:
             continue
 
         if line.startswith("/"):
-            action = _handle_slash(console, line, environment, state)
+            action = _handle_slash(console, line, environment, state, coding, runner)
             if action == "quit":
                 break
             if action == "new":
                 state = None
                 console.print(Text("started a new session", style="dim"))
+            elif isinstance(action, CodingSession):
+                coding = action
+            elif action == "done":
+                if coding is not None:
+                    _close_coding(coding, settings)
+                    console.print(
+                        Text(f"left {coding.task}; the worktree is kept", style="dim")
+                    )
+                coding = None
             continue
 
-        state = await _ask(runner, console, line, environment, state)
+        if coding is not None:
+            await _run_interruptibly(coding.turn(line))
+        else:
+            state = await _ask(runner, console, line, environment, state)
 
+    if coding is not None:
+        _close_coding(coding, settings)
     await runner.aclose()
     console.print(Text("bye", style="dim"))
+
+
+def _close_coding(coding: CodingSession, settings: Any) -> None:
+    """Stop addressing the worktree by name; leave the worktree itself alone.
+
+    Discarding on exit would throw away work because someone typed /done, and
+    a task worktree is meant to survive until it is reviewed."""
+    from mimir.tools.repo import get_repository_directory
+
+    get_repository_directory(settings).forget_session(f"{coding.task}-worktree")
+
+
+async def _run_interruptibly(coro: Any) -> None:
+    """Run a turn so Ctrl-C stops the turn rather than the session.
+
+    Without this, interrupting a twelve step loop that has gone the wrong way
+    means killing the process, which loses the conversation and every file it
+    had already read.
+    """
+    task = asyncio.ensure_future(coro)
+    loop = asyncio.get_running_loop()
+    # Not every platform has POSIX signal handlers on the loop.
+    with contextlib.suppress(NotImplementedError, RuntimeError):
+        loop.add_signal_handler(signal.SIGINT, task.cancel)
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except KeyboardInterrupt:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    finally:
+        with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
+            loop.remove_signal_handler(signal.SIGINT)
 
 
 def _prompt_text(environment: EnvironmentContext) -> str:
@@ -198,7 +256,9 @@ def _handle_slash(
     line: str,
     environment: EnvironmentContext,
     state: InvestigationState | None,
-) -> str | None:
+    coding: CodingSession | None = None,
+    runner: Any = None,
+) -> Any:
     parts = line.split(maxsplit=1)
     command = parts[0]
     argument = parts[1].strip() if len(parts) > 1 else ""
@@ -207,6 +267,35 @@ def _handle_slash(
         return "quit"
     if command == "/new":
         return "new"
+
+    if command == "/code":
+        if not argument:
+            console.print(
+                Text("name the task: /code fix-retry-bounds [repo]", style="yellow")
+            )
+            return None
+        parts = argument.split()
+        try:
+            return start_coding_session(
+                console, runner, parts[0], parts[1] if len(parts) > 1 else None
+            )
+        except Exception as exc:  # noqa: BLE001 - a bad repo name must not end the session
+            console.print(Text(str(exc), style="yellow"))
+            return None
+    if command == "/done":
+        return "done"
+    if command == "/why":
+        if coding is None:
+            console.print(Text("only inside a code task for now", style="dim"))
+        else:
+            render_timeline(console, coding.timeline)
+        return None
+    if command == "/diff":
+        if coding is None:
+            console.print(Text("not in a code task; /code <task> starts one", style="dim"))
+        else:
+            _print_worktrees(console, f"diff {coding.task}")
+        return None
 
     if command == "/status":
         _print_status(console)

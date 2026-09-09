@@ -113,6 +113,7 @@ class RepositoryDirectory:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self._scanned: dict[str, ResolvedRepository] | None = None
+        self._session: dict[str, ResolvedRepository] = {}
 
     # -- discovery --------------------------------------------------------
 
@@ -173,8 +174,31 @@ class RepositoryDirectory:
     def refresh(self) -> None:
         self._scanned = None
 
+    def register_session(self, name: str, root: Path, description: str = "") -> None:
+        """Make a directory addressable by the repository tools for this process.
+
+        A task worktree is a real checkout but not a configured repository, so
+        ``resolve()`` refuses it - correctly, since the alternative is letting a
+        caller point a helper at arbitrary disk. Registering it explicitly keeps
+        that refusal intact while letting search, read and the language server
+        tools work on the tree the agent is actually editing.
+
+        Session entries lose to a configured entry of the same name, so this can
+        never quietly redirect a repository the operator named in config.
+        """
+        self._session[name.lower()] = ResolvedRepository(
+            name=name,
+            root=Path(root).resolve(),
+            description=description or f"task worktree at {root}",
+            source="worktree",
+        )
+
+    def forget_session(self, name: str) -> None:
+        self._session.pop(name.lower(), None)
+
     def all(self) -> list[ResolvedRepository]:
         merged = dict(self._scan())
+        merged.update(self._session)
         merged.update(self._configured())  # configured entries win on a name clash
         return sorted(merged.values(), key=lambda r: r.name.lower())
 

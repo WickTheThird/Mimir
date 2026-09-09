@@ -191,6 +191,121 @@ async def write_worktree_file(args: WriteInput, ctx: ToolContext) -> ToolResult:
     return await asyncio.to_thread(work)
 
 
+class EditInput(BaseModel):
+    task: str
+    path: str = Field(description="Path relative to the worktree root.")
+    old_string: str = Field(
+        description=(
+            "The exact text to replace, copied from the file including its indentation. "
+            "Must appear exactly once in the file: include enough surrounding lines to "
+            "make it unique."
+        )
+    )
+    new_string: str = Field(description="The text to put in its place.")
+    repo: str | None = None
+
+
+@tool(
+    "edit_worktree_file",
+    description=(
+        "Replace one exact span of text in a file inside a task worktree. Prefer this over "
+        "write_worktree_file for any change to an existing file: it does not require "
+        "reproducing the whole file, so it cannot silently drop the parts you did not "
+        "mention. The old text must match exactly, including indentation, and must appear "
+        "exactly once."
+    ),
+    capability=Capability.CODE,
+    risk=RiskClass.R1,
+    mutating=True,
+    tags=("repository", "worktree", "write"),
+)
+async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
+    """Exact-span replacement.
+
+    The whole-file write is the wrong primitive for editing. A model asked to
+    reproduce a 400 line file to change two of them will drop something, and
+    the drop is invisible: the file is syntactically fine and the diff looks
+    plausible. Requiring the old text makes the model state what it believes is
+    there, so a stale belief fails loudly instead of overwriting the file with
+    it.
+
+    A match count that is not exactly one is refused rather than resolved by
+    picking the first. Ambiguity here is the model not knowing which occurrence
+    it means, and guessing on its behalf edits the wrong line.
+    """
+    root = await _repo_root(ctx, args.repo)
+
+    def work() -> ToolResult:
+        manager = _manager(ctx)
+        try:
+            wt = manager.find(root, args.task)
+            target = resolve_inside(wt.root, args.path)
+        except WorktreeError as exc:
+            raise _wrap(exc) from exc
+        if not target.is_file():
+            raise ToolError(
+                f"{args.path} does not exist in the worktree. "
+                "Use write_worktree_file to create it.",
+                code="not_found",
+            )
+        if not args.old_string:
+            raise ToolError(
+                "old_string must not be empty. To create a file, use write_worktree_file.",
+                code="invalid_arguments",
+            )
+
+        original = target.read_text(encoding="utf-8", errors="replace")
+        occurrences = original.count(args.old_string)
+        if occurrences == 0:
+            raise ToolError(
+                f"the text to replace does not appear in {args.path}. Read the file "
+                "again: it may have changed, or the indentation may differ.",
+                code="no_match",
+            )
+        if occurrences > 1:
+            raise ToolError(
+                f"the text to replace appears {occurrences} times in {args.path}. "
+                "Include more surrounding lines so it identifies one place.",
+                code="ambiguous_match",
+            )
+
+        updated = original.replace(args.old_string, args.new_string, 1)
+        if len(updated.encode()) > MAX_BYTES:
+            raise ToolError(f"result exceeds {MAX_BYTES} bytes", code="too_large")
+        target.write_text(updated, encoding="utf-8")
+
+        before = original[: original.index(args.old_string)].count("\n") + 1
+        removed = args.old_string.count("\n") + 1
+        added = args.new_string.count("\n") + 1
+        return ToolResult(
+            tool="edit_worktree_file",
+            summary=(
+                f"{args.path}: {removed} line(s) replaced with {added} at line {before}"
+            ),
+            data={
+                "path": args.path,
+                "branch": wt.branch,
+                "line": before,
+                "old_string": args.old_string,
+                "new_string": args.new_string,
+            },
+            evidence=[
+                Evidence(
+                    claim=f"edited {args.path} at line {before}",
+                    kind=EvidenceKind.OBSERVED,
+                    source_type=SourceType.REPOSITORY,
+                    source_id=args.path,
+                    excerpt=args.new_string[:400],
+                    collected_by="edit_worktree_file",
+                    citations=[Citation(source_type=SourceType.REPOSITORY,
+                                        locator=f"{args.path}:{before}", path=args.path)],
+                )
+            ],
+        )
+
+    return await asyncio.to_thread(work)
+
+
 @tool(
     "diff_task_worktree",
     description=(
@@ -325,6 +440,7 @@ __all__ = [
     "create_task_worktree",
     "diff_task_worktree",
     "discard_task_worktree",
+    "edit_worktree_file",
     "list_task_worktrees",
     "run_worktree_tests",
     "write_worktree_file",
