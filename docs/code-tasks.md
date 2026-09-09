@@ -111,3 +111,28 @@ A rule is data, not code:
 
 Recording what an incident taught should not need a code change and a release,
 which is the reliable way to ensure nobody records it.
+
+
+## Sampling, and what the rules can decide
+
+Measured on two tasks at temperature 0, four attempts each.
+
+Adding a method: 4 of 4 correct, three distinct but equivalent diffs. There is
+no variance to exploit and sampling more than once buys nothing.
+
+Introducing a constant and making a method use it: 1 of 4 correct. The others
+defined the constant twice, defined it four times, or added it and never used
+it. Every one of them passed syntax, the linter and the tests, so before the
+definition check the gate scored 4 of 4 and could not tell them apart. Worse,
+the incomplete attempts have the smallest diffs, so a selector preferring small
+diffs would have chosen a wrong one deliberately.
+
+With the definition and deletion checks in place the gate marks exactly one
+attempt clean, and it is the correct one. That is the case for sampling: not
+that attempts fail outright, which on an easy task they do not, but that on a
+task with any depth most of them finish incompletely in ways that look fine.
+
+The checks that separate them are all facts, not judgements: a module level name
+defined and never read did not connect to anything; a name defined twice is one
+definition too many; a change that removes three times what it adds is either a
+refactor that was asked for or an accident.
