@@ -61,6 +61,10 @@ How to work:
 - The operator has usually already named the namespace, the workload or the
   cluster. Use what they named. Do not re-derive it, and do not list every
   namespace in a cluster to find one you were given.
+- When they describe a cluster instead of naming it ("a dev cluster with ch1
+  in it"), get_current_context returns every context in the kubeconfig. Pick
+  the ones that match and pass the context explicitly on every later call.
+  Never answer from the current context when they described a different one.
 - Narrow with filters rather than by reading long lists: list_workloads takes
   name_contains, summarise_pod_health takes a pod name prefix.
 - A workload search that returns nothing does not mean nothing is running.
@@ -114,6 +118,16 @@ class OpsAgent(AgentLoop):
         """
         fields = self._fields(name)
         bound = dict(arguments)
+
+        # Operators describe a cluster as often as they name one: "a dev
+        # cluster with ch1 in it". Answering that needs the list of contexts,
+        # and the list is one kubeconfig read behind a flag the model has to
+        # remember to set. It did not, so a request scoped to ch1 ran entirely
+        # against the current context and reported on the wrong cluster
+        # without ever saying which one it had read.
+        if name == "get_current_context" and "include_contexts" in fields:
+            bound.setdefault("include_contexts", True)
+
         for field, attribute in (("context", "cluster_context"), ("namespace", "namespace")):
             if field not in fields:
                 continue

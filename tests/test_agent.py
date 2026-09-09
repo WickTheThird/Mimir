@@ -623,3 +623,40 @@ class TestScopeDoesNotDrift:
         )
         agent.bind("list_workloads", {"namespace": "a"})
         assert agent.bind("list_workloads", {"namespace": "b"})["namespace"] == "b"
+
+
+class TestGroundingSegmentRule:
+    """Why the check works on segments rather than a list of compounds."""
+
+    def _check(self, answer, observed=""):
+        from mimir.verify.grounding import check
+
+        return check(answer, observed)
+
+    def test_two_segment_service_names_are_checked(self):
+        """Three segments was the first cut and let five invented workload
+        names through in a real run, because service names are routinely two
+        words."""
+        assert self._check("Present: messaging-sms, messaging-webhooks.").ungrounded == [
+            "messaging-sms",
+            "messaging-webhooks",
+        ]
+
+    def test_hyphenated_english_is_not(self):
+        assert self._check(
+            "It is read-only, fail-open, up-to-date and third-party, in-memory too."
+        ).checked == 0
+
+    def test_a_long_name_is_checked_even_when_it_starts_with_a_modifier(self):
+        """Skipping a four segment name because it begins with a word like
+        "read" would lose the check on the long generated names it exists to
+        catch."""
+        assert self._check("read-replica-shard-04 is up").ungrounded == [
+            "read-replica-shard-04"
+        ]
+
+    def test_real_identifiers_survive_the_rule(self):
+        from mimir.verify.grounding import identifiers
+
+        for token in ("nomic-embed-text", "messaging-squad", "kube-system", "port-forward"):
+            assert token in identifiers(f"we read {token} today"), token

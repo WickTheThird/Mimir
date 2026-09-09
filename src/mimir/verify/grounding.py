@@ -24,19 +24,53 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-# A DNS label with at least three segments: pod and workload names, and almost
-# nothing an English sentence contains. Two segments would match "read-only"
-# and "fail-open", which are words this project's own output is full of.
-_DNS_NAME = re.compile(r"\b[a-z0-9]+(?:-[a-z0-9]+){2,}\b")
+# A DNS label with at least two segments. Three was the first cut, to keep
+# hyphenated English out, and it let five invented workload names through in a
+# real run because service names are routinely two words: messaging-sms,
+# messaging-webhooks. Two segments plus an explicit stoplist catches those and
+# costs a stoplist that has to be maintained, which is the better trade: a
+# missed invention is silent, and a false positive is a visible line that says
+# which word it means.
+_DNS_NAME = re.compile(r"\b[a-z0-9]+(?:-[a-z0-9]+){1,}\b")
 
 # Dotted or slashed paths: file paths, image references, resource references.
 _PATH = re.compile(r"\b[\w.-]+(?:/[\w.-]+){1,}\b")
 
-_IGNORE = frozenset({
-    # Shapes that look like identifiers and are ordinary vocabulary.
-    "up-to-date", "out-of-date", "read-only", "fail-open", "fail-closed",
-    "day-to-day", "end-to-end", "n/a",
+_IGNORE = frozenset({"n/a", "e.g", "i.e"})
+"""Exceptions the segment rule below does not catch."""
+
+# Hyphenated English is not built from arbitrary words: one half is almost
+# always a modifier. Listing the modifiers is a rule, where listing the
+# compounds they form is an inventory that grows forever and is always one
+# behind. "read-only", "in-memory" and "third-party" are all caught by their
+# first segment; "messaging-squad", "kube-system" and "nomic-embed-text" have
+# no modifier in either position and are checked.
+_MODIFIERS = frozenset({
+    "auto", "back", "best", "built", "case", "closed", "compile", "cross",
+    "day", "de", "double", "dry", "end", "fail", "far", "first", "front",
+    "full", "good", "half", "hard", "high", "human", "in", "inter", "intra",
+    "last", "left", "line", "live", "local", "long", "low", "machine", "mid",
+    "multi", "near", "next", "non", "off", "on", "one", "only", "open", "opt",
+    "out", "over", "per", "post", "pre", "re", "read", "real", "remote",
+    "right", "round", "run", "second", "self", "semi", "short", "side",
+    "single", "so", "soft", "step", "sub", "super", "third", "top", "trade",
+    "to", "two", "under", "up", "well", "worst", "write",
 })
+
+
+def _is_prose(token: str) -> bool:
+    """Whether a hyphenated token is English rather than a name.
+
+    Bounded at three segments. "up-to-date" is three and is prose; a name long
+    enough to have four is a name, and skipping it because it happens to start
+    with a word like "read" would lose the check on exactly the long generated
+    names it exists to catch.
+    """
+    segments = token.split("-")
+    if not 2 <= len(segments) <= 3:
+        return False
+    return bool(_MODIFIERS & {segments[0], segments[-1]})
+
 
 
 @dataclass
@@ -71,7 +105,9 @@ def identifiers(text: str) -> list[str]:
     for pattern in (_DNS_NAME, _PATH):
         for match in pattern.finditer(text or ""):
             token = match.group(0).strip(".,;:)").lower()
-            if token in _IGNORE or token in seen or len(token) < 8:
+            if token in seen or len(token) < 8:
+                continue
+            if token in _IGNORE or ("/" not in token and _is_prose(token)):
                 continue
             seen.add(token)
             found.append(token)
