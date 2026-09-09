@@ -1048,6 +1048,41 @@ eval_app = typer.Typer(help="Evaluation history and model comparison.")
 app.add_typer(eval_app, name="eval")
 
 
+@eval_app.command("probe")
+def eval_probe(
+    name: str = typer.Argument(..., help="prefix_cache, tool_adherence, sampling_headroom."),
+    replicates: int = typer.Option(3, "--replicates", "-r"),
+    json_out: bool = typer.Option(False, "--json"),
+) -> None:
+    """Measure the runtime rather than assuming it.
+
+    Each probe answers one question that changes what to build next, and each
+    reports what it did not control.
+    """
+    import json as _json
+
+    from mimir.eval.probes import PROBES
+
+    probe = PROBES.get(name)
+    if probe is None:
+        console.print(f"[red]unknown probe {name!r}; known: {', '.join(sorted(PROBES))}[/red]")
+        raise typer.Exit(1)
+
+    kwargs = {} if name == "sampling_headroom" else {"replicates": replicates}
+    result = probe(**kwargs)
+    if json_out:
+        console.print_json(_json.dumps(result.as_dict()))
+        return
+    console.print(f"[bold]{result.name}[/bold]  {result.model or ''}")
+    for note in result.notes:
+        console.print(f"  {note}")
+    if result.uncontrolled:
+        console.print()
+        console.print("[dim]not controlled:[/dim]")
+        for item in result.uncontrolled:
+            console.print(f"[dim]  {item}[/dim]")
+
+
 @eval_app.command("runs")
 def eval_runs(limit: int = typer.Option(20, "--limit", "-l")) -> None:
     """List stored evaluation runs (ADR-002 section 5)."""

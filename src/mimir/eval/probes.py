@@ -234,22 +234,27 @@ _PROBE_PROMPTS = (
 )
 
 
-def _padded_schemas(base: list[dict[str, Any]], target_chars: int) -> list[dict[str, Any]]:
-    """Grow a tool surface to a size by adding plausible extra tools.
+def _sized_schemas(base: list[dict[str, Any]], target_chars: int) -> list[dict[str, Any]]:
+    """A tool surface at roughly a given size.
 
-    Padding with copies of a real tool rather than with junk: the question is
-    whether volume alone breaks tool calling, so the added schemas have to be
-    the kind of thing a real surface contains.
+    Grows by cloning real tools rather than adding junk, since the question is
+    whether volume alone breaks tool calling and the padding has to resemble
+    what a real surface contains. Shrinks by dropping tools from the end, which
+    the first version could not do: it only padded, so every target below the
+    base size produced the same surface and two rows of the table were the same
+    experiment reported twice.
     """
     schemas = [json.loads(json.dumps(s)) for s in base]
+    if len(json.dumps(schemas)) > target_chars:
+        while len(schemas) > 2 and len(json.dumps(schemas)) > target_chars:
+            schemas.pop()
+        return schemas
     index = 0
-    while len(json.dumps(schemas)) < target_chars:
+    while len(json.dumps(schemas)) < target_chars and index <= 200:
         clone = json.loads(json.dumps(base[index % len(base)]))
         clone["function"]["name"] = f"{clone['function']['name']}_variant_{index}"
         schemas.append(clone)
         index += 1
-        if index > 200:  # pragma: no cover - defensive
-            break
     return schemas
 
 
@@ -266,8 +271,7 @@ def tool_adherence(
     and then designed around. Five prompts and three replicates is still small,
     but it is the difference between a measurement and an anecdote.
     """
-    from mimir.agent.ops import OPS_TOOLS
-    from mimir.agent.prompt import system_prompt
+    from mimir.agent.ops import OPS_TOOLS, SYSTEM
     from mimir.tools.base import load_all_tools
 
     settings = settings or get_settings()
@@ -287,9 +291,14 @@ def tool_adherence(
         "padding tools are near-duplicates of real ones",
     ]
 
-    system = system_prompt("/tmp/probe")
+    # The operations prompt, because these are operations tools and operations
+    # prompts. The first version paired the coding system prompt with cluster
+    # tools and cluster questions, and measured that mismatch instead: tool
+    # calling sat flat at 20% across every size, which is not a cliff, it is a
+    # model being told it is editing a repository and then asked about pods.
+    system = SYSTEM.format(context="No cluster context is set; use the one named.")
     for size in sizes:
-        schemas = _padded_schemas(base, size)
+        schemas = _sized_schemas(base, size)
         actual = len(json.dumps(schemas))
         called = 0
         total = 0
@@ -315,6 +324,89 @@ def tool_adherence(
     return result
 
 
-PROBES = {"prefix_cache": prefix_cache, "tool_adherence": tool_adherence}
+# ---------------------------------------------------------------------------
+# 3. Would sampling more than once help, and by how much
+# ---------------------------------------------------------------------------
+
+
+def sampling_headroom(
+    *,
+    suite_size: int = 52,
+    runs: int = 12,
+    settings: Settings | None = None,
+) -> ProbeResult:
+    """What best-of-k could reach, from replicates already on disk.
+
+    No model is called. The arithmetic for best-of-k assumes attempts are
+    independent, and that assumption is the whole question: if a case fails for
+    a structural reason it fails every time, and sampling it five times buys
+    nothing. Twelve stored runs of the same suite answer that directly.
+
+    pass@k here is the ceiling a perfect selector would reach, not a promise. A
+    real selector is the deterministic gate, and it reaches this only if it
+    never accepts a wrong answer.
+    """
+    import sqlite3
+
+    settings = settings or get_settings()
+    database = settings.home / "mimir.db"
+    connection = sqlite3.connect(str(database))
+    connection.row_factory = sqlite3.Row
+
+    identifiers = [
+        row["id"]
+        for row in connection.execute(
+            "SELECT id FROM eval_runs WHERE total = ? ORDER BY created_at DESC LIMIT ?",
+            (suite_size, runs),
+        )
+    ]
+    outcomes: dict[str, dict[str, bool]] = {}
+    for identifier in identifiers:
+        for row in connection.execute(
+            "SELECT case_id, passed FROM eval_results WHERE run_id = ?", (identifier,)
+        ):
+            outcomes.setdefault(row["case_id"], {})[identifier] = bool(row["passed"])
+
+    complete = {
+        case: [seen[i] for i in identifiers if i in seen]
+        for case, seen in outcomes.items()
+    }
+    complete = {c: v for c, v in complete.items() if len(v) == len(identifiers)}
+
+    result = ProbeResult(
+        name="sampling_headroom", alias="", model="from stored runs",
+        replicates=len(identifiers),
+    )
+    result.uncontrolled = [
+        "runs span weeks of code changes, so attempts are not exchangeable",
+        "pass@k assumes independence between attempts",
+    ]
+    if not complete:
+        result.notes.append("no suite has enough complete runs to measure")
+        return result
+
+    total = len(complete)
+    always = sum(1 for v in complete.values() if all(v))
+    never = sum(1 for v in complete.values() if not any(v))
+    result.notes.append(
+        f"{total} cases across {len(identifiers)} runs: {always} always pass, "
+        f"{never} never pass, {total - always - never} are flaky"
+    )
+    result.notes.append(
+        f"{never} case(s) fail structurally; sampling cannot reach those"
+    )
+    for k in (1, 2, 3, 5):
+        rate = sum(
+            1 - (1 - sum(v) / len(v)) ** k for v in complete.values()
+        ) / total
+        result.notes.append(f"pass@{k} = {rate:.3f} ({rate * total:.1f}/{total})")
+    return result
+
+
+PROBES = {
+    "prefix_cache": prefix_cache,
+    "sampling_headroom": sampling_headroom,
+    "tool_adherence": tool_adherence,
+}
 
 __all__ = ["PROBES", "ProbeResult", "Sample", "prefix_cache", "tool_adherence"]
