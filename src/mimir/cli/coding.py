@@ -18,7 +18,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from rich.console import Console
+from rich.columns import Columns
+from rich.console import Console, Group
+from rich.live import Live
+from rich.panel import Panel
 from rich.text import Text
 
 from mimir.agent.events import AgentEvent, AgentEventType, TimelineEntry
@@ -43,6 +46,47 @@ def _tool_style(tool: str) -> str:
     return _STYLES.get(tool, _READ)
 
 
+class Surface:
+    """Where a turn's lines go.
+
+    The renderers used to print straight to the console, which meant the only
+    possible layout was one column. Handing them finished lines instead is what
+    lets the same code feed a live panel beside a narrower transcript.
+    """
+
+    def __init__(self, width: int) -> None:
+        self.width = width
+
+    def line(self, text: Text) -> None:
+        raise NotImplementedError
+
+
+class ConsoleSurface(Surface):
+    def __init__(self, console: Console, width: int | None = None) -> None:
+        super().__init__(width if width is not None else console.width)
+        self.console = console
+
+    def line(self, text: Text) -> None:
+        self.console.print(text, soft_wrap=True)
+
+
+class BufferSurface(Surface):
+    """Keeps the last ``height`` lines, because a live region cannot scroll."""
+
+    def __init__(self, width: int, height: int = 200) -> None:
+        super().__init__(width)
+        self.height = height
+        self.lines: list[Text] = []
+
+    def line(self, text: Text) -> None:
+        self.lines.append(text)
+        if len(self.lines) > self.height:
+            del self.lines[: len(self.lines) - self.height]
+
+    def tail(self, rows: int) -> list[Text]:
+        return self.lines[-rows:] if rows > 0 else []
+
+
 def fit(text: str, width: int) -> str:
     """Clip to one line rather than letting it wrap.
 
@@ -65,14 +109,15 @@ class StreamWriter:
     arrives a few characters at a time.
     """
 
-    def __init__(self, console: Console, indent: str = INDENT) -> None:
-        self.console = console
+    def __init__(self, surface: Surface, indent: str = INDENT) -> None:
+        self.surface = surface
         self.indent = indent
-        self.width = max(40, console.width - len(indent) - 1)
+        self.width = max(30, surface.width - len(indent) - 1)
         self.column = 0
         self.blanks = 0
         self.any_output = False
         self._pending = ""
+        self._current = Text()
 
     def write(self, text: str) -> None:
         self._pending += text
@@ -89,8 +134,7 @@ class StreamWriter:
             self._emit(self._pending)
             self._pending = ""
         if self.column:
-            self.console.print()
-            self.column = 0
+            self._flush()
 
     def _emit(self, chunk: str) -> None:
         for token in re.split(r"(\s+)", chunk):
@@ -127,61 +171,62 @@ class StreamWriter:
 
     def _break(self, count: int) -> None:
         if self.column:
-            self.console.print()
-            self.column = 0
-            self.blanks = 0
+            self._flush()
             count -= 1
         # A model that emits four newlines should not push the tool call it is
         # about to make off the screen.
         for _ in range(min(count, 1 - self.blanks)):
-            self.console.print()
+            self.surface.line(Text())
             self.blanks += 1
 
+    def _flush(self) -> None:
+        self.surface.line(self._current)
+        self._current = Text()
+        self.column = 0
+        self.blanks = 0
+
+    def partial(self) -> Text | None:
+        """The line still being written, for a live view to show mid-stream."""
+        return self._current if self.column else None
+
     def _raw(self, text: str) -> None:
-        self.console.print(Text(text), end="", soft_wrap=True, highlight=False)
+        self._current.append(text)
 
 
-def render_tool_start(console: Console, tool: str, arguments: dict[str, Any]) -> None:
-    room = console.width - len(INDENT) - len(tool) - 4
-    console.print(
+def render_tool_start(surface: Surface, tool: str, arguments: dict[str, Any]) -> None:
+    room = surface.width - len(INDENT) - len(tool) - 4
+    surface.line(
         Text.assemble(
             (INDENT, ""),
             (f"{MARK} ", _tool_style(tool)),
             (tool, f"bold {_tool_style(tool)}"),
             ("  ", ""),
             (fit(format_arguments(tool, arguments), max(10, room)), "dim"),
-        ),
-        soft_wrap=True,
+        )
     )
 
 
-def render_tool_end(console: Console, event: AgentEvent) -> None:
+def render_tool_end(surface: Surface, event: AgentEvent) -> None:
     result = event.result
     if result is None:
         return
     lead = f"{INDENT}  -> "
-    room = console.width - len(lead)
+    room = surface.width - len(lead)
     if not result.ok:
-        console.print(
-            Text(lead + fit(result.error or f"{event.tool} failed", room), style="red"),
-            soft_wrap=True,
+        surface.line(
+            Text(lead + fit(result.error or f"{event.tool} failed", room), style="red")
         )
         return
     summary = (result.summary or "ok").strip().splitlines()
-    console.print(
-        Text(lead + fit(summary[0] if summary else "ok", room), style="dim"),
-        soft_wrap=True,
-    )
+    surface.line(Text(lead + fit(summary[0] if summary else "ok", room), style="dim"))
     for line in summary[1:4]:
-        console.print(
-            Text(f"{INDENT}     " + fit(line, room), style="dim"), soft_wrap=True
-        )
+        surface.line(Text(f"{INDENT}     " + fit(line, room), style="dim"))
 
     if event.tool == "edit_worktree_file":
-        render_edit_diff(console, result)
+        render_edit_diff(surface, result)
 
 
-def render_edit_diff(console: Console, result: ToolResult) -> None:
+def render_edit_diff(surface: Surface, result: ToolResult) -> None:
     """Show what the edit changed, at the line numbers it changed.
 
     The tool result already carries both sides, so this is a display of what
@@ -193,7 +238,7 @@ def render_edit_diff(console: Console, result: ToolResult) -> None:
     if not old and not new:
         return
 
-    console.print()
+    surface.line(Text())
     old_no = new_no = start
     for line in difflib.unified_diff(
         old.splitlines(), new.splitlines(), n=0, lineterm=""
@@ -202,20 +247,14 @@ def render_edit_diff(console: Console, result: ToolResult) -> None:
             continue
         if line.startswith("@@"):
             continue
-        room = console.width - len(INDENT) - 9
+        room = surface.width - len(INDENT) - 9
         if line.startswith("-"):
-            console.print(
-                Text(f"{INDENT}  {old_no:>5}  {fit(line, room)}", style="red"),
-                soft_wrap=True,
-            )
+            surface.line(Text(f"{INDENT}  {old_no:>5}  {fit(line, room)}", style="red"))
             old_no += 1
         elif line.startswith("+"):
-            console.print(
-                Text(f"{INDENT}  {new_no:>5}  {fit(line, room)}", style="green"),
-                soft_wrap=True,
-            )
+            surface.line(Text(f"{INDENT}  {new_no:>5}  {fit(line, room)}", style="green"))
             new_no += 1
-    console.print()
+    surface.line(Text())
 
 
 def render_timeline(console: Console, entries: Sequence[TimelineEntry]) -> None:
@@ -245,6 +284,50 @@ def render_timeline(console: Console, entries: Sequence[TimelineEntry]) -> None:
     console.print()
 
 
+PANEL_WIDTH = 34
+MIN_WIDTH_FOR_PANEL = 104
+"""Below this the panel would leave the transcript too narrow to read.
+
+A diff line and a wrapped sentence both need room, and taking a third of a
+90 column terminal to show what was looked up makes the thing being looked up
+unreadable. Narrow terminals get the transcript and /why."""
+
+
+class TimelinePanel:
+    """The right hand column: what was looked for, and what came back."""
+
+    def __init__(self, width: int = PANEL_WIDTH) -> None:
+        self.width = width
+        self.entries: list[TimelineEntry] = []
+
+    def add(self, entry: TimelineEntry) -> None:
+        self.entries.append(entry)
+
+    def render(self, height: int) -> Panel:
+        body = Text()
+        # Newest last, and the tail is what is kept, because the step being
+        # worked on now is the one worth seeing.
+        room = self.width - 4
+        shown = self.entries[-max(1, height // 2) :]
+        for entry in shown:
+            mark = "x" if not entry.ok else ("*" if entry.kept else "-")
+            style = "red" if not entry.ok else ("cyan" if entry.kept else "dim")
+            body.append(f"{mark} ", style)
+            body.append(fit(entry.subject or entry.tool, room - 2) + "\n", "bold")
+            if entry.found:
+                body.append("  " + fit(entry.found, room - 2) + "\n", "dim")
+        if not self.entries:
+            body.append("nothing looked up yet", "dim")
+        return Panel(
+            body,
+            title="[dim]trail[/dim]",
+            width=self.width,
+            height=height,
+            border_style="dim",
+            padding=(0, 1),
+        )
+
+
 class AgentView:
     """One agent loop, one conversation, one renderer.
 
@@ -267,6 +350,10 @@ class AgentView:
         self.repo = repo
         self.root = root
         self.timeline: list[TimelineEntry] = []
+        self.panel = True
+        """Whether to show the trail beside the transcript while a turn runs."""
+
+        self.panel_view = TimelinePanel()
 
     @property
     def prompt(self) -> str:
@@ -281,38 +368,91 @@ class AgentView:
         """
         console = self.console
         console.print()
-        stream = StreamWriter(console)
+        side = self.panel and console.width >= MIN_WIDTH_FOR_PANEL
+        if side:
+            await self._turn_with_panel(instruction)
+        else:
+            await self._turn_inline(instruction)
+        self._summarise()
+
+    async def _consume(self, instruction: str, surface, stream, on_change) -> None:
+        """The event loop both layouts share, so they cannot drift apart."""
         try:
             async for event in self.agent.run(instruction):
                 if event.type is AgentEventType.TEXT:
                     stream.write(event.text)
+                    on_change()
                     continue
 
                 stream.close()
-
                 if event.type is AgentEventType.TOOL_START:
-                    console.print()
-                    render_tool_start(console, event.tool, event.arguments)
+                    surface.line(Text())
+                    render_tool_start(surface, event.tool, event.arguments)
                 elif event.type is AgentEventType.TOOL_END:
-                    render_tool_end(console, event)
+                    render_tool_end(surface, event)
                     entry = event.timeline
                     if entry is not None:
                         self.timeline.append(entry)
+                        self.panel_view.add(entry)
                 elif event.type is AgentEventType.ERROR:
-                    console.print(Text(f"{INDENT}{event.error}", style="bold red"))
-                elif event.type is AgentEventType.DONE:
-                    pass
+                    surface.line(Text(f"{INDENT}{event.error}", style="bold red"))
+                on_change()
         except asyncio.CancelledError:
             stream.close()
-            console.print(Text(f"{INDENT}stopped", style="yellow"))
+            surface.line(Text(f"{INDENT}stopped", style="yellow"))
+            on_change()
             raise
         except KeyboardInterrupt:
             stream.close()
-            console.print(Text(f"{INDENT}stopped", style="yellow"))
+            surface.line(Text(f"{INDENT}stopped", style="yellow"))
+            on_change()
         finally:
             stream.close()
 
-        self._summarise()
+    async def _turn_inline(self, instruction: str) -> None:
+        surface = ConsoleSurface(self.console)
+        stream = StreamWriter(surface)
+        await self._consume(instruction, surface, stream, lambda: None)
+
+    async def _turn_with_panel(self, instruction: str) -> None:
+        """Transcript left, trail right, both updating as the turn runs.
+
+        The live region cannot scroll, so the transcript tails: only the last
+        screenful is on show while the turn runs. That is the cost of seeing
+        the trail build, and it is why the whole transcript is printed again
+        underneath when the turn ends, into the terminal's own scrollback where
+        it can be read properly.
+        """
+        console = self.console
+        body_width = console.width - PANEL_WIDTH - 2
+        surface = BufferSurface(body_width)
+        stream = StreamWriter(surface)
+        ceiling = max(8, min(28, console.size.height - 6))
+
+        def frame():
+            # The region grows with the work rather than opening at full
+            # height. A tall empty box at the top of a turn says the tool is
+            # waiting for something, which is the opposite of what is true.
+            rows = max(4, min(ceiling, max(len(surface.lines), len(self.timeline) * 2)))
+            lines = surface.tail(rows)
+            partial = stream.partial()
+            if partial is not None:
+                lines = [*lines, partial][-rows:]
+            left = Group(*lines) if lines else Text("")
+            return Columns(
+                [left, self.panel_view.render(rows + 2)],
+                width=None,
+                expand=False,
+                padding=(0, 1),
+            )
+
+        with Live(
+            frame(), console=console, refresh_per_second=8, transient=True
+        ) as live:
+            await self._consume(instruction, surface, stream, lambda: live.update(frame()))
+
+        for line in surface.lines:
+            console.print(line, soft_wrap=True)
 
     def _summarise(self) -> None:
         outcome = self.agent.outcome

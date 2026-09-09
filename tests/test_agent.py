@@ -297,6 +297,11 @@ class TestRendering:
 
         return Console(width=width, file=io.StringIO(), record=True)
 
+    def _surface(self, console):
+        from mimir.cli.coding import ConsoleSurface
+
+        return ConsoleSurface(console)
+
     def _lines(self, console):
         return console.export_text().splitlines()
 
@@ -306,7 +311,7 @@ class TestRendering:
         from mimir.cli.coding import StreamWriter
 
         console = self._console(72)
-        writer = StreamWriter(console)
+        writer = StreamWriter(self._surface(console))
         prose = (
             "the retry policy is referenced in three places and changing it "
             "in one of them would leave the others inconsistent with the first."
@@ -324,7 +329,7 @@ class TestRendering:
         from mimir.cli.coding import StreamWriter
 
         console = self._console(60)
-        writer = StreamWriter(console)
+        writer = StreamWriter(self._surface(console))
         writer.write("see " + "a/very/long/path/" * 8 + "file.py now")
         writer.close()
         assert all(len(line) <= 60 for line in self._lines(console))
@@ -333,7 +338,7 @@ class TestRendering:
         from mimir.cli.coding import StreamWriter
 
         console = self._console()
-        writer = StreamWriter(console)
+        writer = StreamWriter(self._surface(console))
         writer.write("one\n\n\n\n\ntwo")
         writer.close()
         text = console.export_text()
@@ -346,7 +351,7 @@ class TestRendering:
 
         console = self._console(80)
         render_edit_diff(
-            console,
+            self._surface(console),
             ToolResult(
                 tool="edit_worktree_file",
                 data={
@@ -366,7 +371,7 @@ class TestRendering:
 
         console = self._console()
         render_edit_diff(
-            console,
+            self._surface(console),
             ToolResult(
                 tool="edit_worktree_file",
                 data={"line": 42, "old_string": "a\nb", "new_string": "c\nd\ne"},
@@ -383,7 +388,7 @@ class TestRendering:
 
         console = self._console(72)
         render_tool_end(
-            console,
+            self._surface(console),
             AgentEvent(
                 type=AgentEventType.TOOL_END,
                 tool="search_repository",
@@ -398,7 +403,7 @@ class TestRendering:
 
         console = self._console()
         render_tool_end(
-            console,
+            self._surface(console),
             AgentEvent(
                 type=AgentEventType.TOOL_END,
                 tool="read_file_range",
@@ -660,3 +665,78 @@ class TestGroundingSegmentRule:
 
         for token in ("nomic-embed-text", "messaging-squad", "kube-system", "port-forward"):
             assert token in identifiers(f"we read {token} today"), token
+
+
+class TestSidePanel:
+    """The trail beside the transcript."""
+
+    def _view(self, width, height=30):
+        import io
+
+        from rich.console import Console
+
+        from mimir.cli.coding import AgentView
+
+        console = Console(width=width, height=height, file=io.StringIO(),
+                          record=True, force_terminal=True)
+        return console, AgentView(console, _panel_agent(), task="t")
+
+    def test_a_narrow_terminal_gets_the_transcript_undivided(self):
+        """A third of a 90 column terminal spent on what was looked up makes
+        the thing being looked up unreadable."""
+        from mimir.cli.coding import MIN_WIDTH_FOR_PANEL
+
+        console, view = self._view(MIN_WIDTH_FOR_PANEL - 1)
+        asyncio.run(view.turn("go"))
+        text = console.export_text()
+        assert "trail" not in text
+        assert "search_repository" in text
+
+    def test_a_wide_terminal_gets_both(self):
+        console, view = self._view(130)
+        asyncio.run(view.turn("go"))
+        text = console.export_text()
+        assert "trail" in text
+        assert "search_repository" in text
+
+    def test_the_full_transcript_reaches_scrollback_either_way(self):
+        """The live region cannot scroll, so it tails. Printing the transcript
+        again underneath is what makes a long turn readable afterwards."""
+        console, view = self._view(130)
+        asyncio.run(view.turn("go"))
+        lines = console.export_text().splitlines()
+        after = [line for line in lines if "│" not in line and "search_repository" in line]
+        assert after, "the transcript must be printed outside the live region"
+
+    def test_the_panel_can_be_turned_off(self):
+        console, view = self._view(130)
+        view.panel = False
+        asyncio.run(view.turn("go"))
+        assert "trail" not in console.export_text()
+
+    def test_the_trail_is_recorded_whether_or_not_it_is_shown(self):
+        _, view = self._view(80)
+        asyncio.run(view.turn("go"))
+        assert [e.tool for e in view.timeline] == ["search_repository"]
+
+
+def _panel_agent():
+    class Fake:
+        outcome = type(
+            "O", (), {"stopped": "done", "steps": 1, "tool_calls": 1,
+                      "files_changed": set(), "tests_run": 0, "grounding": None}
+        )()
+
+        async def run(self, instruction):
+            from mimir.agent.events import AgentEvent, AgentEventType
+
+            yield AgentEvent(type=AgentEventType.TEXT, step=1, text="Looking. ")
+            yield AgentEvent(type=AgentEventType.TOOL_START, step=1,
+                             tool="search_repository", arguments={"query": "x"})
+            yield AgentEvent(type=AgentEventType.TOOL_END, step=1,
+                             tool="search_repository", arguments={"query": "x"},
+                             result=ToolResult(tool="search_repository",
+                                               summary="3 matches"))
+            yield AgentEvent(type=AgentEventType.DONE, step=1, text="")
+
+    return Fake()

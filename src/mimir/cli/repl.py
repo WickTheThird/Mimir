@@ -45,6 +45,7 @@ SLASH_COMMANDS = {
     "/why": "how the last answer was reached, step by step",
     "/done": "leave the code task and go back to investigating",
     "/terms": "what your words have resolved to, or /terms <word>",
+    "/panel": "show or hide the trail beside the transcript",
     "/status": "model, tools, language servers, and what is loaded",
     "/tools": "list the typed tools available, grouped by capability",
     "/lsp": "language server status and how to install a missing one",
@@ -58,6 +59,8 @@ SLASH_COMMANDS = {
     "/commands": "list proposed and executed commands",
     "/hypotheses": "show ranked hypotheses",
     "/skills": "list available skills",
+    "/sessions": "list past conversations, most recent first",
+    "/open": "reopen a past conversation, /open <id>",
     "/session": "show the current session id and summary",
     "/export": "export this session as an evidence package",
     "/new": "start a fresh session",
@@ -322,7 +325,22 @@ def _handle_slash(
             _print_worktrees(console, f"diff {coding.task}")
         return None
 
-    if command == "/terms":
+    if command == "/panel":
+        view = coding if coding is not None else _LAST_VIEW.get("view")
+        if view is None:
+            console.print(Text("no active loop; the panel applies to /code and "
+                               "direct requests", style="dim"))
+        else:
+            view.panel = not view.panel
+            console.print(
+                Text(f"trail panel {'on' if view.panel else 'off'}", style="dim")
+            )
+        return None
+    if command == "/sessions":
+        _print_sessions(console, argument)
+    elif command == "/open":
+        _open_session(console, argument)
+    elif command == "/terms":
         _print_terms(console, argument)
     elif command == "/status":
         _print_status(console)
@@ -410,6 +428,86 @@ def main() -> None:
 # exactly like a healthy one. These read live state rather than repeating the
 # documentation.
 # ---------------------------------------------------------------------------
+
+
+def _when(value: Any) -> str:
+    """A stored timestamp is an epoch float. Printed raw it is unreadable, and
+    a list nobody can read by date is a list nobody uses."""
+    from datetime import datetime
+
+    try:
+        moment = datetime.fromtimestamp(float(value))
+    except (TypeError, ValueError, OSError):
+        return str(value)[:16]
+    now = datetime.now()
+    if moment.date() == now.date():
+        return moment.strftime("today %H:%M")
+    if (now - moment).days < 7:
+        return moment.strftime("%a %H:%M")
+    return moment.strftime("%d %b %H:%M")
+
+
+def _print_sessions(console: Console, argument: str) -> None:
+    """Past conversations, filtered by whatever was typed after the command."""
+    from mimir.persistence.repositories import SessionRepository
+
+    rows = SessionRepository().list(limit=200)
+    needle = argument.strip().lower()
+    if needle:
+        rows = [
+            r for r in rows
+            if needle in f"{r.user_request} {r.title or ''}".lower()
+        ]
+    if not rows:
+        console.print(Text("nothing recorded yet" if not needle else
+                           f"no past conversation mentions {needle!r}", style="dim"))
+        return
+
+    table = Table(box=None, header_style="dim")
+    for column in ("id", "when", "status", "asked"):
+        table.add_column(column, overflow="ellipsis", no_wrap=column != "asked")
+    for row in rows[:25]:
+        table.add_row(
+            str(row.id)[:8],
+            _when(row.created_at),
+            str(row.status),
+            " ".join(str(row.title or row.user_request).split())[:70],
+        )
+    console.print(table)
+    console.print(Text("/open <id> to read one back", style="dim"))
+
+
+def _open_session(console: Console, argument: str) -> None:
+    from mimir.persistence.repositories import SessionRepository, load_state
+
+    wanted = argument.strip()
+    if not wanted:
+        console.print(Text("/open <id>, from /sessions", style="yellow"))
+        return
+
+    # An eight character prefix is what /sessions prints, so it is what people
+    # type back. Resolving it here means the display and the input agree.
+    state = load_state(wanted)
+    if state is None:
+        matches = [
+            r for r in SessionRepository().list(limit=500)
+            if str(r.id).startswith(wanted)
+        ]
+        if len(matches) == 1:
+            state = load_state(str(matches[0].id))
+        elif len(matches) > 1:
+            console.print(Text(f"{wanted!r} matches {len(matches)} sessions", style="yellow"))
+            return
+    if state is None:
+        console.print(Text(f"no session {wanted!r}", style="yellow"))
+        return
+
+    console.print(render.render_session_summary(state))
+    console.print()
+    console.print(render.render_evidence(state.evidence, limit=20))
+    if state.final_answer:
+        console.print()
+        console.print(render.render_answer(state.final_answer, state.final_confidence))
 
 
 def _print_terms(console: Console, argument: str) -> None:

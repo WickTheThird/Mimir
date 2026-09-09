@@ -28,6 +28,23 @@ mimir export <id> --format md -o handoff.md
 `/help` `/context` `/ns` `/cluster` `/repo` `/evidence` `/commands`
 `/hypotheses` `/skills` `/session` `/export` `/new` `/quit`
 
+Code and cluster work:
+
+`/code <task> [repo]` opens a task worktree and works in it: reading, editing
+and running tests in a loop until the task is done. `/diff` shows what it
+changed, `/why` how it got there, `/done` leaves. A request that already names
+its target and its action, such as "get the logs for deployment/api in
+namespace payments", runs the same kind of loop against the cluster without
+being asked: there is nothing to investigate in an instruction.
+
+While a loop runs, the trail of what it looked for appears beside the
+transcript. The live region cannot scroll, so it shows the last screenful and
+the whole transcript is printed again underneath when the turn ends. `/panel`
+turns it off; terminals under 104 columns do not get it at all.
+
+`/terms` shows what your words have resolved to before, `/sessions` lists past
+conversations and `/open <id>` reads one back.
+
 What is loaded right now, read from live state rather than from config:
 
 `/status` tools offered, model and the context actually served, language
