@@ -616,6 +616,58 @@ def memory_adopt(
     )
 
 
+@memory_app.command("status")
+def memory_status(
+    project: str = typer.Argument("", help="Limit to one project."),
+    rebuild: bool = typer.Option(False, "--rebuild", help="Re-read the ledger first."),
+) -> None:
+    """What has been learned, and what is currently in mind."""
+    from mimir.knowledge.bank import get_memory_bank
+
+    bank = get_memory_bank()
+    if rebuild or not bank.stats()["documents"]:
+        console.print(f"[dim]indexed {bank.rebuild_ledger()} note(s)[/dim]")
+
+    rows = bank.about(project) if project else []
+    if project:
+        if not rows:
+            console.print(f"[yellow]nothing recorded about {project!r}[/yellow]")
+            raise typer.Exit(1)
+        table = Table(box=None, header_style="dim")
+        for column in ("when", "kind", "note"):
+            table.add_column(column, overflow="fold")
+        for row in rows:
+            table.add_row(str(row["happened"])[:10], str(row["kind"]), str(row["title"]))
+        console.print(table)
+        return
+
+    stats = bank.stats()
+    table = Table(box=None, header_style="dim")
+    for column in ("project", "notes", "latest", "unverified"):
+        table.add_column(column)
+    for entry in bank.projects():
+        table.add_row(str(entry["project"]), str(entry["notes"]),
+                      str(entry["latest"])[:10], str(entry["unverified"]))
+    console.print(table)
+    console.print(
+        f"[dim]{stats['documents']} note(s), {stats['projects']} project(s), "
+        f"{stats['working_set']} currently in mind[/dim]"
+    )
+
+
+@memory_app.command("forget")
+def memory_forget() -> None:
+    """Drop what has decayed out of the working set. The notes stay."""
+    from mimir.knowledge.bank import get_memory_bank
+
+    bank = get_memory_bank()
+    dropped = bank.forget()
+    console.print(
+        f"{dropped} note(s) left the working set; "
+        f"{len(bank.working_set())} still in mind"
+    )
+
+
 @skills_app.command("list")
 def skills_list() -> None:
     """List available skills with their level-1 descriptions."""

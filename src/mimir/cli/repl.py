@@ -32,8 +32,10 @@ from mimir.cli.coding import (
 from mimir.config import get_settings
 from mimir.graph.runner import EventType, InvestigationRunner
 from mimir.graph.triage import Triage, triage
-from mimir.logging import configure_logging
+from mimir.logging import configure_logging, get_logger
 from mimir.models.state import EnvironmentContext, InvestigationState
+
+log = get_logger(__name__)
 
 _LAST_VIEW: dict[str, Any] = {}
 """The view /why reports on, so it survives leaving a mode."""
@@ -44,6 +46,7 @@ SLASH_COMMANDS = {
     "/diff": "what the current code task has changed",
     "/why": "how the last answer was reached, step by step",
     "/done": "leave the code task and go back to investigating",
+    "/brain": "what is in mind now, and what has been worked on",
     "/terms": "what your words have resolved to, or /terms <word>",
     "/panel": "show or hide the trail beside the transcript",
     "/status": "model, tools, language servers, and what is loaded",
@@ -119,6 +122,7 @@ async def run_repl(console: Console) -> None:
     )
     runner = InvestigationRunner(settings=settings)
     attach_cli_approvals(runner.approvals, console)
+    _decay_memory(settings)
 
     history_path = settings.home / "history"
     session_prompt = PromptSession(
@@ -224,6 +228,21 @@ async def _run_interruptibly(coro: Any) -> None:
             loop.remove_signal_handler(signal.SIGINT)
 
 
+def _decay_memory(settings: Any) -> None:
+    """Let the working set age at the start of a session, not during one.
+
+    Decaying mid-turn would mean a note recalled at step two could fall out by
+    step nine of the same piece of work, which is not forgetting, it is losing
+    your place.
+    """
+    try:
+        from mimir.knowledge.bank import get_memory_bank
+
+        get_memory_bank(settings).forget()
+    except Exception:  # noqa: BLE001 - never block the prompt
+        log.debug("memory_decay_failed")
+
+
 def _prompt_text(environment: EnvironmentContext) -> str:
     bits = [b for b in (environment.cluster_context, environment.namespace) if b]
     scope = "/".join(bits)
@@ -325,6 +344,9 @@ def _handle_slash(
             _print_worktrees(console, f"diff {coding.task}")
         return None
 
+    if command == "/brain":
+        _print_brain(console, argument)
+        return None
     if command == "/panel":
         view = coding if coding is not None else _LAST_VIEW.get("view")
         if view is None:
@@ -508,6 +530,66 @@ def _open_session(console: Console, argument: str) -> None:
     if state.final_answer:
         console.print()
         console.print(render.render_answer(state.final_answer, state.final_confidence))
+
+
+def _print_brain(console: Console, argument: str) -> None:
+    """The working set, then the ledger of what has been worked on."""
+    from mimir.knowledge.bank import get_memory_bank
+
+    bank = get_memory_bank()
+    if argument:
+        rows = bank.about(argument)
+        if not rows:
+            console.print(Text(f"nothing recorded about {argument!r}", style="dim"))
+            return
+        table = Table(box=None, header_style="dim")
+        for column in ("when", "kind", "note"):
+            table.add_column(column, overflow="ellipsis", no_wrap=column != "note")
+        for row in rows:
+            table.add_row(str(row["happened"])[:10], str(row["kind"]),
+                          str(row["title"])[:70])
+        console.print(table)
+        return
+
+    stats = bank.stats()
+    if not stats["documents"]:
+        console.print(Text("no memory indexed yet: mimir memory adopt", style="yellow"))
+        return
+
+    working = bank.working_set()
+    console.print(Text("in mind now", style="bold"))
+    if working:
+        for item in working[:8]:
+            console.print(
+                Text.assemble(
+                    (f"  {item.activation:5.2f}  ", "cyan"),
+                    (item.title[:72] or item.doc_id, ""),
+                )
+            )
+        console.print(
+            Text(f"  {len(working)} note(s) active, half-life "
+                 f"{stats['half_life_hours']:.0f}h", style="dim")
+        )
+    else:
+        console.print(Text("  nothing; memory is recalled by asking about it", style="dim"))
+
+    console.print()
+    console.print(Text("worked on", style="bold"))
+    table = Table(box=None, header_style="dim")
+    for column in ("project", "notes", "latest", "unverified"):
+        table.add_column(column)
+    for project in bank.projects()[:12]:
+        table.add_row(
+            str(project["project"]),
+            str(project["notes"]),
+            str(project["latest"])[:10],
+            str(project["unverified"]),
+        )
+    console.print(table)
+    console.print(
+        Text(f"{stats['documents']} note(s) across {stats['projects']} project(s). "
+             "/brain <project> for one of them.", style="dim")
+    )
 
 
 def _print_terms(console: Console, argument: str) -> None:

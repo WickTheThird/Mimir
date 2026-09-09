@@ -45,6 +45,20 @@ turns it off; terminals under 104 columns do not get it at all.
 `/terms` shows what your words have resolved to before, `/sessions` lists past
 conversations and `/open <id>` reads one back.
 
+## Memory
+
+`mimir memory adopt` reads the curated memory files these tools keep, one fact
+each. `mimir memory import <path>` reads whole conversation transcripts. Both
+land in `imports/` as unverified; nothing reaches stable memory without review.
+
+Recall is what activates a note. Activation is hits against a six hour
+half-life, so what stays in mind is what has been useful more than once and
+recently, and a single accidental recall decays out on its own. `/brain` shows
+what is in mind now and what has been worked on, by project; `/brain <project>`
+shows one of them. `mimir memory forget` drops what has decayed. The notes
+themselves are never deleted: forgetting where you put something is not the
+same as destroying it.
+
 What is loaded right now, read from live state rather than from config:
 
 `/status` tools offered, model and the context actually served, language

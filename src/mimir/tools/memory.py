@@ -81,6 +81,28 @@ class SearchMemoryInput(BaseModel):
     )
 
 
+def _activate(ctx: ToolContext, query: str, chunks) -> None:
+    """Recall is what raises a note's activation.
+
+    Done here rather than in the bank so that only a real retrieval counts. A
+    bank that activated on its own bookkeeping would keep whatever it happened
+    to inspect, which is the opposite of a working set.
+    """
+    if not chunks:
+        return
+    try:
+        from mimir.knowledge.bank import get_memory_bank
+
+        meta = {
+            c.doc_id: {"title": c.title, "kind": c.layer.value,
+                       "project": c.service or ""}
+            for c in chunks
+        }
+        get_memory_bank(ctx.settings).touch(list(meta), query=query, meta=meta)
+    except Exception:  # noqa: BLE001 - recall must never fail a lookup
+        log.debug("memory_bank_touch_failed")
+
+
 @tool(
     "search_memory",
     description=(
@@ -108,6 +130,7 @@ async def search_memory(args: SearchMemoryInput, ctx: ToolContext) -> ToolResult
     )
     max_chars = ctx.settings.knowledge.max_snippet_chars
     evidence = result.to_evidence()
+    _activate(ctx, args.query, result.chunks)
 
     if not result.chunks:
         return ToolResult(
