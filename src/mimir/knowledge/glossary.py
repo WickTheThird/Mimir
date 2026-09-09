@@ -1,0 +1,346 @@
+"""What the operator's words turn out to mean.
+
+Operators do not name things the way the estate does. They say "whatapp" for
+messaging-whatsapp, "the retry thing" for a file they touched last week, "ch1"
+for two contexts out of thirty one. A model given none of that spends its first
+three steps guessing, and a local model spends most of a turn's wall clock
+there, because those steps are prefill.
+
+This is a deterministic store of resolutions that already happened. No model
+reads or writes it. A term is associated with a name when that name was
+observed in the same turn and is close enough to the term to be what it meant,
+and the association is offered back on a later turn as a hint, never as a
+substitution. Getting it wrong therefore costs a line of prompt, not a wrong
+answer.
+
+Seeded from what is already known - repositories, kubeconfig contexts, the
+projects of imported memory - so it is useful on the first turn rather than
+the tenth.
+"""
+
+from __future__ import annotations
+
+import difflib
+import re
+import sqlite3
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+from mimir.config import Settings, get_settings
+from mimir.logging import get_logger
+
+log = get_logger(__name__)
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS associations (
+    term       TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    scope      TEXT NOT NULL DEFAULT '',
+    hits       INTEGER NOT NULL DEFAULT 1,
+    first_seen REAL NOT NULL,
+    last_seen  REAL NOT NULL,
+    source     TEXT NOT NULL DEFAULT 'observed',
+    PRIMARY KEY (term, name, scope)
+);
+CREATE INDEX IF NOT EXISTS associations_term ON associations(term);
+"""
+
+_WORD = re.compile(r"[a-z][a-z0-9]{2,}", re.IGNORECASE)
+
+# Words that appear in every operational sentence and identify nothing.
+_STOP = frozenset({
+    "logs", "log", "pods", "pod", "namespace", "cluster", "clusters", "dev",
+    "prod", "production", "staging", "last", "show", "give", "check", "find",
+    "list", "from", "that", "this", "with", "have", "has", "any", "the",
+    "into", "inside", "about", "curious", "would", "like", "want", "need",
+    "please", "there", "their", "which", "what", "when", "where", "just",
+    "also", "some", "them", "then", "than", "over", "under", "your", "you",
+    "are", "was", "were", "been", "being", "does", "did", "doing", "kubectl",
+    "deployment", "deployments", "service", "services", "workload",
+    "workloads", "container", "containers", "restart", "restarts", "error",
+    "errors", "file", "files", "code", "repo", "repository", "test", "tests",
+    "for", "and", "not", "all", "get", "see", "its", "his", "her", "our",
+    "why", "how", "who", "can", "should", "could", "will", "one", "two",
+    "ten", "out", "off", "run", "new", "old", "now", "yet", "but",
+})
+
+MAX_NAMES = 3
+"""Above this, a term does not resolve anything.
+
+"messaging" is a segment of six projects and forty workloads here. Offering all
+of them is not a hint, it is the list the model would have got anyway, and it
+crowds out the terms that do discriminate."""
+
+MIN_RATIO = 0.8
+MAX_LENGTH_GAP = 2
+"""How close a term has to be to a name to be treated as meaning it.
+
+A similarity ratio alone cannot do this. "whatapp" and "whatsapp" score 0.93,
+but "retry" and "registry" score 0.77 and "backoff" and "backoffice" 0.82, so
+any cutoff that accepts the typo accepts both coincidences, and the hint then
+tells the model that "retry" means the campaign registry.
+
+Length is what separates them. A typo adds or drops a character or two; it does
+not turn a five letter word into an eight letter one. Both conditions are
+required."""
+
+
+@dataclass(frozen=True)
+class Association:
+    term: str
+    name: str
+    kind: str
+    scope: str = ""
+    hits: int = 1
+    source: str = "observed"
+
+    def render(self) -> str:
+        where = f" in {self.scope}" if self.scope else ""
+        return f"{self.term!r} has meant {self.name} ({self.kind}{where})"
+
+
+def terms_of(text: str) -> list[str]:
+    """Candidate terms in what the operator wrote."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for match in _WORD.finditer(text or ""):
+        word = match.group(0).lower()
+        if word in _STOP or word in seen:
+            continue
+        seen.add(word)
+        out.append(word)
+    return out
+
+
+class Glossary:
+    def __init__(self, path: Path | None = None, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
+        self.path = Path(path) if path else self.settings.home / "glossary.db"
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._db = sqlite3.connect(str(self.path))
+        self._db.executescript(SCHEMA)
+        self._db.commit()
+
+    def close(self) -> None:
+        self._db.close()
+
+    # -- writing ---------------------------------------------------------
+
+    def record(
+        self,
+        term: str,
+        name: str,
+        kind: str,
+        *,
+        scope: str = "",
+        source: str = "observed",
+    ) -> None:
+        term, name = term.strip().lower(), name.strip()
+        if not term or not name or term == name.lower():
+            return
+        now = time.time()
+        self._db.execute(
+            """
+            INSERT INTO associations (term, name, kind, scope, first_seen, last_seen, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(term, name, scope) DO UPDATE SET
+                hits = hits + 1, last_seen = excluded.last_seen
+            """,
+            (term, name, kind, scope, now, now, source),
+        )
+        self._db.commit()
+
+    def learn(self, instruction: str, observed_names: list[str], *, scope: str = "") -> int:
+        """Associate the operator's words with names seen in the same turn.
+
+        Only close matches are kept. A turn mentions many names and the
+        operator's word meant at most one of them, so requiring closeness is
+        what keeps this from degenerating into "everything means everything".
+        """
+        names = sorted({n.strip() for n in observed_names if n and len(n) > 3})
+        if not names:
+            return 0
+        learned = 0
+        for term in terms_of(instruction):
+            for name in _close_to(term, names):
+                self.record(term, name, "observed name", scope=scope)
+                learned += 1
+        return learned
+
+    # -- reading ---------------------------------------------------------
+
+    def names(self) -> dict[str, str]:
+        """Every distinct name known, with its kind."""
+        rows = self._db.execute("SELECT DISTINCT name, kind FROM associations").fetchall()
+        return dict(rows)
+
+    def lookup(self, text: str, *, limit: int = 6) -> list[Association]:
+        """Exact resolutions first, then near misses against known names.
+
+        The near miss is the point. A term that has been resolved before is the
+        easy case and it is not the one that costs three steps: "whatapp" has
+        never been seen, and messaging-whatsapp has, and the distance between
+        them is one character. Looking the term up only by equality answers the
+        question nobody was stuck on.
+        """
+        terms = terms_of(text)
+        if not terms:
+            return []
+
+        out: list[Association] = []
+        known: dict[str, str] | None = None
+        for term in terms:
+            rows = self._db.execute(
+                "SELECT term, name, kind, scope, hits, source FROM associations "
+                "WHERE term = ? ORDER BY hits DESC, last_seen DESC",
+                (term,),
+            ).fetchall()
+            if rows:
+                if len(rows) <= MAX_NAMES:
+                    out.extend(Association(*row) for row in rows)
+                continue
+
+            if known is None:
+                known = self.names()
+            for name in _close_to(term, list(known)):
+                out.append(
+                    Association(term, name, known.get(name, "name"), source="near match")
+                )
+            if len(out) >= limit:
+                break
+        return out[:limit]
+
+    def all(self, limit: int = 200) -> list[Association]:
+        rows = self._db.execute(
+            "SELECT term, name, kind, scope, hits, source FROM associations "
+            "ORDER BY hits DESC, term LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [Association(*row) for row in rows]
+
+    def hint(self, text: str) -> str:
+        """One block of prompt, or nothing.
+
+        Offered as what the words have meant before, not as what they mean. The
+        estate changes, and a hint stated as a fact is a stale fact that the
+        model will defend."""
+        found = self.lookup(text)
+        if not found:
+            return ""
+        lines = "\n".join(f"- {a.render()}" for a in found)
+        return (
+            "Words this operator has used before, and what they turned out to "
+            f"mean. Treat as a lead to check, not as a fact:\n{lines}"
+        )
+
+    # -- seeding ---------------------------------------------------------
+
+    def seed(self) -> int:
+        """Populate from what is already known, so turn one benefits."""
+        added = 0
+        added += self._seed_repositories()
+        added += self._seed_contexts()
+        added += self._seed_memory_projects()
+        log.info("glossary_seeded", associations=added)
+        return added
+
+    def _seed_repositories(self) -> int:
+        try:
+            from mimir.tools.repo import get_repository_directory
+
+            repos = get_repository_directory(self.settings).all()
+        except Exception:  # noqa: BLE001 - seeding must never block startup
+            return 0
+        count = 0
+        for repo in repos:
+            for term in _segments(repo.name):
+                self.record(term, repo.name, "repository", source="seeded")
+                count += 1
+        return count
+
+    def _seed_contexts(self) -> int:
+        import subprocess
+
+        try:
+            out = subprocess.run(
+                ["kubectl", "config", "get-contexts", "-o", "name"],
+                capture_output=True, text=True, timeout=15, check=False,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return 0
+        count = 0
+        for name in (line.strip() for line in out.splitlines()):
+            if not name:
+                continue
+            for term in _segments(name):
+                self.record(term, name, "cluster context", source="seeded")
+                count += 1
+        return count
+
+    def _seed_memory_projects(self) -> int:
+        try:
+            from mimir.knowledge.store import KnowledgeStore
+
+            documents = KnowledgeStore(settings=self.settings).documents()
+        except Exception:  # noqa: BLE001
+            return 0
+        count = 0
+        for document in documents:
+            project = str(document.metadata.extra.get("project") or "")
+            if not project:
+                continue
+            for term in _segments(project):
+                self.record(term, project, "project", source="seeded")
+                count += 1
+        return count
+
+
+def _segments(name: str) -> list[str]:
+    """The parts of a name an operator might say on their own."""
+    # Three characters, not four. "ch1" is how this operator names a pair of
+    # clusters, and a rule that cannot represent it is a rule that misses the
+    # term they actually use.
+    parts = [p.lower() for p in re.split(r"[-_./]", name) if len(p) >= 3]
+    return [p for p in parts if p not in _STOP]
+
+
+def _close_to(term: str, names: list[str]) -> list[str]:
+    """Names the term plausibly meant.
+
+    A whole segment first, because "whatsapp" inside "messaging-whatsapp" is
+    exact and needs no ratio. Plain substring is not enough: "backoff" is
+    inside "backoffice", and telling the model that an operator asking about
+    retry backoff means the back office is worse than telling it nothing. The
+    same length rule applies to a partial segment as to a typo.
+    """
+    exact = [n for n in names if term in _segments(n)]
+    if not exact:
+        exact = [
+            n
+            for n in names
+            for seg in _segments(n)
+            if seg.startswith(term) and len(seg) - len(term) <= MAX_LENGTH_GAP
+        ]
+    if exact:
+        return exact[:MAX_NAMES] if len(exact) <= MAX_NAMES else []
+    segments = {seg: n for n in names for seg in _segments(n)}
+    candidates = [
+        seg for seg in segments if abs(len(seg) - len(term)) <= MAX_LENGTH_GAP
+    ]
+    close = difflib.get_close_matches(term, candidates, n=2, cutoff=MIN_RATIO)
+    return [segments[c] for c in close]
+
+
+_GLOSSARY: Glossary | None = None
+
+
+def get_glossary(settings: Settings | None = None) -> Glossary:
+    global _GLOSSARY
+    if _GLOSSARY is None:
+        _GLOSSARY = Glossary(settings=settings)
+    return _GLOSSARY
+
+
+__all__ = ["Association", "Glossary", "get_glossary", "terms_of"]

@@ -136,6 +136,9 @@ class AgentLoop:
         self.messages: list[LLMMessage] = [LLMMessage.system(system)]
         self.outcome = TurnOutcome()
         self.instruction = ""
+        self.glossary: Any = None
+        """Set by the caller. Absent is fine; the loop just works harder."""
+
         self.observed: list[str] = []
         """Every tool result of this turn, as the ground truth for grounding."""
 
@@ -185,7 +188,13 @@ class AgentLoop:
         not a command: re-reading the same four files for a two line follow-up
         is most of what makes a local model feel unusable.
         """
-        self.messages.append(LLMMessage.user(instruction))
+        # The hint rides on the user turn rather than the system prompt: it is
+        # about these words, and a system prompt that grows a section per turn
+        # is paid for on every step of every later turn.
+        hint = self._hint(instruction)
+        self.messages.append(
+            LLMMessage.user(f"{hint}\n\n{instruction}" if hint else instruction)
+        )
         self.outcome = TurnOutcome()
         self.instruction = instruction
         self.observed = []
@@ -223,6 +232,7 @@ class AgentLoop:
                 answer = "".join(text_parts)
                 self.outcome.stopped = "done"
                 self.outcome.grounding = self._grounding(answer)
+                self._learn()
                 yield AgentEvent(type=AgentEventType.DONE, step=step, text=answer)
                 return
 
@@ -272,6 +282,31 @@ class AgentLoop:
             result=result,
             elapsed_s=elapsed,
         )
+
+    def _hint(self, instruction: str) -> str:
+        if self.glossary is None:
+            return ""
+        try:
+            return self.glossary.hint(instruction)
+        except Exception:  # noqa: BLE001 - a hint must never fail a turn
+            return ""
+
+    def _learn(self) -> None:
+        """Associate the operator's words with names this turn actually saw.
+
+        Only names that were observed, so a turn that resolved nothing teaches
+        nothing. Learning from the model's own text instead would record the
+        invented names alongside the real ones.
+        """
+        if self.glossary is None:
+            return
+        from mimir.verify.grounding import identifiers
+
+        names = identifiers("\n".join(self.observed))
+        try:
+            self.glossary.learn(self.instruction, names, scope=self.label)
+        except Exception:  # noqa: BLE001
+            log.debug("glossary_learn_failed")
 
     def _grounding(self, answer: str) -> Any:
         """Check the answer's identifiers against what was actually read.

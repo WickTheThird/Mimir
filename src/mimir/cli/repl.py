@@ -44,6 +44,7 @@ SLASH_COMMANDS = {
     "/diff": "what the current code task has changed",
     "/why": "how the last answer was reached, step by step",
     "/done": "leave the code task and go back to investigating",
+    "/terms": "what your words have resolved to, or /terms <word>",
     "/status": "model, tools, language servers, and what is loaded",
     "/tools": "list the typed tools available, grouped by capability",
     "/lsp": "language server status and how to install a missing one",
@@ -321,7 +322,9 @@ def _handle_slash(
             _print_worktrees(console, f"diff {coding.task}")
         return None
 
-    if command == "/status":
+    if command == "/terms":
+        _print_terms(console, argument)
+    elif command == "/status":
         _print_status(console)
     elif command == "/tools":
         _print_tools(console, argument)
@@ -407,6 +410,26 @@ def main() -> None:
 # exactly like a healthy one. These read live state rather than repeating the
 # documentation.
 # ---------------------------------------------------------------------------
+
+
+def _print_terms(console: Console, argument: str) -> None:
+    from mimir.knowledge.glossary import get_glossary
+
+    glossary = get_glossary()
+    if not glossary.all(limit=1):
+        glossary.seed()
+    found = glossary.lookup(argument, limit=20) if argument else glossary.all(limit=40)
+    if not found:
+        console.print(Text("nothing recorded for that yet", style="dim"))
+        return
+    table = Table(box=None, header_style="dim")
+    for column in ("word", "has meant", "kind", "seen"):
+        table.add_column(column)
+    for association in found:
+        table.add_row(
+            association.term, association.name, association.kind, str(association.hits)
+        )
+    console.print(table)
 
 
 def _print_status(console: Console) -> None:

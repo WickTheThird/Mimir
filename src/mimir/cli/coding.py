@@ -383,6 +383,19 @@ def _warn_if_dirty(console: Console, root: Path) -> None:
     )
 
 
+def _glossary(settings: Any) -> Any:
+    """Seeded once per process, and never allowed to block a session."""
+    try:
+        from mimir.knowledge.glossary import get_glossary
+
+        glossary = get_glossary(settings)
+        if not glossary.all(limit=1):
+            glossary.seed()
+        return glossary
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def start_ops_view(console: Console, runner: Any, environment: Any) -> AgentView:
     """A loop that reads the estate, for a request that already names its target."""
     from mimir.agent.ops import OpsAgent
@@ -397,6 +410,7 @@ def start_ops_view(console: Console, runner: Any, environment: Any) -> AgentView
         max_steps=12,
     )
     agent.ctx.environment = environment
+    agent.glossary = _glossary(runner.settings)
     return AgentView(console, agent)
 
 
@@ -447,6 +461,7 @@ def start_coding_session(
         worktree_root=worktree.root,
         settings=runner.settings,
     )
+    agent.glossary = _glossary(runner.settings)
     return AgentView(
         console, agent, task=worktree.name, repo=resolved.name, root=worktree.root
     )
