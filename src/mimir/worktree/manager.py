@@ -100,7 +100,16 @@ class WorktreeManager:
             )
 
         commit = _git(repo_root, "rev-parse", base).strip()
-        _git(repo_root, "worktree", "add", "-b", branch, str(target), commit)
+        # An interrupted run leaves the branch behind when its worktree is
+        # removed, and the name is then blocked forever with "a branch named X
+        # already exists". Reattaching to the orphan is recovery; refusing is
+        # just making the operator clean up after a crash they did not cause.
+        existing = _git(repo_root, "branch", "--list", branch).strip()
+        if existing:
+            log.info("worktree_reattached", branch=branch, path=str(target))
+            _git(repo_root, "worktree", "add", str(target), branch)
+        else:
+            _git(repo_root, "worktree", "add", "-b", branch, str(target), commit)
         log.info("worktree_created", branch=branch, path=str(target), base=commit[:12])
         return TaskWorktree(
             name=slug, branch=branch, root=target, repo_root=repo_root,

@@ -128,3 +128,32 @@ class TestCredentialScrub:
                 f"{name} is toolchain, not a credential; stripping it made every "
                 "test command exit 127"
             )
+
+
+class TestAnOrphanedBranchIsReattached:
+    """An interrupted run leaves the branch behind when its worktree is
+    removed, and the name is then blocked forever with "a branch named X
+    already exists". Refusing makes the operator clean up after a crash they
+    did not cause."""
+
+    def test_creating_over_an_orphaned_branch_recovers(self, tmp_path):
+        import subprocess
+
+        from mimir.worktree import WorktreeManager
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "a.txt").write_text("x\n")
+        for argv in (["init", "-q"], ["add", "-A"], ["-c", "user.email=t@t",
+                     "-c", "user.name=t", "commit", "-qm", "init"]):
+            subprocess.run(["git", "-C", str(repo), *argv], check=True, capture_output=True)
+
+        manager = WorktreeManager(tmp_path / "home")
+        first = manager.create(repo, "task")
+        subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force",
+                        str(first.root)], check=True, capture_output=True)
+        assert not first.root.exists()
+
+        again = manager.create(repo, "task")
+        assert again.root.exists()
+        assert again.branch == first.branch
