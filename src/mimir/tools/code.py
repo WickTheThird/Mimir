@@ -19,11 +19,14 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from mimir.logging import get_logger
 from mimir.models.evidence import Citation, Evidence, EvidenceKind, SourceType
 from mimir.safety.risk import RiskClass
 from mimir.tools.base import Capability, ToolContext, ToolError, ToolResult, tool
 from mimir.tools.repo import _target_repos
 from mimir.worktree import WorktreeError, WorktreeManager, resolve_inside
+
+log = get_logger(__name__)
 
 MAX_BYTES = 400_000
 MAX_DIFF = 20_000
@@ -53,6 +56,56 @@ async def _repo_root(ctx: ToolContext, name: str | None) -> Path:
 
 def _wrap(exc: WorktreeError) -> ToolError:
     return ToolError(str(exc), code="refused")
+
+
+def _verify(ctx: ToolContext, root: Path, relative: str, *, updated: str,
+            original: str | None, baseline=None):
+    """Check a written file, and revert it if it cannot be read.
+
+    Every write goes through this. The model is asked to know the language, the
+    framework and the codebase at once; a small model gets one of them wrong
+    regularly, and the edit then stays, looks plausible in a diff, and is found
+    by whoever runs the code. None of the three needs a model to check.
+    """
+    from mimir.verify.change import verify_change
+
+    try:
+        return verify_change(
+            root, relative, updated=updated, original=original,
+            settings=ctx.settings, baseline=baseline,
+        )
+    except Exception:  # noqa: BLE001 - a broken checker must not eat the edit
+        log.warning("change_verification_failed", path=relative)
+        return None
+
+
+def _baseline(root: Path, relative: str):
+    from mimir.verify.change import baseline_diagnostics
+
+    try:
+        return baseline_diagnostics(root, relative)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _with_report(result: ToolResult, report) -> ToolResult:
+    """Fold a verification report into the tool result the model reads."""
+    if report is None:
+        return result
+    result.data["verification"] = {
+        "ok": report.ok,
+        "reverted": report.reverted,
+        "checks": report.checks_run,
+        "skipped": report.checks_skipped,
+        "violations": [v.render() for v in report.violations],
+        "new_diagnostics": report.new_diagnostics[:8],
+    }
+    if report.ok:
+        result.summary = f"{result.summary}. {report.summary()}"
+        return result
+    detail = "; ".join(report.detail()[:3])
+    result.summary = f"{result.summary}. {report.summary()}: {detail}"
+    return result
 
 
 class CreateInput(BaseModel):
@@ -166,10 +219,21 @@ async def write_worktree_file(args: WriteInput, ctx: ToolContext) -> ToolResult:
                 code="invalid_arguments",
             )
         existed = target.exists()
+        original = (
+            target.read_text(encoding="utf-8", errors="replace") if existed else None
+        )
+        baseline = _baseline(wt.root, args.path) if existed else None
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(args.content, encoding="utf-8")
+        report = _verify(ctx, wt.root, args.path, updated=args.content,
+                         original=original, baseline=baseline)
+        if report is not None and report.reverted:
+            raise ToolError(
+                f"{args.path} {report.violations[0].title}. The file was left as it was.",
+                code="invalid_change",
+            )
         lines = args.content.count("\n") + 1
-        return ToolResult(
+        return _with_report(ToolResult(
             tool="write_worktree_file",
             summary=f"{'updated' if existed else 'created'} {args.path} ({lines} lines)",
             data={"path": args.path, "worktree": str(wt.root), "created": not existed,
@@ -186,7 +250,7 @@ async def write_worktree_file(args: WriteInput, ctx: ToolContext) -> ToolResult:
                                         locator=args.path, path=args.path)],
                 )
             ],
-        )
+        ), report)
 
     return await asyncio.to_thread(work)
 
@@ -272,12 +336,21 @@ async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
         updated = original.replace(args.old_string, args.new_string, 1)
         if len(updated.encode()) > MAX_BYTES:
             raise ToolError(f"result exceeds {MAX_BYTES} bytes", code="too_large")
+        baseline = _baseline(wt.root, args.path)
         target.write_text(updated, encoding="utf-8")
+        report = _verify(ctx, wt.root, args.path, updated=updated,
+                         original=original, baseline=baseline)
+        if report is not None and report.reverted:
+            raise ToolError(
+                f"that edit left {args.path} unparseable "
+                f"({report.violations[0].title}). The file was restored.",
+                code="invalid_change",
+            )
 
         before = original[: original.index(args.old_string)].count("\n") + 1
         removed = args.old_string.count("\n") + 1
         added = args.new_string.count("\n") + 1
-        return ToolResult(
+        return _with_report(ToolResult(
             tool="edit_worktree_file",
             summary=(
                 f"{args.path}: {removed} line(s) replaced with {added} at line {before}"
@@ -301,7 +374,7 @@ async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
                                         locator=f"{args.path}:{before}", path=args.path)],
                 )
             ],
-        )
+        ), report)
 
     return await asyncio.to_thread(work)
 

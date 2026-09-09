@@ -67,3 +67,47 @@ Per ADR-002 sections 3.3 and 3.4, and deliberately unimplemented: committing,
 pushing, history rewriting, writing outside a worktree, touching CI config or
 lock files, adding dependencies. Those need approval paths that do not exist
 yet, and absent code cannot be talked into running.
+
+
+## Rules
+
+Every write is checked before it is allowed to stand. A model writing code has
+to hold four things at once: the rules of the language, the rules of the
+framework, the rules of this codebase, and the task. A small local model gets
+one of them wrong regularly, and the first three do not need a model to check.
+
+Three checks, in order:
+
+1. **Syntax.** Does the file parse. Python and JSON in-process, instantly. This
+   is the only check that reverts: a file that does not parse is not a partial
+   change, it is a broken one, and every later read of it returns nonsense.
+2. **Project rules.** Invariants no compiler knows: side effects must be
+   awaited in this runtime, money crosses the wire in minor units, this column
+   is NOT NULL. Written as a pattern with a reason, in
+   `~/.mimir/rules/*.yaml` or `<repo>/.mimir/rules/*.yaml`.
+3. **The language server.** New errors only, measured against the diagnostics
+   before the change, so a file that was already failing is not blamed on the
+   edit that touched it.
+
+Anything but a syntax error is reported and left in place. An edit that
+introduces a type error may be the first half of a change the next step
+completes, and reverting it would stop the loop working in two steps.
+
+The gate can only block on evidence. No language server for a file means no
+diagnostics check, not a failed one.
+
+A rule is data, not code:
+
+```yaml
+- id: awaited-side-effects
+  title: A side effect in a Workers handler must be awaited
+  why: >
+    Workers terminate the instant fetch() returns, so an un-awaited notify is
+    aborted mid-flight.
+  paths: ["*.js", "*.ts"]
+  forbid: '^(?!.*await).*\b(sendEmail|notify)\s*\('
+  severity: error
+```
+
+Recording what an incident taught should not need a code change and a release,
+which is the reliable way to ensure nobody records it.
