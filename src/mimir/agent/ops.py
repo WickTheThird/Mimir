@@ -39,20 +39,32 @@ OPS_TOOLS: tuple[str, ...] = (
     "get_logs",
     "get_events",
     "describe_resource",
-    "get_rollout_status",
-    "get_resource_usage",
     # what happened last time
     "search_memory",
-    "find_similar_incidents",
 )
-"""Ten tools. Finding, reading, and what was learned before.
+"""Eight tools, and the count is a budget rather than a preference.
 
-list_namespaces is deliberately absent. The run this module was written for
-listed two hundred namespaces twice while looking for one the operator had
-already named, which cost most of the wall clock and contributed nothing. When
-a namespace really is unknown, list_workloads across contexts answers the same
-question against a hundredth of the output.
+Adding a ninth broke tool calling outright. qwen3-coder:30b stopped emitting
+tool calls and wrote them into its prose instead, at temperature zero, and
+bisecting showed no single culprit: each field description was fine alone and
+the three together were not. It is cumulative schema volume, so the surface has
+a measured ceiling and a test that holds it there.
+
+What went to make room: get_rollout_status and get_resource_usage, which are
+specialised follow-ups rather than ways to find or read something, and
+find_similar_incidents, which overlaps search_memory. The council still has all
+three.
+
+list_namespaces was never here. The run this module was written for listed two
+hundred namespaces twice while looking for one the operator had already named.
+find_workloads answers that question in one call.
 """
+
+MAX_SCHEMA_CHARS = 11_500
+"""Measured, not chosen. At 11,050 characters the surface works and at 12,276
+it does not, on this model. The ceiling sits below the failure with room for a
+description to grow, and a test fails when a change crosses it, because the
+symptom otherwise appears as a turn that did nothing and reported success."""
 
 SYSTEM = """\
 You are MIMIR reading a Kubernetes estate on behalf of an operator. Everything
@@ -105,11 +117,6 @@ class OpsAgent(AgentLoop):
 
     label = "ops"
 
-    def system_for(self, instruction: str) -> str:
-        """The base prompt plus what the instruction stated, as facts."""
-        stated = self.request.render()
-        return f"{self.system}\n\n{stated}" if stated else self.system
-
     def __init__(self, *, environment: Any = None, tools=OPS_TOOLS, **kwargs: Any) -> None:
         self.environment = environment
         self.scope: dict[str, str] = {}
@@ -124,6 +131,13 @@ class OpsAgent(AgentLoop):
         super().__init__(tools=tools, system=SYSTEM.format(context=_describe(environment)),
                          **kwargs)
 
+    def hidden(self) -> tuple[str, ...]:
+        """Arguments the loop supplies, kept out of the schema.
+
+        Schema volume is the constraint, so an argument the model never needs
+        to choose should not cost the tokens to describe."""
+        return ("limit",)
+
     def note_instruction(self, instruction: str) -> None:
         """Take the stated parameters out of the sentence, by rule.
 
@@ -133,6 +147,12 @@ class OpsAgent(AgentLoop):
         a dropped parameter fails silently: the call succeeds against the wrong
         scope and the answer reads as if it were about the right one.
         """
+        # Deliberately not restated in the prompt. Listing the parsed
+        # parameters back to the model as "the operator stated: ..." stopped
+        # qwen3-coder emitting tool calls, the same failure the glossary hint
+        # caused in the same position. The parameters do not need saying: they
+        # are bound onto the calls below, which is both more reliable than
+        # asking and the reason the parser exists.
         self.request = parse_request(instruction)
         self.asked = {
             k: v for k, v in (
@@ -184,12 +204,26 @@ class OpsAgent(AgentLoop):
         if self.request.since and "since" in fields and not bound.get("since"):
             bound["since"] = self.request.since
         if name == "find_workloads":
-            for key, value in (
-                ("name_contains", self.request.name_contains),
-                ("context_contains", self.request.context_contains),
-            ):
-                if value and not bound.get(key):
-                    bound[key] = value
+            # The environment is part of the cluster constraint, not separate
+            # from it. Left out, "any outbound pod in dev in a cluster with
+            # ch1" returned the ch1 production clusters too.
+            cluster = " ".join(
+                v for v in (self.request.context_contains, self.request.environment) if v
+            )
+            if self.request.name_contains and not bound.get("name_contains"):
+                bound["name_contains"] = self.request.name_contains
+            # Set, like the namespace below. The model passed "ch1" and dropped
+            # the environment, so a request that said dev searched the ch1
+            # production clusters as well.
+            if cluster:
+                bound["context_contains"] = cluster
+
+            # Namespace is set, not defaulted. The operator either named one or
+            # did not, and the parser knows which. Left to the model, "any
+            # outbound pod inside dev" became a namespace filter of "dev": no
+            # namespace is called dev, so a search that would have found both
+            # pods returned nothing, and the emptiness looked like an answer.
+            bound["namespace_contains"] = self.request.namespace or None
 
         for field, attribute in (("context", "cluster_context"), ("namespace", "namespace")):
             if field not in fields:

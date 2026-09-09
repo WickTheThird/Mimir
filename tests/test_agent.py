@@ -811,3 +811,38 @@ class TestStatedScopeOutranksDrift:
         agent.bind("list_workloads", {"namespace": "messaging-squad"})
         agent.note_instruction("what about the events")
         assert "namespace" not in agent.bind("list_workloads", {})
+
+
+class TestGroundTruthIsEverythingRead:
+    """Two false positives from one live run, both erosive.
+
+    A check that cries wolf is one people switch off, so both are worth more
+    than the invention they would otherwise have caught.
+    """
+
+    def test_a_quote_from_a_truncated_result_is_not_an_invention(self):
+        """The model sees a trimmed render; checking its answer against that
+        trimmed copy flags whatever it quoted from the part that got cut."""
+        from mimir.agent.loop import _all_text
+        from mimir.verify.grounding import check
+
+        result = ToolResult(
+            tool="get_logs",
+            summary="4 log lines",
+            data={"lines": ["reading /etc/haproxy/haproxy.cfg now"], "path": "x"},
+        )
+        assert "/etc/haproxy/haproxy.cfg" in _all_text(result)
+        assert check("it read /etc/haproxy/haproxy.cfg", _all_text(result)).ok
+
+    def test_version_strings_and_timestamps_are_not_names(self):
+        from mimir.verify.grounding import identifiers
+
+        for token in ("2.8.3-1ubuntu0", "251/214850", "20260909-114500"):
+            assert token not in identifiers(f"logged {token} today"), token
+
+    def test_a_real_invention_still_fails(self):
+        from mimir.verify.grounding import check
+
+        assert check("messaging-ghost-pod is running", "nothing here").ungrounded == [
+            "messaging-ghost-pod"
+        ]

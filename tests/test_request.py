@@ -124,3 +124,61 @@ class TestRouting:
         verdict = triage("fetch the last 30 minutes of logs for the api deployment")
         assert verdict.kind.value == "direct"
         assert not verdict.cheap
+
+
+class TestBinding:
+    """What the parser found is applied, not suggested."""
+
+    def _agent(self):
+        from mimir.agent.ops import OpsAgent
+        from mimir.tools.base import ToolContext, load_all_tools
+
+        class Router:
+            call_log: list = []
+            invocations_attempted = 0
+
+            def for_task(self, task):
+                return None
+
+            def digest_for(self, alias):
+                return ""
+
+        registry = load_all_tools()
+        return OpsAgent(
+            router=Router(),
+            registry=registry,
+            tool_context=ToolContext(registry=registry),
+        )
+
+    def test_the_environment_is_part_of_the_cluster_constraint(self):
+        """Left out, "any outbound pod in dev in a cluster with ch1" returned
+        the ch1 production clusters too."""
+        agent = self._agent()
+        agent.note_instruction(
+            "logs of any messaging outbound pod inside dev in a cluster with ch1"
+        )
+        bound = agent.bind("find_workloads", {})
+        assert bound["context_contains"] == "ch1 dev"
+        assert bound["name_contains"] == "messaging-outbound"
+
+    def test_a_namespace_nobody_named_is_cleared_not_defaulted(self):
+        """The model read "dev" as a namespace. No namespace is called dev, so
+        a search that would have found both pods returned nothing, and the
+        emptiness looked like an answer."""
+        agent = self._agent()
+        agent.note_instruction("logs of any outbound pod inside dev with ch1")
+        assert agent.bind("find_workloads", {"namespace_contains": "dev"})[
+            "namespace_contains"
+        ] is None
+
+    def test_a_namespace_the_operator_named_is_applied(self):
+        agent = self._agent()
+        agent.note_instruction("logs of outbound pods in -n messaging-squad")
+        assert agent.bind("find_workloads", {})["namespace_contains"] == "messaging-squad"
+
+    def test_a_stated_line_count_is_not_negotiable(self):
+        """"the last 10 logs" returning a hundred lines has answered a
+        different question."""
+        agent = self._agent()
+        agent.note_instruction("the last 10 logs of api pods in -n payments")
+        assert agent.bind("get_logs", {"target": "api", "tail": 500})["tail"] == 10

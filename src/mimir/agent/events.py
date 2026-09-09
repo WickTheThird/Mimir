@@ -55,6 +55,7 @@ class AgentEvent:
 # a serialised argument dict makes the timeline unreadable, so a tool with no
 # entry here contributes its name alone.
 _SUBJECT: dict[str, tuple[str, ...]] = {
+    "find_workloads": ("name_contains",),
     "list_workloads": ("context",),
     "summarise_pod_health": ("context",),
     "get_logs": ("target",),
@@ -85,6 +86,7 @@ _CONSTRAINT: dict[str, tuple[str, ...]] = {
     "locate_tests": ("languages",),
     "lsp_definition": ("path",),
     "lsp_references": ("path",),
+    "find_workloads": ("name_contains", "context_contains", "namespace_contains"),
     "list_workloads": ("name_contains", "selector", "namespace"),
     "summarise_pod_health": ("service", "selector", "namespace"),
     "get_logs": ("namespace", "tail", "since", "grep"),
@@ -93,6 +95,7 @@ _CONSTRAINT: dict[str, tuple[str, ...]] = {
 }
 
 _VERB: dict[str, str] = {
+    "find_workloads": "searched every namespace for",
     "list_workloads": "listed workloads in",
     "summarise_pod_health": "checked pod health in",
     "get_logs": "read logs from",

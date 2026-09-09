@@ -323,7 +323,11 @@ class AgentLoop:
             self.outcome.tests_run += 1
 
         rendered = self._render(result)
-        self.observed.append(rendered)
+        # The model sees the trimmed render; the grounding check sees
+        # everything the tool returned. Checking an answer against a truncated
+        # copy of its own evidence flags what was quoted from the part that got
+        # cut, and a check that cries wolf is one people switch off.
+        self.observed.append(f"{rendered}\n{_all_text(result)}")
         self.messages.append(
             LLMMessage.tool_result(call.id, rendered, name=call.name)
         )
@@ -462,6 +466,26 @@ class CodingAgent(AgentLoop):
         if "repo" in fields:
             bound["repo"] = self.repo if name in _WORKTREE_TOOLS else self.view
         return bound
+
+
+def _all_text(result: ToolResult) -> str:
+    """Every string a tool result carries, for grounding only."""
+    parts: list[str] = [result.summary or ""]
+
+    def walk(value: Any) -> None:
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list | tuple):
+            for item in value:
+                walk(item)
+
+    walk(result.data)
+    for evidence in result.evidence:
+        parts.append(getattr(evidence, "excerpt", "") or "")
+    return "\n".join(p for p in parts if p)
 
 
 def format_arguments(tool: str, arguments: dict[str, Any]) -> str:

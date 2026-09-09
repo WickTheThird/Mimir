@@ -107,6 +107,12 @@ def identifiers(text: str) -> list[str]:
             token = match.group(0).strip(".,;:)").lower()
             if token in seen or len(token) < 8:
                 continue
+            # Version strings and log timestamps are not names. "3-1ubuntu0"
+            # and "251/214850" were both flagged as invented in a turn that had
+            # quoted them straight out of a log it really did read.
+            digits = sum(c.isdigit() for c in token)
+            if digits * 2 >= len(token):
+                continue
             if token in _IGNORE or ("/" not in token and _is_prose(token)):
                 continue
             seen.add(token)

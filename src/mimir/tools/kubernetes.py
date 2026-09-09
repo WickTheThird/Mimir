@@ -1287,29 +1287,21 @@ _DURATION = re.compile(r"^\d+[smhd]$")
 class FindWorkloadsArgs(BaseModel):
     """No namespace, and no single context. That is the point of this tool."""
 
-    name_contains: str = Field(
-        description="Substring of the pod or workload name, for example 'outbound'."
-    )
+    name_contains: str = Field(description="Substring of the pod name.")
     context_contains: str | None = Field(
         default=None,
-        description=(
-            "Substring of the cluster context, for example 'ch1'. Every matching "
-            "context is searched. Omit to search only the current context."
-        ),
+        description="Cluster context substrings, space separated. All must match.",
     )
-    namespace_contains: str | None = Field(
-        default=None, description="Optional substring of the namespace."
-    )
+    namespace_contains: str | None = Field(default=None)
     limit: int = Field(default=40, ge=1, le=200)
 
 
 @tool(
     "find_workloads",
     description=(
-        "Find pods by name across every namespace, and across every cluster context "
-        "whose name matches. Use this whenever the operator describes what they want "
-        "rather than naming a namespace: 'any messaging outbound pod in a cluster with "
-        "ch1'. It is one call, and it is exact substring matching, not a guess."
+        "Find pods by name across every namespace and every matching cluster context, "
+        "in one call. Use it whenever the operator describes what they want instead of "
+        "naming a namespace."
     ),
     capability=Capability.KUBERNETES,
     risk=RiskClass.R1,
@@ -1333,7 +1325,7 @@ async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResul
     the match is a substring, and the ordering is stable, so the same question
     returns the same answer.
     """
-    wanted = _safe_token(args.name_contains, "name_contains").lower()
+    wanted = _safe_token(_as_fragment(args.name_contains), "name_contains").lower()
     contexts = await _matching_contexts(ctx, args.context_contains)
     if not contexts:
         raise ToolError(
@@ -1341,10 +1333,18 @@ async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResul
             code="not_found",
         )
 
+    # Three columns, not the pod objects. A full -o json listing of every pod
+    # in a real cluster is four megabytes, the executor truncates it, the JSON
+    # no longer parses, and the tool reported every context as unreachable
+    # while answering "not found". Finding something does not need its spec.
+    columns = (
+        "NS:.metadata.namespace,NAME:.metadata.name,PHASE:.status.phase"
+    )
     commands = [
         _build(
             ctx,
-            args=["get", "pods", "--all-namespaces", "-o", "json"],
+            args=["get", "pods", "--all-namespaces", "-o",
+                  f"custom-columns={columns}", "--no-headers"],
             purpose=f"find pods matching {wanted!r} across namespaces",
             context=name,
             tool_name="find_workloads",
@@ -1353,44 +1353,49 @@ async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResul
     ]
     records = await _run_batch(ctx, commands)
 
-    now = time.time()
     rows: list[dict[str, Any]] = []
     unreachable: list[str] = []
+    namespace_filter = _as_fragment(args.namespace_contains).lower()
     for name, command in zip(contexts, commands, strict=True):
         record = records[command.id]
         if not record.ok:
             unreachable.append(name)
             continue
-        try:
-            items = _items(_parse_json(record, "listing pods"))
-        except ToolError:
-            unreachable.append(name)
-            continue
-        for item in items:
-            view = _pod_view(item, now)
-            pod_name = str(view.get("name", ""))
-            namespace = str((item.get("metadata") or {}).get("namespace", ""))
+        for line in record.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            namespace, pod_name = parts[0], parts[1]
+            phase = parts[2] if len(parts) > 2 else ""
             if wanted not in pod_name.lower():
                 continue
-            if args.namespace_contains and (
-                args.namespace_contains.lower() not in namespace.lower()
-            ):
+            if namespace_filter and namespace_filter not in namespace.lower():
                 continue
             rows.append({
                 "context": name,
                 "namespace": namespace,
                 "pod": pod_name,
-                "ready": view.get("ready"),
-                "restarts": view.get("restarts"),
-                "phase": view.get("phase"),
+                "phase": phase,
             })
+
+    # Absence and failure are different answers. Reporting "not found" when
+    # every query failed is the fail-open shape this project exists to remove:
+    # it reads as a fact about the estate and is a fact about the connection.
+    if unreachable and not rows and len(unreachable) == len(contexts):
+        raise ToolError(
+            f"every context searched was unreachable: {', '.join(unreachable)}. "
+            "This is not evidence that nothing matches.",
+            code="unavailable",
+        )
 
     # Stable ordering: the same question returns the same answer, and the first
     # row is a defensible default for a follow-up.
     rows.sort(key=lambda r: (r["context"], r["namespace"], r["pod"]))
     shown = rows[: args.limit]
 
-    where = f" in contexts matching {args.context_contains!r}" if args.context_contains else ""
+    where = f" in {len(contexts)} context(s) matching {args.context_contains!r}" if (
+        args.context_contains
+    ) else ""
     if not rows:
         summary = f"no pod name contains {wanted!r}{where}"
     else:
@@ -1423,9 +1428,30 @@ async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResul
     )
 
 
+def _as_fragment(value: str | None) -> str:
+    """Normalise a name fragment the way names are actually written.
+
+    Operators and models both write "messaging outbound" for a workload called
+    messaging-outbound, and a substring search for a string with a space in it
+    can never match a pod name. Rejecting it was correct and useless: the run
+    that found this failed on the argument rather than on the question.
+    """
+    if not value:
+        return ""
+    return "-".join(str(value).strip().lower().split())
+
+
 async def _matching_contexts(ctx: ToolContext, fragment: str | None) -> list[str]:
-    """Kubeconfig contexts whose name contains ``fragment``, in sorted order."""
-    if not fragment:
+    """Contexts containing every whitespace-separated fragment, sorted.
+
+    Every fragment, not any, because an operator naming two constraints has
+    narrowed twice. "ch1 dev" is a cluster family and an environment, and
+    matching either returned the production clusters for a request that said
+    dev. A read against the wrong environment is not harmless once someone
+    reads the logs it returns as if they came from the one they asked for.
+    """
+    fragments = [f for f in (fragment or "").lower().replace(",", " ").split() if f]
+    if not fragments:
         return [await _resolve_context(ctx, None)]
     listing = _build(
         ctx,
@@ -1437,11 +1463,10 @@ async def _matching_contexts(ctx: ToolContext, fragment: str | None) -> list[str
     record = await _run_one(ctx, listing)
     if not record.ok:
         return [await _resolve_context(ctx, None)]
-    needle = fragment.strip().lower()
     return sorted(
-        line.strip()
-        for line in record.stdout.splitlines()
-        if line.strip() and needle in line.strip().lower()
+        name
+        for name in (line.strip() for line in record.stdout.splitlines())
+        if name and all(f in name.lower() for f in fragments)
     )
 
 
