@@ -291,3 +291,32 @@ class TestInsertsDoNotDuplicateTheirSurroundings:
         body = "    def count(self):\n        return 0\n"
         after = ["\n", "    def other(self):\n", "        return 0\n"]
         assert self._drop(body, after, 0) == body
+
+
+class TestFormattingIsCheckedOnlyWhenItWasClean:
+    """A repository that does not use the formatter has every file report
+    unformatted, so a blanket check would flag every edit ever made."""
+
+    def test_a_file_that_was_not_formatted_is_not_judged_on_formatting(
+        self, tmp_path, settings
+    ):
+        source = "x = {  'a':1 }\n"
+        (tmp_path / "a.py").write_text(source)
+        report = verify_change(tmp_path, "a.py", updated=source, original=source,
+                               settings=settings, was_formatted=False)
+        assert not report.broke_formatting
+        assert any("not formatted" in note for note in report.checks_skipped)
+
+    def test_breaking_the_formatting_of_a_clean_file_is_reported(
+        self, tmp_path, settings
+    ):
+        import shutil
+
+        if not shutil.which("ruff"):
+            pytest.skip("no formatter available")
+        messy = "x = {  'a':1 }\n"
+        (tmp_path / "a.py").write_text(messy)
+        report = verify_change(tmp_path, "a.py", updated=messy, original="x = 1\n",
+                               settings=settings, was_formatted=True)
+        assert report.broke_formatting
+        assert not report.ok

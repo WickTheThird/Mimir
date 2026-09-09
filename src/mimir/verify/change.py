@@ -52,6 +52,7 @@ class ChangeReport:
     violations: list[Violation] = field(default_factory=list)
     new_diagnostics: list[dict[str, Any]] = field(default_factory=list)
     new_lint: list[dict[str, Any]] = field(default_factory=list)
+    broke_formatting: bool = False
     checks_run: list[str] = field(default_factory=list)
     checks_skipped: list[str] = field(default_factory=list)
 
@@ -62,7 +63,8 @@ class ChangeReport:
     @property
     def ok(self) -> bool:
         return not (
-            self.blocking or self.new_diagnostics or self.new_lint or self.reverted
+            self.blocking or self.new_diagnostics or self.new_lint
+            or self.reverted or self.broke_formatting
         )
 
     def summary(self) -> str:
@@ -80,6 +82,8 @@ class ChangeReport:
         if self.new_lint:
             codes = ", ".join(sorted({str(f["code"]) for f in self.new_lint})[:4])
             bits.append(f"{len(self.new_lint)} new lint finding(s): {codes}")
+        if self.broke_formatting:
+            bits.append("the file no longer matches the project formatter")
         if not bits:
             checked = ", ".join(self.checks_run) or "nothing to check"
             return f"verified ({checked})"
@@ -179,6 +183,25 @@ def _lint(root: Path, relative: str) -> list[dict[str, Any]] | None:
     return out
 
 
+def _formatted(root: Path, relative: str) -> bool | None:
+    """Whether the file matches the project's formatter, or ``None`` if unknown.
+
+    Only useful as a before-and-after pair. A repository that does not use the
+    formatter has every file report unformatted, so the answer is meaningless
+    on its own and a blanket check would flag every edit ever made.
+    """
+    if Path(relative).suffix.lower() != ".py" or not shutil.which("ruff"):
+        return None
+    try:
+        finished = subprocess.run(
+            ["ruff", "format", "--check", "--force-exclude", relative],
+            cwd=str(root), capture_output=True, text=True, timeout=60, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return finished.returncode == 0
+
+
 def _diagnostics(root: Path, relative: str) -> list[dict[str, Any]] | None:
     """Errors the language server reports, or ``None`` when it cannot say."""
     if Path(relative).suffix.lower() not in _LSP_EXTENSIONS:
@@ -205,6 +228,7 @@ def verify_change(
     settings: Any,
     baseline: list[dict[str, Any]] | None = None,
     baseline_lint: list[dict[str, Any]] | None = None,
+    was_formatted: bool = False,
 ) -> ChangeReport:
     """Check one written file. Reverts only what cannot be read.
 
@@ -237,6 +261,18 @@ def verify_change(
         report.checks_run.append(f"{len(rules)} project rule(s)")
     else:
         report.checks_skipped.append("no project rules configured")
+
+    # Only when the file was formatted before the change. Otherwise the
+    # repository does not use the formatter and every edit would be flagged.
+    if was_formatted:
+        after_formatting = _formatted(Path(root), relative)
+        if after_formatting is None:
+            report.checks_skipped.append("no formatter for this file")
+        else:
+            report.broke_formatting = not after_formatting
+            report.checks_run.append("formatting")
+    else:
+        report.checks_skipped.append("file was not formatted before the change")
 
     lint_after = _lint(Path(root), relative)
     if lint_after is None:
@@ -271,6 +307,11 @@ def baseline_diagnostics(root: Path, relative: str) -> list[dict[str, Any]] | No
     return _diagnostics(Path(root), relative)
 
 
+def baseline_formatted(root: Path, relative: str) -> bool:
+    """Whether the file matched the formatter before the change."""
+    return _formatted(Path(root), relative) is True
+
+
 def baseline_lint(root: Path, relative: str) -> list[dict[str, Any]] | None:
     """Lint findings before a change, so a file that was already failing its
     own linter is not blamed on the edit that touched it."""
@@ -280,6 +321,7 @@ def baseline_lint(root: Path, relative: str) -> list[dict[str, Any]] | None:
 __all__ = [
     "ChangeReport",
     "baseline_diagnostics",
+    "baseline_formatted",
     "baseline_lint",
     "check_syntax",
     "verify_change",
