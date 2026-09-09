@@ -28,6 +28,15 @@ mimir export <id> --format md -o handoff.md
 `/help` `/context` `/ns` `/cluster` `/repo` `/evidence` `/commands`
 `/hypotheses` `/skills` `/session` `/export` `/new` `/quit`
 
+What is loaded right now, read from live state rather than from config:
+
+`/status` tools offered, model and the context actually served, language
+servers, skills. `/tools [capability]` the tool surface with its risk class.
+`/lsp` per language: ready, or the exact command that installs it. `/model`
+every routing role with its digest and served context, in red when the
+runtime is serving a different context than the one configured. `/worktree`
+task worktrees, and `/worktree diff <task>` for what a task has changed.
+
 Follow-up questions reuse the evidence already gathered, so asking "and what
 about the callee side?" does not re-run the same commands.
 
