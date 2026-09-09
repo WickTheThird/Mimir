@@ -569,6 +569,53 @@ def memory_import(
     )
 
 
+@memory_app.command("adopt")
+def memory_adopt(
+    path: Path | None = typer.Argument(None, help="A memory file or directory."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Rewrite existing notes."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="List what would be imported."),
+) -> None:
+    """Adopt curated agent memory files as candidate memory.
+
+    Separate from 'memory import', which reads whole conversation transcripts.
+    A memory file is one fact a person decided to keep, which is a different
+    artefact and worth far more per token than a summarised session.
+    """
+    from mimir.knowledge.agent_memory import (
+        AgentMemoryImporter,
+        discover_memory_files,
+        parse_memory_file,
+    )
+
+    if path is not None:
+        found = sorted(path.rglob("*.md")) if path.is_dir() else [path]
+    else:
+        found = discover_memory_files()
+
+    if not found:
+        console.print("[yellow]no curated memory files found[/yellow]")
+        return
+
+    if dry_run:
+        table = Table(box=None, header_style="dim")
+        for column in ("project", "kind", "title"):
+            table.add_column(column)
+        for candidate in found:
+            memory = parse_memory_file(candidate)
+            if memory is not None:
+                table.add_row(memory.project or "-", memory.kind, memory.title[:70])
+        console.print(table)
+        console.print(f"[dim]{len(found)} file(s); nothing written[/dim]")
+        return
+
+    result = AgentMemoryImporter().run(found, overwrite=overwrite)
+    console.print(result.summary())
+    console.print(
+        "[dim]adopted into imports/agent-memory as unverified. "
+        "Nothing reaches stable memory without review.[/dim]"
+    )
+
+
 @skills_app.command("list")
 def skills_list() -> None:
     """List available skills with their level-1 descriptions."""

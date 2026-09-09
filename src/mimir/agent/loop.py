@@ -51,10 +51,12 @@ CODING_TOOLS: tuple[str, ...] = (
     # verify
     "run_worktree_tests",
     "diff_task_worktree",
+    # what was already learned about this code
+    "search_memory",
 )
 """The coding surface, named rather than derived from a capability.
 
-Twelve tools, against the seventy six registered. The council was offered
+Thirteen tools, against the seventy six registered. The council was offered
 thirty five at one point and its prompts more than doubled; the tools it did
 not need still cost their schema on every call and still invited a worse
 choice. A loop that runs many short steps pays that on every step.
