@@ -740,3 +740,32 @@ def _panel_agent():
             yield AgentEvent(type=AgentEventType.DONE, step=1, text="")
 
     return Fake()
+
+
+class TestToolCallsWrittenAsProse:
+    """Local models drop out of the tool-call channel and write the call into
+    their reply instead. The loop saw a turn with no tool calls, concluded the
+    work was finished, and reported success after doing nothing."""
+
+    def test_it_is_corrected_rather_than_accepted_as_an_answer(self):
+        prose = "<function=get_logs>\n<parameter=target>api</parameter>\n</function>"
+        agent, _, _ = _agent([(prose, []), ("Really done.", [])])
+        events = asyncio.run(_drain(agent))
+
+        assert events[-1].type is AgentEventType.DONE
+        assert events[-1].text == "Really done."
+        assert agent.outcome.corrections == 1
+        assert any("through the tool interface" in (m.content or "") for m in agent.messages)
+
+    def test_it_gives_up_correcting_rather_than_looping(self):
+        prose = "<tool_call>get_logs</tool_call>"
+        agent, _, _ = _agent([(prose, [])] * 6)
+        events = asyncio.run(_drain(agent))
+        assert events[-1].type is AgentEventType.DONE
+        assert agent.outcome.corrections == 2
+
+    def test_talking_about_a_tool_is_not_calling_one(self):
+        agent, _, _ = _agent([("I called get_logs and it returned nothing.", [])])
+        events = asyncio.run(_drain(agent))
+        assert events[-1].type is AgentEventType.DONE
+        assert agent.outcome.corrections == 0

@@ -18,6 +18,7 @@ module was written to stop.
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
@@ -85,6 +86,19 @@ must read is the worktree: binding all of them to the source checkout would
 make a file read back without the edit that was just made to it, which is the
 kind of defect that looks like the model hallucinating."""
 
+_TOOL_TEXT = re.compile(
+    r"(<function\s*=|<tool_call>|</function>|<\|tool\|>|"
+    r'"(?:name|tool_name)"\s*:\s*"[a-z_]+"\s*,\s*"(?:arguments|parameters)")',
+    re.IGNORECASE,
+)
+"""Text that is an attempted tool call rather than an answer.
+
+Local models drop out of the tool-call channel and write the call into their
+prose instead, complete with closing tags. The loop used to see a turn with no
+tool calls and conclude the work was finished, so the run ended after one step
+having done nothing, and reported success. Detecting the shape is deterministic
+and the correction costs one extra step."""
+
 MAX_RESULT_CHARS = 6000
 """How much of a tool result goes back into context. A repository search can
 return more than the context window."""
@@ -101,6 +115,9 @@ class TurnOutcome:
 
     grounding: Any = None
     """Result of the deterministic name check over the final answer."""
+
+    corrections: int = 0
+    """Times the model wrote a tool call as prose and was told to try again."""
 
 
 class AgentLoop:
@@ -191,14 +208,23 @@ class AgentLoop:
         # The hint rides on the user turn rather than the system prompt: it is
         # about these words, and a system prompt that grows a section per turn
         # is paid for on every step of every later turn.
+        #
+        # It goes after the instruction, and that is not cosmetic. Placed
+        # before it, 162 characters of preamble was enough to make
+        # qwen3-coder:30b stop emitting tool calls entirely and write them into
+        # its prose instead, at temperature zero, reproducibly. Measured
+        # against six placements: before the instruction was the only one that
+        # broke it. Leading with the operator's words keeps the turn framed as
+        # something to act on rather than a document to respond to.
         hint = self._hint(instruction)
         self.messages.append(
-            LLMMessage.user(f"{hint}\n\n{instruction}" if hint else instruction)
+            LLMMessage.user(f"{instruction}\n\n{hint}" if hint else instruction)
         )
         self.outcome = TurnOutcome()
         self.instruction = instruction
         self.observed = []
         options = GenerationOptions(tools=self.schemas(), temperature=0.0)
+        corrections = 0
 
         for step in range(1, self.max_steps + 1):
             self.outcome.steps = step
@@ -230,6 +256,18 @@ class AgentLoop:
 
             if not calls:
                 answer = "".join(text_parts)
+                if _TOOL_TEXT.search(answer) and corrections < 2:
+                    corrections += 1
+                    self.outcome.corrections = corrections
+                    self.messages.append(
+                        LLMMessage.user(
+                            "That was written as text, so nothing ran. Make the "
+                            "call through the tool interface instead of writing "
+                            "it in your reply."
+                        )
+                    )
+                    continue
+
                 self.outcome.stopped = "done"
                 self.outcome.grounding = self._grounding(answer)
                 self._learn()

@@ -93,10 +93,12 @@ class TestHint:
 
 
 class TestLoopIntegration:
-    def test_the_hint_rides_on_the_user_turn(self, tmp_path):
+    def test_the_hint_rides_on_the_user_turn_after_the_instruction(self, tmp_path):
         """Not the system prompt: it is about these words, and a system prompt
         that grows a section per turn is paid on every step of every later
-        turn."""
+        turn. And after the instruction, not before: leading with 162
+        characters of preamble made qwen3-coder stop emitting tool calls
+        entirely, at temperature zero, reproducibly."""
         import asyncio
 
         from tests.test_agent import _agent, _drain
@@ -111,7 +113,9 @@ class TestLoopIntegration:
         user = next(m for m in agent.messages if m.role.value == "user")
         assert "has meant" not in system.content
         assert "messaging-whatsapp" in user.content
-        assert "look at whatapp" in user.content
+        assert user.content.startswith("look at whatapp"), (
+            "the operator's words come first or the model stops calling tools"
+        )
 
     def test_a_broken_glossary_never_fails_a_turn(self, tmp_path):
         import asyncio
