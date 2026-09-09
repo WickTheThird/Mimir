@@ -120,7 +120,12 @@ def _line_count(root: Path) -> int:
     return total
 
 
-def inspect(candidate: Candidate, settings: Any, test_command: str = "") -> Candidate:
+def inspect(
+    candidate: Candidate,
+    settings: Any,
+    test_command: str = "",
+    repo_root: Path | None = None,
+) -> Candidate:
     """Score one attempt against the rules. No model is consulted."""
     from mimir.verify.change import check_syntax
     from mimir.verify.rules import check_rules, load_rules, rule_roots
@@ -147,7 +152,7 @@ def inspect(candidate: Candidate, settings: Any, test_command: str = "") -> Cand
     if test_command:
         candidate.tests_wanted = True
         candidate.tests_ran, candidate.tests_passed = _run_tests(
-            candidate.root, test_command
+            candidate.root, test_command, repo_root
         )
         if not candidate.tests_ran:
             candidate.notes.append(
@@ -172,16 +177,23 @@ def _lint_count(root: Path, files: list[str]) -> int:
     return len([line for line in finished.stdout.splitlines() if line.strip()])
 
 
-def _run_tests(root: Path, command: str) -> tuple[bool, bool]:
+def _run_tests(root: Path, command: str, repo_root: Path | None = None) -> tuple[bool, bool]:
     """Whether the tests ran, and whether they passed.
 
     The two are separate because a suite that could not start is not a suite
     that failed, and scoring them the same would let an attempt that broke the
     test runner outrank one that merely broke a test.
     """
+    # The same interpreter resolution the test tool does. Two places run
+    # tests and only one of them resolved a bare python, so a selector given
+    # "python -m pytest" scored every candidate as TESTS DID NOT RUN and fell
+    # back to diff size without the tests ever executing.
+    from mimir.tools.code import _resolve_interpreter
+
+    resolved = _resolve_interpreter(command, repo_root or root)
     try:
         finished = subprocess.run(
-            command, cwd=str(root), shell=True, capture_output=True,
+            resolved, cwd=str(root), shell=True, capture_output=True,
             text=True, timeout=TEST_TIMEOUT_S, check=False,
         )
     except (OSError, subprocess.SubprocessError):
@@ -220,7 +232,7 @@ async def best_of(
         except Exception as exc:  # noqa: BLE001 - one bad attempt is not a failure
             candidate.error = str(exc)
             log.warning("candidate_failed", index=index, error=str(exc))
-        inspect(candidate, settings, test_command)
+        inspect(candidate, settings, test_command, getattr(view, "source_root", None))
         candidates.append(candidate)
         if console is not None:
             console.print(f"  {candidate.render()}")

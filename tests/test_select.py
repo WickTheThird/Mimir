@@ -200,3 +200,30 @@ class TestASkippedCheckIsVisible:
         c = inspect(_candidate(repo), settings)
         assert not c.tests_wanted
         assert "TESTS" not in c.render()
+
+
+class TestTheSelectorRunsTestsTheSameWayTheToolDoes:
+    """Two places run tests and only one resolved a bare python. A selector
+    given "python -m pytest" scored every candidate as TESTS DID NOT RUN and
+    fell back to diff size, with the tests never having executed."""
+
+    def test_a_bare_python_is_resolved_against_the_source_checkout(
+        self, repo, settings, tmp_path
+    ):
+        venv = tmp_path / "src_repo" / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        (venv / "python").write_text("#!/bin/sh\nexit 0\n")
+        (venv / "python").chmod(0o755)
+
+        (repo / "src" / "a.py").write_text("def f():\n    return 2\n")
+        c = inspect(_candidate(repo), settings, "python -m pytest",
+                    repo_root=tmp_path / "src_repo")
+        assert c.tests_ran, "the interpreter has to be found for the tests to run"
+        assert c.tests_passed
+
+    def test_both_paths_use_one_resolver(self):
+        import inspect as _inspect
+
+        from mimir.agent import select
+
+        assert "_resolve_interpreter" in _inspect.getsource(select._run_tests)

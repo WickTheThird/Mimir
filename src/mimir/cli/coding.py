@@ -353,6 +353,9 @@ class AgentView:
         self.repo = repo
         self.root = root
         self.timeline: list[TimelineEntry] = []
+        self.source_root: Path | None = None
+        """The checkout the worktree came from, which is where its toolchain is."""
+
         self.panel = True
         """Whether to show the trail beside the transcript while a turn runs."""
 
@@ -674,9 +677,11 @@ def start_coding_session(
         settings=runner.settings,
     )
     agent.glossary = _glossary(runner.settings)
-    return AgentView(
+    view = AgentView(
         console, agent, task=worktree.name, repo=resolved.name, root=worktree.root
     )
+    view.source_root = resolved.root
+    return view
 
 
 __all__ = [
