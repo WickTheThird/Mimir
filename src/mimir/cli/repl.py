@@ -23,11 +23,20 @@ from rich.text import Text
 from mimir import __version__
 from mimir.cli import render
 from mimir.cli.approvals import attach_cli_approvals
-from mimir.cli.coding import CodingSession, render_timeline, start_coding_session
+from mimir.cli.coding import (
+    AgentView,
+    render_timeline,
+    start_coding_session,
+    start_ops_view,
+)
 from mimir.config import get_settings
 from mimir.graph.runner import EventType, InvestigationRunner
+from mimir.graph.triage import Triage, triage
 from mimir.logging import configure_logging
 from mimir.models.state import EnvironmentContext, InvestigationState
+
+_LAST_VIEW: dict[str, Any] = {}
+"""The view /why reports on, so it survives leaving a mode."""
 
 SLASH_COMMANDS = {
     "/help": "show this help",
@@ -121,7 +130,8 @@ async def run_repl(console: Console) -> None:
         namespace=settings.kubernetes.default_namespace,
     )
     state: InvestigationState | None = None
-    coding: CodingSession | None = None
+    coding: AgentView | None = None
+    ops: AgentView | None = None
 
     while True:
         try:
@@ -139,8 +149,9 @@ async def run_repl(console: Console) -> None:
                 break
             if action == "new":
                 state = None
+                ops = None
                 console.print(Text("started a new session", style="dim"))
-            elif isinstance(action, CodingSession):
+            elif isinstance(action, AgentView):
                 coding = action
             elif action == "done":
                 if coding is not None:
@@ -152,9 +163,21 @@ async def run_repl(console: Console) -> None:
             continue
 
         if coding is not None:
+            _LAST_VIEW["view"] = coding
             await _run_interruptibly(coding.turn(line))
-        else:
-            state = await _ask(runner, console, line, environment, state)
+            continue
+
+        # An instruction whose target the operator already named is carried out
+        # rather than investigated. The council is for questions whose answer
+        # has to be argued for.
+        if triage(line).kind is Triage.DIRECT:
+            if ops is None:
+                ops = start_ops_view(console, runner, environment)
+            _LAST_VIEW["view"] = ops
+            await _run_interruptibly(ops.turn(line))
+            continue
+
+        state = await _ask(runner, console, line, environment, state)
 
     if coding is not None:
         _close_coding(coding, settings)
@@ -162,7 +185,7 @@ async def run_repl(console: Console) -> None:
     console.print(Text("bye", style="dim"))
 
 
-def _close_coding(coding: CodingSession, settings: Any) -> None:
+def _close_coding(coding: AgentView, settings: Any) -> None:
     """Stop addressing the worktree by name; leave the worktree itself alone.
 
     Discarding on exit would throw away work because someone typed /done, and
@@ -256,7 +279,7 @@ def _handle_slash(
     line: str,
     environment: EnvironmentContext,
     state: InvestigationState | None,
-    coding: CodingSession | None = None,
+    coding: AgentView | None = None,
     runner: Any = None,
 ) -> Any:
     parts = line.split(maxsplit=1)
@@ -285,10 +308,11 @@ def _handle_slash(
     if command == "/done":
         return "done"
     if command == "/why":
-        if coding is None:
-            console.print(Text("only inside a code task for now", style="dim"))
+        view = coding if coding is not None else _LAST_VIEW.get("view")
+        if view is None:
+            console.print(Text("nothing has been looked up yet", style="dim"))
         else:
-            render_timeline(console, coding.timeline)
+            render_timeline(console, view.timeline)
         return None
     if command == "/diff":
         if coding is None:

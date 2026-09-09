@@ -22,7 +22,7 @@ from rich.console import Console
 from rich.text import Text
 
 from mimir.agent.events import AgentEvent, AgentEventType, TimelineEntry
-from mimir.agent.loop import CodingAgent, format_arguments
+from mimir.agent.loop import format_arguments
 from mimir.tools.base import ToolResult
 
 MARK = "⏺"
@@ -245,17 +245,21 @@ def render_timeline(console: Console, entries: Sequence[TimelineEntry]) -> None:
     console.print()
 
 
-class CodingSession:
-    """One task worktree, one conversation, one renderer."""
+class AgentView:
+    """One agent loop, one conversation, one renderer.
+
+    Shared by the coding and operations loops: what differs between them is
+    the tool surface and the prompt, not how a turn should look on screen.
+    """
 
     def __init__(
         self,
         console: Console,
-        agent: CodingAgent,
+        agent: Any,
         *,
-        task: str,
-        repo: str,
-        root: Path,
+        task: str = "",
+        repo: str = "",
+        root: Path | None = None,
     ) -> None:
         self.console = console
         self.agent = agent
@@ -266,7 +270,7 @@ class CodingSession:
 
     @property
     def prompt(self) -> str:
-        return f"mimir({self.task})> "
+        return f"mimir({self.task})> " if self.task else "mimir> "
 
     async def turn(self, instruction: str) -> None:
         """Run one instruction, rendering as it goes.
@@ -314,6 +318,15 @@ class CodingSession:
         outcome = self.agent.outcome
         if outcome.stopped == "error":
             return
+
+        # Printed above the counts, not below them, because it changes how the
+        # answer should be read and the counts do not.
+        grounding = getattr(outcome, "grounding", None)
+        if grounding is not None and not grounding.ok:
+            self.console.print()
+            for line in _wrap(grounding.brief(), self.console.width - len(INDENT)):
+                self.console.print(Text(INDENT + line, style="yellow"))
+
         bits = []
         if outcome.files_changed:
             bits.append(
@@ -330,6 +343,12 @@ class CodingSession:
                 Text(f"{INDENT}/diff to review, /why for how it got there", style="dim")
             )
         self.console.print()
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    import textwrap
+
+    return textwrap.wrap(text, max(20, width)) or [text]
 
 
 def _warn_if_dirty(console: Console, root: Path) -> None:
@@ -364,12 +383,29 @@ def _warn_if_dirty(console: Console, root: Path) -> None:
     )
 
 
+def start_ops_view(console: Console, runner: Any, environment: Any) -> AgentView:
+    """A loop that reads the estate, for a request that already names its target."""
+    from mimir.agent.ops import OpsAgent
+
+    agent = OpsAgent(
+        router=runner.router,
+        registry=runner.registry,
+        tool_context=runner.tool_context(None),
+        settings=runner.settings,
+        environment=environment,
+        task_class="fast_command",
+        max_steps=12,
+    )
+    agent.ctx.environment = environment
+    return AgentView(console, agent)
+
+
 def start_coding_session(
     console: Console,
     runner: Any,
     task: str,
     repo: str | None = None,
-) -> CodingSession:
+) -> AgentView:
     """Open or reopen a task worktree and bind an agent to it.
 
     Reopening is the common case and must not be destructive: a worktree that
@@ -411,13 +447,13 @@ def start_coding_session(
         worktree_root=worktree.root,
         settings=runner.settings,
     )
-    return CodingSession(
+    return AgentView(
         console, agent, task=worktree.name, repo=resolved.name, root=worktree.root
     )
 
 
 __all__ = [
-    "CodingSession",
+    "AgentView",
     "StreamWriter",
     "fit",
     "render_edit_diff",
@@ -425,4 +461,5 @@ __all__ = [
     "render_tool_end",
     "render_tool_start",
     "start_coding_session",
+    "start_ops_view",
 ]

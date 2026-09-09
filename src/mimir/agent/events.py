@@ -55,6 +55,15 @@ class AgentEvent:
 # a serialised argument dict makes the timeline unreadable, so a tool with no
 # entry here contributes its name alone.
 _SUBJECT: dict[str, tuple[str, ...]] = {
+    "list_workloads": ("context",),
+    "summarise_pod_health": ("context",),
+    "get_logs": ("target",),
+    "get_events": ("context",),
+    "describe_resource": ("name",),
+    "get_rollout_status": ("name",),
+    "get_resource_usage": ("context",),
+    "search_memory": ("query",),
+    "find_similar_incidents": ("query",),
     "search_repository": ("query",),
     "read_file_range": ("path",),
     "locate_tests": ("subject",),
@@ -76,9 +85,24 @@ _CONSTRAINT: dict[str, tuple[str, ...]] = {
     "locate_tests": ("languages",),
     "lsp_definition": ("path",),
     "lsp_references": ("path",),
+    "list_workloads": ("name_contains", "selector", "namespace"),
+    "summarise_pod_health": ("service", "selector", "namespace"),
+    "get_logs": ("namespace", "tail", "since", "grep"),
+    "get_events": ("namespace", "only_warnings"),
+    "describe_resource": ("namespace",),
 }
 
 _VERB: dict[str, str] = {
+    "list_workloads": "listed workloads in",
+    "summarise_pod_health": "checked pod health in",
+    "get_logs": "read logs from",
+    "get_events": "read events in",
+    "describe_resource": "described",
+    "get_rollout_status": "checked the rollout of",
+    "get_resource_usage": "measured usage in",
+    "get_current_context": "checked the current context",
+    "search_memory": "searched memory for",
+    "find_similar_incidents": "looked for past incidents like",
     "search_repository": "searched for",
     "read_file_range": "read",
     "locate_tests": "located tests for",

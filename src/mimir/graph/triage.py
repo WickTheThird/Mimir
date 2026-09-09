@@ -54,9 +54,67 @@ _CONCRETE = re.compile(
 )
 
 
+# An action the operator can point at a resource and have carried out. These
+# are the verbs that make a request an instruction rather than a question.
+_RETRIEVAL = re.compile(
+    r"""\b(
+        logs?|tail|describe|events?|status|restarts?|top|usage|
+        rollout|manifest|yaml|image|env|endpoints?
+    )\b""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# Something concrete enough to act on without asking which one is meant.
+#
+# The loose form of the resource branch used to be "kind followed by a word",
+# which matched "checkout service. The" in a corpus case about reading supplied
+# logs and would have routed a reasoning question to the retrieval loop. A kind
+# followed by any word is not a reference to a resource. So a name must arrive
+# in one of the shapes a name actually takes: after -n, after namespace or
+# context, in kind/name form, or as a hyphenated DNS label, which English words
+# are not.
+_TARGET = re.compile(
+    r"""(
+        -n\s+[a-z0-9][\w.-]*
+      | \bnamespace\s+[a-z0-9][\w.-]*
+      | \bcontext\s+[a-z0-9][\w.-]*
+      | \b(?:pod|deployment|statefulset|daemonset|svc|service|node|job|
+            cronjob|ingress|configmap|secret)s?\s*/\s*[a-z0-9][\w.-]*
+      | \b(?:pod|deployment|statefulset|daemonset|svc|service|node|job|
+            cronjob|ingress|configmap|secret)s?\s+(?:named\s+|called\s+)?
+        [a-z0-9]+(?:-[a-z0-9]+)+
+      | \bkubectl\b
+    )""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# A question about why, or a request to compare, weigh or explain, wants the
+# council even when it names a target. The asymmetry from the module docstring
+# applies here too: sending an investigation to the direct loop under-answers
+# it, which is worse than sending an instruction to the council and being slow.
+_DELIBERATIVE = re.compile(
+    r"""\b(
+        why|root\s+cause|diagnose|investigate|explain\s+why|what\s+caused|
+        compare|should\s+i|is\s+it\s+safe|what\s+is\s+wrong|troubleshoot|
+        debug|analyse|analyze|recommend
+    )\b""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
 class Triage(StrEnum):
     INVESTIGATE = "investigate"
     """Default. Run the council."""
+
+    DIRECT = "direct"
+    """An instruction whose target the operator already named.
+
+    "get the last 10 logs from the whatsapp pods in messaging-squad on a ch1
+    dev cluster" states the namespace, the workload, the cluster filter, the
+    action and the line count. There is nothing left to deliberate: it wants
+    carrying out, not investigating. Routed to the operations loop, which reads
+    what was named and shows what came back.
+    """
 
     GREETING = "greeting"
     CAPABILITY = "capability"
@@ -96,6 +154,22 @@ _REPLIES = {
 }
 
 
+def _direct_or_investigate(text: str) -> Triage:
+    """Both halves are required, and either doubt sends it to the council.
+
+    A retrieval verb alone ("check the logs") names no target. A target alone
+    ("the payments namespace") names no action. Only the pair is an
+    instruction, and even then a deliberative word takes it back to the
+    council, because "why are the whatsapp pods restarting" names both and is
+    still a question about cause.
+    """
+    if _DELIBERATIVE.search(text):
+        return Triage.INVESTIGATE
+    if _RETRIEVAL.search(text) and _TARGET.search(text):
+        return Triage.DIRECT
+    return Triage.INVESTIGATE
+
+
 def triage(question: str) -> TriageResult:
     """Decide whether this input needs an investigation at all.
 
@@ -111,7 +185,7 @@ def triage(question: str) -> TriageResult:
     # naming a file, command, resource or operational noun is investigated,
     # whatever else it looks like.
     if _CONCRETE.search(text):
-        return TriageResult(Triage.INVESTIGATE)
+        return TriageResult(_direct_or_investigate(text))
 
     # Length bound: a long message is doing more than saying hello, even if it
     # happens to start with a greeting word.

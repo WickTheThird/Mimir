@@ -97,9 +97,20 @@ class TurnOutcome:
     stopped: str = "done"
     """done, max_steps, error or interrupted."""
 
+    grounding: Any = None
+    """Result of the deterministic name check over the final answer."""
 
-class CodingAgent:
-    """One conversation, bound to one task worktree."""
+
+class AgentLoop:
+    """Call the model, run what it asks for, feed the result back, repeat.
+
+    The surface and the argument binding are parameters, because the loop is
+    the same whether the work is editing a repository or reading a cluster.
+    What differs is which tools exist and which of their arguments the operator
+    already decided.
+    """
+
+    label = "agent"
 
     def __init__(
         self,
@@ -107,32 +118,37 @@ class CodingAgent:
         router: ModelRouter,
         registry: ToolRegistry,
         tool_context: ToolContext,
-        task: str,
-        repo: str,
-        view: str,
-        worktree_root: Path,
+        tools: Sequence[str],
+        system: str,
         settings: Settings | None = None,
-        tools: Sequence[str] = CODING_TOOLS,
         max_steps: int = 20,
         task_class: str = "deep_investigation",
     ) -> None:
         self.router = router
         self.registry = registry
         self.ctx = tool_context
-        self.task = task
-        self.repo = repo
-        self.view = view
-        """The name the worktree is registered under, for the tools that read it."""
-
-        self.root = Path(worktree_root)
         self.settings = settings or get_settings()
         self.max_steps = max_steps
         self.task_class = task_class
         self.specs = [s for s in (registry.get(n) for n in tools) if s is not None]
-        self.messages: list[LLMMessage] = [
-            LLMMessage.system(system_prompt(str(self.root)))
-        ]
+        self.messages: list[LLMMessage] = [LLMMessage.system(system)]
         self.outcome = TurnOutcome()
+        self.instruction = ""
+        self.observed: list[str] = []
+        """Every tool result of this turn, as the ground truth for grounding."""
+
+    # -- binding ---------------------------------------------------------
+
+    def hidden(self) -> tuple[str, ...]:
+        """Arguments removed from the schemas because the loop supplies them."""
+        return ()
+
+    def bind(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return arguments
+
+    def _fields(self, name: str) -> set[str]:
+        spec = self.registry.get(name)
+        return set(spec.input_model.model_fields) if spec is not None else set()
 
     # -- tool surface ----------------------------------------------------
 
@@ -143,28 +159,19 @@ class CodingAgent:
         model is told never to send produces a model that sends it anyway, or
         one that refuses to call the tool at all.
         """
+        hidden = self.hidden()
         out = []
         for spec in self.specs:
             schema = spec.openai_schema()
             parameters = schema["function"]["parameters"]
             properties = parameters.get("properties") or {}
-            for name in _BOUND:
+            for name in hidden:
                 properties.pop(name, None)
             required = parameters.get("required")
             if required:
-                parameters["required"] = [r for r in required if r not in _BOUND]
+                parameters["required"] = [r for r in required if r not in hidden]
             out.append(schema)
         return out
-
-    def _bind(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        spec = self.registry.get(name)
-        fields = set(spec.input_model.model_fields) if spec is not None else set()
-        bound = dict(arguments)
-        if "task" in fields:
-            bound["task"] = self.task
-        if "repo" in fields:
-            bound["repo"] = self.repo if name in _WORKTREE_TOOLS else self.view
-        return bound
 
     # -- the loop --------------------------------------------------------
 
@@ -178,6 +185,8 @@ class CodingAgent:
         """
         self.messages.append(LLMMessage.user(instruction))
         self.outcome = TurnOutcome()
+        self.instruction = instruction
+        self.observed = []
         options = GenerationOptions(tools=self.schemas(), temperature=0.0)
 
         for step in range(1, self.max_steps + 1):
@@ -209,10 +218,10 @@ class CodingAgent:
             self.messages.append(LLMMessage.assistant("".join(text_parts), calls))
 
             if not calls:
+                answer = "".join(text_parts)
                 self.outcome.stopped = "done"
-                yield AgentEvent(
-                    type=AgentEventType.DONE, step=step, text="".join(text_parts)
-                )
+                self.outcome.grounding = self._grounding(answer)
+                yield AgentEvent(type=AgentEventType.DONE, step=step, text=answer)
                 return
 
             for call in calls:
@@ -238,7 +247,7 @@ class CodingAgent:
         )
         started = time.time()
         result = await self.registry.invoke(
-            call.name, self._bind(call.name, call.arguments), self.ctx
+            call.name, self.bind(call.name, call.arguments), self.ctx
         )
         elapsed = time.time() - started
 
@@ -248,8 +257,10 @@ class CodingAgent:
         if call.name == "run_worktree_tests" and result.ok:
             self.outcome.tests_run += 1
 
+        rendered = self._render(result)
+        self.observed.append(rendered)
         self.messages.append(
-            LLMMessage.tool_result(call.id, self._render(result), name=call.name)
+            LLMMessage.tool_result(call.id, rendered, name=call.name)
         )
         yield AgentEvent(
             type=AgentEventType.TOOL_END,
@@ -259,6 +270,18 @@ class CodingAgent:
             result=result,
             elapsed_s=elapsed,
         )
+
+    def _grounding(self, answer: str) -> Any:
+        """Check the answer's identifiers against what was actually read.
+
+        Runs on every turn rather than on request. A check you have to ask for
+        is a check that is not running when it matters, and the failure it
+        catches - a plausible list of names that were never observed - is
+        invisible to the person reading the answer.
+        """
+        from mimir.verify.grounding import check
+
+        return check(answer, "\n".join(self.observed), asked=self.instruction)
 
     @staticmethod
     def _render(result: ToolResult) -> str:
@@ -297,7 +320,7 @@ class CodingAgent:
                 tool_calls=len(calls),
                 finish_reason="error" if failed else ("tool_calls" if calls else "stop"),
                 session_id=self.ctx.session_id,
-                purpose=f"coding:{self.task}",
+                purpose=f"{self.label}:{self.task_class}",
                 error=failed or None,
                 attempt=0,
                 runtime=getattr(getattr(model, "profile", None), "runtime", ""),
@@ -315,6 +338,42 @@ class CodingAgent:
         )
 
 
+class CodingAgent(AgentLoop):
+    """One conversation, bound to one task worktree."""
+
+    label = "coding"
+
+    def __init__(
+        self,
+        *,
+        task: str,
+        repo: str,
+        view: str,
+        worktree_root: Path,
+        tools: Sequence[str] = CODING_TOOLS,
+        **kwargs: Any,
+    ) -> None:
+        self.task = task
+        self.repo = repo
+        self.view = view
+        """The name the worktree is registered under, for the tools that read it."""
+
+        self.root = Path(worktree_root)
+        super().__init__(tools=tools, system=system_prompt(str(self.root)), **kwargs)
+
+    def hidden(self) -> tuple[str, ...]:
+        return _BOUND
+
+    def bind(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        fields = self._fields(name)
+        bound = dict(arguments)
+        if "task" in fields:
+            bound["task"] = self.task
+        if "repo" in fields:
+            bound["repo"] = self.repo if name in _WORKTREE_TOOLS else self.view
+        return bound
+
+
 def format_arguments(tool: str, arguments: dict[str, Any]) -> str:
     """A one-line argument display for the terminal.
 
@@ -324,7 +383,7 @@ def format_arguments(tool: str, arguments: dict[str, Any]) -> str:
     """
     bits = []
     for key, value in arguments.items():
-        if key in _BOUND:
+        if key in _BOUND or value in (None, "", [], {}):
             continue
         if key in ("content", "old_string", "new_string"):
             lines = str(value).count("\n") + 1
@@ -338,4 +397,10 @@ def format_arguments(tool: str, arguments: dict[str, Any]) -> str:
     return " ".join(bits)
 
 
-__all__ = ["CODING_TOOLS", "CodingAgent", "TurnOutcome", "format_arguments"]
+__all__ = [
+    "CODING_TOOLS",
+    "AgentLoop",
+    "CodingAgent",
+    "TurnOutcome",
+    "format_arguments",
+]

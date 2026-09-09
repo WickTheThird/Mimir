@@ -1284,6 +1284,14 @@ async def describe_resource(args: DescribeResourceArgs, ctx: ToolContext) -> Too
 _DURATION = re.compile(r"^\d+[smhd]$")
 
 
+_LOG_KINDS = frozenset({
+    "pod", "po", "pods", "deployment", "deploy", "deployments",
+    "statefulset", "sts", "daemonset", "ds", "job", "cronjob", "cj",
+    "replicaset", "rs", "service", "svc",
+})
+"""Kinds kubectl will read logs from. Used to tell kind/name from namespace/pod."""
+
+
 @tool(
     "get_logs",
     description=(
@@ -1299,6 +1307,23 @@ _DURATION = re.compile(r"^\d+[smhd]$")
 async def get_logs(args: GetLogsArgs, ctx: ToolContext) -> ToolResult:
     context, namespace = await _scope(ctx, args)
     target = _safe_token(args.target, "target")
+
+    # "messaging-squad/messaging-router-abc" is how both operators and models
+    # write a pod, and it is not what kubectl means by a slash: it read the
+    # first segment as a resource kind, reported that no such kind exists, and
+    # ran against whatever namespace the kubeconfig had bound to the context.
+    # The namespace was never passed at all, and nothing said so. Refusing with
+    # the correction is deterministic; guessing which segment is a namespace is
+    # not.
+    if "/" in target:
+        kind = target.split("/", 1)[0].lower()
+        if kind not in _LOG_KINDS:
+            raise ToolError(
+                f"target {target!r} is not kind/name: {kind!r} is not a kind "
+                "kubectl reads logs from. If it is a namespace, pass it as the "
+                "namespace argument and give the pod name alone as target.",
+                code="invalid_arguments",
+            )
     tail = args.tail if args.tail is not None else ctx.settings.kubernetes.log_tail_lines
 
     # --timestamps is not optional here: the time span in the summary is derived
@@ -1328,7 +1353,14 @@ async def get_logs(args: GetLogsArgs, ctx: ToolContext) -> ToolResult:
         container=args.container,
         tool_name="get_logs",
     )
-    record = _require_ok(await _run_one(ctx, command), f"reading logs for {target}")
+    # The scope belongs in the failure text. This tool defaults the namespace
+    # from the kubeconfig when none is given, which is right, but a failure
+    # that does not name the namespace it actually used sends the reader
+    # looking in the namespace they meant instead of the one that was read.
+    record = _require_ok(
+        await _run_one(ctx, command),
+        f"reading logs for {target} in {context}/{namespace}",
+    )
 
     body = record.stdout
     lines = body.splitlines()

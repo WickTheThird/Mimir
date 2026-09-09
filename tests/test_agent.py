@@ -88,7 +88,7 @@ class TestBoundArguments:
 
     def test_a_write_is_bound_to_the_source_repo_and_the_task(self):
         agent, _, _ = _agent([])
-        bound = agent._bind("edit_worktree_file", {"path": "a.py"})
+        bound = agent.bind("edit_worktree_file", {"path": "a.py"})
         assert bound["task"] == "fix-thing"
         assert bound["repo"] == "billing", "worktree tools derive the path from the repo"
 
@@ -96,16 +96,16 @@ class TestBoundArguments:
         """The failure this prevents: editing a file and then reading back the
         version without the edit, which looks exactly like a hallucination."""
         agent, _, _ = _agent([])
-        assert agent._bind("read_file_range", {"path": "a.py"})["repo"] == (
+        assert agent.bind("read_file_range", {"path": "a.py"})["repo"] == (
             "fix-thing-worktree"
         )
-        assert agent._bind("search_repository", {"query": "x"})["repo"] == (
+        assert agent.bind("search_repository", {"query": "x"})["repo"] == (
             "fix-thing-worktree"
         )
 
     def test_a_tool_without_those_fields_is_left_alone(self):
         agent, _, _ = _agent([])
-        assert agent._bind("list_repositories", {"query": "x"}) == {"query": "x"}
+        assert agent.bind("list_repositories", {"query": "x"}) == {"query": "x"}
 
 
 class TestTheLoop:
@@ -165,7 +165,7 @@ class TestTelemetry:
         asyncio.run(_drain(agent))
         assert router.invocations_attempted == 2
         assert len(router.call_log) == router.invocations_attempted
-        assert all(r.purpose == "coding:fix-thing" for r in router.call_log)
+        assert all(r.purpose.startswith("coding:") for r in router.call_log)
 
 
 class TestToolSurface:
@@ -429,3 +429,197 @@ class TestRendering:
             ],
         )
         assert all(len(line) <= 72 for line in self._lines(console))
+
+
+class TestDirectRouting:
+    """Which requests skip the council.
+
+    The asymmetry from the triage module applies: sending an investigation to
+    the retrieval loop under-answers it, so every doubtful case goes to the
+    council.
+    """
+
+    def _kind(self, text):
+        from mimir.graph.triage import triage
+
+        return triage(text).kind.value
+
+    def test_an_instruction_with_a_named_target_is_carried_out(self):
+        assert self._kind(
+            "im curious about -n messaging-squad messaging-whatapp in a dev cluster "
+            "to see the last 10 logs of any of the pods in a cluster that has ch1 in it"
+        ) == "direct"
+        assert self._kind("get the logs for deployment/api in namespace payments") == "direct"
+        assert self._kind("describe deployment/api -n payments") == "direct"
+
+    def test_a_question_about_cause_goes_to_the_council(self):
+        assert self._kind("why is the api pod in payments restarting") == "investigate"
+        assert self._kind("root cause the -n payments api restarts from the logs") == (
+            "investigate"
+        )
+
+    def test_half_an_instruction_is_not_one(self):
+        assert self._kind("check the logs") == "investigate", "no target"
+        assert self._kind("the payments namespace") == "investigate", "no action"
+
+    def test_a_kind_followed_by_any_word_is_not_a_resource_reference(self):
+        """This matched "checkout service. The" in a corpus case about reading
+        supplied logs, which would have routed a reasoning question to the
+        retrieval loop."""
+        assert self._kind(
+            "These logs are from the checkout service. The caller gives up after "
+            "almost exactly 30 seconds every time. Which side gave up first?"
+        ) == "investigate"
+
+
+class TestOpsSurface:
+    def test_the_surface_can_find_read_and_recall(self):
+        from mimir.agent.ops import OPS_TOOLS
+        from mimir.tools.base import load_all_tools
+
+        registry = load_all_tools()
+        assert not [n for n in OPS_TOOLS if registry.get(n) is None]
+        assert "get_logs" in OPS_TOOLS, "the run this was written for never called it"
+        assert "search_memory" in OPS_TOOLS
+
+    def test_listing_every_namespace_is_not_offered(self):
+        """The run this loop replaces listed two hundred namespaces twice while
+        looking for one the operator had already named."""
+        from mimir.agent.ops import OPS_TOOLS
+
+        assert "list_namespaces" not in OPS_TOOLS
+
+    def test_the_operator_context_is_a_default_not_an_override(self):
+        """The opposite of the coding loop. The operator may be asking about a
+        namespace other than the one the prompt is set to, and rewriting the
+        argument would answer a question nobody asked."""
+        from mimir.agent.ops import OpsAgent
+        from mimir.models.state import EnvironmentContext
+        from mimir.tools.base import ToolContext, load_all_tools
+
+        registry = load_all_tools()
+        agent = OpsAgent(
+            router=ScriptedRouter(ScriptedModel([])),
+            registry=registry,
+            tool_context=ToolContext(registry=registry),
+            environment=EnvironmentContext(cluster_context="ctx-a", namespace="ns-a"),
+        )
+        assert agent.bind("get_logs", {"target": "p"})["namespace"] == "ns-a"
+        assert agent.bind("get_logs", {"target": "p", "namespace": "ns-b"})["namespace"] == (
+            "ns-b"
+        )
+
+
+class TestLogTargetForm:
+    """The form both operators and models actually write."""
+
+    def test_namespace_slash_pod_is_refused_with_the_correction(self):
+        """kubectl read the first segment as a resource kind, said no such kind
+        exists, and ran against whatever namespace the kubeconfig had bound to
+        the context. The namespace never arrived and nothing said so."""
+        from mimir.tools.base import ToolContext, load_all_tools
+
+        registry = load_all_tools()
+        result = asyncio.run(
+            registry.invoke(
+                "get_logs",
+                {"target": "messaging-squad/messaging-router-abc", "context": "x"},
+                ToolContext(registry=registry),
+            )
+        )
+        assert not result.ok
+        assert result.error_code == "invalid_arguments"
+        assert "namespace argument" in result.error
+
+    def test_a_real_kind_slash_name_is_still_accepted(self):
+        from mimir.tools.kubernetes import _LOG_KINDS
+
+        assert "deployment" in _LOG_KINDS
+        assert "statefulset" in _LOG_KINDS
+        assert "messaging-squad" not in _LOG_KINDS
+
+
+class TestGrounding:
+    """Names in an answer that were never observed.
+
+    Written from a real run: asked for a workload that does not exist, the
+    model correctly reported its absence and then listed the workloads that
+    were present, and seventeen of those names were invented. They were
+    plausible, matched the namespace's naming convention, and appeared in no
+    tool result.
+    """
+
+    def _check(self, answer, observed, asked=""):
+        from mimir.verify.grounding import check
+
+        return check(answer, observed, asked=asked)
+
+    def test_an_invented_name_is_caught(self):
+        result = self._check(
+            "Present: messaging-router-abc, messaging-squad-internal-api-84.",
+            "workloads: messaging-router-abc, messaging-limiter-xyz",
+        )
+        assert not result.ok
+        assert result.ungrounded == ["messaging-squad-internal-api-84"]
+
+    def test_a_name_the_operator_used_is_not_an_invention(self):
+        """Repeating back a workload the operator named, which turns out not to
+        exist, is not hallucinating at them. Flagging it would train the reader
+        to ignore the warning."""
+        result = self._check(
+            "There is no messaging-whatapp-service here.",
+            "workloads: messaging-router-abc",
+            asked="show me messaging-whatapp-service in messaging-squad",
+        )
+        assert result.ok
+
+    def test_ordinary_english_is_not_an_identifier(self):
+        """A gate that fires on the words this project writes about itself is a
+        gate that gets switched off."""
+        result = self._check(
+            "The check is read-only and fails closed, which is up-to-date behaviour.",
+            "",
+        )
+        assert result.checked == 0
+
+    def test_it_runs_on_every_turn_without_being_asked(self):
+        from mimir.llm.base import ToolCall
+
+        call = ToolCall(name="list_repositories", arguments={})
+        agent, _, _ = _agent([("looking", [call]), ("found repo-alpha-beta-gamma", [])])
+        asyncio.run(_drain(agent))
+        assert agent.outcome.grounding is not None
+        assert agent.outcome.grounding.ungrounded == ["repo-alpha-beta-gamma"]
+
+
+class TestScopeDoesNotDrift:
+    def test_an_omitted_namespace_reuses_the_one_the_turn_was_using(self):
+        """A real run searched three names in messaging-squad, omitted the
+        namespace on the next three calls, and silently searched perfectscale,
+        because that is what the kubeconfig binds to that context."""
+        from mimir.agent.ops import OpsAgent
+        from mimir.tools.base import ToolContext, load_all_tools
+
+        registry = load_all_tools()
+        agent = OpsAgent(
+            router=ScriptedRouter(ScriptedModel([])),
+            registry=registry,
+            tool_context=ToolContext(registry=registry),
+        )
+        first = agent.bind("list_workloads", {"namespace": "messaging-squad"})
+        assert first["namespace"] == "messaging-squad"
+        later = agent.bind("list_workloads", {"name_contains": "whatsapp"})
+        assert later["namespace"] == "messaging-squad", "the scope must not drift"
+
+    def test_a_stated_namespace_still_wins(self):
+        from mimir.agent.ops import OpsAgent
+        from mimir.tools.base import ToolContext, load_all_tools
+
+        registry = load_all_tools()
+        agent = OpsAgent(
+            router=ScriptedRouter(ScriptedModel([])),
+            registry=registry,
+            tool_context=ToolContext(registry=registry),
+        )
+        agent.bind("list_workloads", {"namespace": "a"})
+        assert agent.bind("list_workloads", {"namespace": "b"})["namespace"] == "b"
