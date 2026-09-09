@@ -1,0 +1,320 @@
+"""Measurements of the runtime, not of MIMIR.
+
+Three things were asserted during a long session and none of them was measured
+properly: that MIMIR pays a full prefill on every step of a loop, that tool call
+adherence collapses past a schema size, and that sampling more than once would
+help. The first two were assumed from a single observation at temperature zero,
+which is exactly the standard this project refuses to accept from anyone else.
+
+So they are probes, replicated, and they report what they did not control. Each
+one answers a question that changes what to build next, and each is cheap
+enough that there is no excuse for having guessed.
+"""
+
+from __future__ import annotations
+
+import json
+import statistics
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+import httpx
+
+from mimir.config import Settings, get_settings
+from mimir.logging import get_logger
+
+log = get_logger(__name__)
+
+DEFAULT_TIMEOUT = 600.0
+
+
+@dataclass
+class Sample:
+    label: str
+    prompt_tokens_sent: int
+    prompt_tokens_evaluated: int
+    prompt_eval_s: float
+    output_tokens: int
+    total_s: float
+    tool_calls: int = 0
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def cached_fraction(self) -> float:
+        """How much of the prompt the runtime did not have to evaluate."""
+        if self.prompt_tokens_sent <= 0:
+            return 0.0
+        skipped = max(0, self.prompt_tokens_sent - self.prompt_tokens_evaluated)
+        return round(skipped / self.prompt_tokens_sent, 3)
+
+
+@dataclass
+class ProbeResult:
+    name: str
+    alias: str
+    model: str
+    replicates: int
+    samples: list[Sample] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    uncontrolled: list[str] = field(default_factory=list)
+    """What could have moved the numbers and was not held fixed."""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "probe": self.name,
+            "alias": self.alias,
+            "model": self.model,
+            "replicates": self.replicates,
+            "samples": [vars(s) for s in self.samples],
+            "notes": self.notes,
+            "uncontrolled": self.uncontrolled,
+        }
+
+
+def _profile(settings: Settings, alias: str):
+    profile = settings.models.profiles.get(alias)
+    if profile is None:
+        raise KeyError(f"unknown model alias {alias!r}")
+    return profile
+
+
+def _base(profile) -> str:
+    return str(profile.base_url).rstrip("/").removesuffix("/v1")
+
+
+def _chat(
+    profile,
+    messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    num_predict: int = 8,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """One non-streaming call, through Ollama's native API for its timings.
+
+    The OpenAI-compatible surface does not report how much of the prompt was
+    actually evaluated, which is the number the caching probe exists to read.
+    """
+    payload: dict[str, Any] = {
+        "model": profile.model,
+        "messages": messages,
+        "stream": False,
+        "options": {"num_predict": num_predict, "temperature": 0},
+    }
+    if tools:
+        payload["tools"] = tools
+    started = time.time()
+    response = httpx.post(f"{_base(profile)}/api/chat", json=payload, timeout=timeout)
+    response.raise_for_status()
+    body = response.json()
+    body["_wall_s"] = time.time() - started
+    return body
+
+
+def _sample(label: str, body: dict[str, Any], sent: int) -> Sample:
+    message = body.get("message") or {}
+    return Sample(
+        label=label,
+        prompt_tokens_sent=sent,
+        prompt_tokens_evaluated=int(body.get("prompt_eval_count") or 0),
+        prompt_eval_s=round((body.get("prompt_eval_duration") or 0) / 1e9, 3),
+        output_tokens=int(body.get("eval_count") or 0),
+        total_s=round(body.get("_wall_s", 0.0), 3),
+        tool_calls=len(message.get("tool_calls") or []),
+    )
+
+
+def _estimate_tokens(messages: list[dict[str, Any]]) -> int:
+    """Four characters to a token, which is close enough to read a ratio."""
+    return sum(len(str(m.get("content", ""))) for m in messages) // 4
+
+
+# ---------------------------------------------------------------------------
+# 1. Does a growing conversation re-evaluate its whole prefix
+# ---------------------------------------------------------------------------
+
+
+def prefix_cache(
+    alias: str = "deep",
+    *,
+    steps: int = 4,
+    replicates: int = 3,
+    settings: Settings | None = None,
+) -> ProbeResult:
+    """Whether each step of a loop pays for the whole prompt or only the delta.
+
+    Every cost estimate in this project assumes the former. If the runtime
+    reuses the key-value cache across a shared prefix, a twelve step loop costs
+    one prefill and eleven small ones, and the case for shortening loops is
+    much weaker than the case for keeping them on one conversation.
+
+    Read ``prompt_tokens_evaluated`` against ``prompt_tokens_sent``. A runtime
+    with no prefix cache evaluates everything, every time.
+    """
+    settings = settings or get_settings()
+    profile = _profile(settings, alias)
+    result = ProbeResult(
+        name="prefix_cache", alias=alias, model=profile.model, replicates=replicates
+    )
+    result.uncontrolled = [
+        "other processes using the same runtime",
+        "whether the model was already resident",
+    ]
+
+    filler = (
+        "The queue consumer catches TransientError and re-raises immediately. "
+        "Retry policy is referenced in three places. "
+    ) * 60
+
+    for replicate in range(replicates):
+        # A unique prefix per replicate, or the second replicate reads the
+        # first one's cache and every step looks warm. The first measurement of
+        # this reported a cold prefill of 0.01s for exactly that reason.
+        nonce = f"session {time.time_ns()}-{replicate}"
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": f"You are a terse assistant. {nonce}. {filler}"},
+            {"role": "user", "content": "Reply with the single word ready."},
+        ]
+        for step in range(1, steps + 1):
+            sent = _estimate_tokens(messages)
+            body = _chat(profile, messages)
+            sample = _sample(f"r{replicate}-step{step}", body, sent)
+            sample.extra["step"] = step
+            sample.extra["replicate"] = replicate
+            result.samples.append(sample)
+            # Grow the conversation the way a tool loop does: append the
+            # assistant turn and a short result, keeping the whole prefix.
+            messages.append({"role": "assistant",
+                             "content": (body.get("message") or {}).get("content", "ok")})
+            messages.append({"role": "user", "content": f"Step {step} done. Continue."})
+
+    # Time, not the token count. prompt_eval_count reports the size of the
+    # prompt rather than how much of it was computed, so it stays flat while a
+    # cache is doing all the work. The duration is the only honest signal here.
+    by_step: dict[int, list[Sample]] = {}
+    for sample in result.samples:
+        by_step.setdefault(int(sample.extra["step"]), []).append(sample)
+    for step in sorted(by_step):
+        samples = by_step[step]
+        seconds = statistics.median(s.prompt_eval_s for s in samples)
+        tokens = statistics.median(s.prompt_tokens_evaluated for s in samples)
+        result.notes.append(
+            f"step {step}: {seconds:.2f}s prefill for {tokens:.0f} prompt tokens "
+            f"(median of {len(samples)})"
+        )
+
+    cold = [s.prompt_eval_s for s in result.samples if int(s.extra["step"]) == 1]
+    warm = [s.prompt_eval_s for s in result.samples if int(s.extra["step"]) > 1]
+    if cold and warm:
+        first, rest = statistics.median(cold), statistics.median(warm)
+        ratio = first / rest if rest > 0 else float("inf")
+        result.notes.append(
+            f"first step {first:.2f}s, later steps {rest:.2f}s: {ratio:.0f}x cheaper"
+        )
+        result.notes.append(
+            "the prefix is cached, so a long loop costs one prefill and cheap "
+            "deltas. Shorten the first prompt, not the loop."
+            if ratio >= 3
+            else "every step pays a full prefill; shorter loops matter."
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# 2. Does tool calling collapse past a schema size
+# ---------------------------------------------------------------------------
+
+_PROBE_PROMPTS = (
+    "get the last 10 log lines from the api pods in namespace payments",
+    "list the workloads in namespace payments on the prod cluster",
+    "show the warning events in namespace checkout",
+    "describe the api deployment in namespace payments",
+    "how many pods restarted in namespace payments in the last hour",
+)
+
+
+def _padded_schemas(base: list[dict[str, Any]], target_chars: int) -> list[dict[str, Any]]:
+    """Grow a tool surface to a size by adding plausible extra tools.
+
+    Padding with copies of a real tool rather than with junk: the question is
+    whether volume alone breaks tool calling, so the added schemas have to be
+    the kind of thing a real surface contains.
+    """
+    schemas = [json.loads(json.dumps(s)) for s in base]
+    index = 0
+    while len(json.dumps(schemas)) < target_chars:
+        clone = json.loads(json.dumps(base[index % len(base)]))
+        clone["function"]["name"] = f"{clone['function']['name']}_variant_{index}"
+        schemas.append(clone)
+        index += 1
+        if index > 200:  # pragma: no cover - defensive
+            break
+    return schemas
+
+
+def tool_adherence(
+    alias: str = "deep",
+    *,
+    sizes: tuple[int, ...] = (6_000, 9_000, 12_000, 15_000),
+    replicates: int = 3,
+    settings: Settings | None = None,
+) -> ProbeResult:
+    """Fraction of prompts that produce a tool call, against schema volume.
+
+    The cliff this measures was found once, on one prompt, at temperature zero,
+    and then designed around. Five prompts and three replicates is still small,
+    but it is the difference between a measurement and an anecdote.
+    """
+    from mimir.agent.ops import OPS_TOOLS
+    from mimir.agent.prompt import system_prompt
+    from mimir.tools.base import load_all_tools
+
+    settings = settings or get_settings()
+    profile = _profile(settings, alias)
+    registry = load_all_tools()
+    base = [
+        spec.openai_schema()
+        for spec in (registry.get(name) for name in OPS_TOOLS)
+        if spec is not None
+    ]
+
+    result = ProbeResult(
+        name="tool_adherence", alias=alias, model=profile.model, replicates=replicates
+    )
+    result.uncontrolled = [
+        "the wording of the probe prompts",
+        "padding tools are near-duplicates of real ones",
+    ]
+
+    system = system_prompt("/tmp/probe")
+    for size in sizes:
+        schemas = _padded_schemas(base, size)
+        actual = len(json.dumps(schemas))
+        called = 0
+        total = 0
+        for replicate in range(replicates):
+            for prompt in _PROBE_PROMPTS:
+                body = _chat(
+                    profile,
+                    [{"role": "system", "content": system},
+                     {"role": "user", "content": prompt}],
+                    tools=schemas,
+                    num_predict=64,
+                )
+                sample = _sample(f"{actual}c-r{replicate}", body, _estimate_tokens([]))
+                sample.extra.update({"schema_chars": actual, "tools": len(schemas),
+                                     "prompt": prompt})
+                result.samples.append(sample)
+                called += 1 if sample.tool_calls else 0
+                total += 1
+        result.notes.append(
+            f"{actual:,} chars / {len(schemas)} tools: "
+            f"{called}/{total} prompts produced a tool call ({called / total:.0%})"
+        )
+    return result
+
+
+PROBES = {"prefix_cache": prefix_cache, "tool_adherence": tool_adherence}
+
+__all__ = ["PROBES", "ProbeResult", "Sample", "prefix_cache", "tool_adherence"]

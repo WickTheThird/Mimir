@@ -58,9 +58,16 @@ CODING_TOOLS: tuple[str, ...] = (
 """The coding surface, named rather than derived from a capability.
 
 Thirteen tools, against the seventy six registered. The council was offered
-thirty five at one point and its prompts more than doubled; the tools it did
-not need still cost their schema on every call and still invited a worse
-choice. A loop that runs many short steps pays that on every step.
+thirty five at one point and its prompts more than doubled.
+
+The cost argument for keeping this small turned out to be wrong and is worth
+recording as wrong: the runtime caches the prefix, so the schema is paid once
+per conversation rather than on every step. Measured at eighteen times cheaper
+after the first step.
+
+The reason that survives measurement is adherence, not cost. Past a schema
+volume this model stops emitting tool calls at all and writes them into its
+prose instead, and unneeded tools still invite a worse choice.
 """
 
 _BOUND = ("task", "repo")
