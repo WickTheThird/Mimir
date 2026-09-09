@@ -274,3 +274,35 @@ Model cases are expensive in wall clock and in heat. Twenty cases at roughly
 ninety seconds each is half an hour of sustained inference, and a full matrix
 multiplies that by the number of combinations. Run the deterministic suite
 freely; schedule the model suite.
+
+
+## Probes
+
+`mimir eval probe <name>` measures the runtime rather than MIMIR. Each answers
+one question that changes what to build next, and each reports what it did not
+control.
+
+**prefix_cache** asks whether every step of a loop pays for the whole prompt.
+It does not. Measured over three cold starts: a first step costs 1.91s of
+prefill and later steps in the same conversation cost 0.10s, eighteen times
+less. A twelve step loop is one prefill and eleven cheap deltas. This
+falsified an assumption written into two modules, and both were corrected.
+
+Two traps it has to avoid. `prompt_eval_count` reports the size of the prompt
+rather than how much was computed, so it stays flat while a cache does the
+work; only the duration is honest. And every replicate needs a unique prefix,
+or the second one reads the first one's cache and reports a cold prefill of
+0.01s.
+
+**sampling_headroom** asks whether best-of-k could help, from replicates
+already stored. It calls no model. Across twelve runs of the 52 case suite, 39
+cases always pass, 13 are flaky and none fails structurally, so pass@1 0.873
+rises to pass@3 0.944 and pass@5 0.964. That is the ceiling a perfect selector
+reaches, not a promise: a real selector is the deterministic gate, and it gets
+there only to the extent it never accepts a wrong answer.
+
+**tool_adherence** asks whether tool calling degrades with schema volume. Five
+prompts at several surface sizes, replicated. The pairing matters more than it
+looks: an early version used the coding system prompt with cluster tools and
+cluster questions and measured that mismatch instead, reporting a flat 20%
+across every size.

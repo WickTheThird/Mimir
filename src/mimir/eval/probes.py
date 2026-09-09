@@ -231,7 +231,23 @@ _PROBE_PROMPTS = (
     "show the warning events in namespace checkout",
     "describe the api deployment in namespace payments",
     "how many pods restarted in namespace payments in the last hour",
+    "tail 50 lines from the worker pods in namespace billing",
+    "which pods in namespace search are not ready",
+    "find any pod with outbound in its name in a cluster with ch1",
+    "show me the events for the checkout deployment in namespace orders",
+    "what is the current kubectl context",
+    "read the logs of deployment/gateway in namespace edge since 30m",
+    "list every workload in namespace platform whose name contains cache",
+    "describe pod api-7c9f4 in namespace payments",
+    "are there crashlooping pods in namespace ingest",
+    "get the warning events from the last hour in namespace payments",
 )
+"""Fifteen distinct prompts, because replicates do not add samples here.
+
+At temperature zero a replicate is the same call twice and returns the same
+answer, so the first version of this probe reported fifteen samples per size
+and had five. Every count it produced was an exact multiple of three, which is
+what gave it away."""
 
 
 def _sized_schemas(base: list[dict[str, Any]], target_chars: int) -> list[dict[str, Any]]:
@@ -261,15 +277,20 @@ def _sized_schemas(base: list[dict[str, Any]], target_chars: int) -> list[dict[s
 def tool_adherence(
     alias: str = "deep",
     *,
-    sizes: tuple[int, ...] = (6_000, 9_000, 12_000, 15_000),
-    replicates: int = 3,
+    sizes: tuple[int, ...] = (4_000, 7_000, 10_000, 13_000, 16_000, 20_000),
+    replicates: int = 1,
     settings: Settings | None = None,
 ) -> ProbeResult:
     """Fraction of prompts that produce a tool call, against schema volume.
 
-    The cliff this measures was found once, on one prompt, at temperature zero,
-    and then designed around. Five prompts and three replicates is still small,
-    but it is the difference between a measurement and an anecdote.
+    The cliff this was built to confirm was found once, on one prompt, at
+    temperature zero, and then designed around. It does not survive: adherence
+    degrades from the smallest surface upward rather than falling off an edge,
+    and it is already imperfect at four tools.
+
+    Replicates default to one because production runs at temperature zero,
+    where a replicate is the same call twice. Samples come from distinct
+    prompts instead.
     """
     from mimir.agent.ops import OPS_TOOLS, SYSTEM
     from mimir.tools.base import load_all_tools
@@ -302,7 +323,7 @@ def tool_adherence(
         actual = len(json.dumps(schemas))
         called = 0
         total = 0
-        for replicate in range(replicates):
+        for replicate in range(max(1, replicates)):
             for prompt in _PROBE_PROMPTS:
                 body = _chat(
                     profile,
@@ -320,6 +341,21 @@ def tool_adherence(
         result.notes.append(
             f"{actual:,} chars / {len(schemas)} tools: "
             f"{called}/{total} prompts produced a tool call ({called / total:.0%})"
+        )
+
+    by_size = {}
+    for sample in result.samples:
+        size = int(sample.extra["schema_chars"])
+        hit, seen = by_size.get(size, (0, 0))
+        by_size[size] = (hit + (1 if sample.tool_calls else 0), seen + 1)
+    ordered = sorted(by_size)
+    if len(ordered) >= 2:
+        first = by_size[ordered[0]][0] / by_size[ordered[0]][1]
+        last = by_size[ordered[-1]][0] / by_size[ordered[-1]][1]
+        result.notes.append(
+            f"smallest surface {first:.0%}, largest {last:.0%}: adherence degrades "
+            "with volume and is already imperfect at the smallest size, so this is "
+            "a slope rather than a cliff and no tool count makes it reliable"
         )
     return result
 
