@@ -846,3 +846,68 @@ class TestGroundTruthIsEverythingRead:
         assert check("messaging-ghost-pod is running", "nothing here").ungrounded == [
             "messaging-ghost-pod"
         ]
+
+
+class TestEditToleratesHowTheFileWasShown:
+    """The first real coding run spent eleven steps failing the same edit.
+
+    read_file_range returns "   312  def all(self):" and edit_worktree_file
+    demanded byte-exact text, so the model had to strip a six-space-padded line
+    number off every line and reproduce the indentation underneath perfectly. A
+    30B model does not. The reading tool and the editing tool disagreed about
+    what a line looks like, and that was mine, not the model's.
+    """
+
+    HAYSTACK = (
+        "class A:\n"
+        "    def all(self):\n"
+        "        return 1\n"
+        "\n"
+        "    def other(self):\n"
+        "        pass\n"
+    )
+
+    def _find(self, needle):
+        from mimir.tools.code import find_span
+
+        return find_span(self.HAYSTACK, needle)
+
+    def test_exact_text_still_matches_exactly(self):
+        found = self._find("    def all(self):\n        return 1")
+        assert found is not None and found[1] == "exact"
+
+    def test_text_copied_with_the_line_number_gutter_matches(self):
+        found = self._find("   312      def all(self):\n   313          return 1")
+        assert found is not None
+        assert "def all(self):" in found[0]
+
+    def test_text_whose_indentation_drifted_matches(self):
+        found = self._find("def all(self):\nreturn 1")
+        assert found is not None
+        assert found[0].startswith("    def all(self):")
+
+    def test_text_that_is_not_there_still_fails(self):
+        assert self._find("def nope(self):\n    return 0") is None
+
+    def test_an_ambiguous_loose_match_is_refused(self):
+        """Two candidates means the model does not know which it means, and
+        resolving it here would edit the wrong one."""
+        from mimir.tools.code import find_span
+
+        haystack = "def a():\n    pass\n\ndef b():\n    pass\n"
+        assert find_span(haystack, "pass") is None
+
+    def test_the_gutter_is_only_stripped_when_every_line_has_one(self):
+        """A genuine line of code beginning with digits is left alone."""
+        from mimir.tools.code import strip_line_numbers
+
+        assert strip_line_numbers("404  not found\nx = 1") == "404  not found\nx = 1"
+
+    def test_a_failed_match_says_what_is_actually_there(self):
+        """"does not appear" told the model nothing it could act on, and it
+        retried the same edit with cosmetic changes four times."""
+        from mimir.tools.code import _nearby
+
+        message = _nearby(self.HAYSTACK, "    def all(self):\n        return 2")
+        assert "Line 2" in message
+        assert "def all(self):" in message

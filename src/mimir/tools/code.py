@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -77,6 +78,105 @@ def _verify(ctx: ToolContext, root: Path, relative: str, *, updated: str,
     except Exception:  # noqa: BLE001 - a broken checker must not eat the edit
         log.warning("change_verification_failed", path=relative)
         return None
+
+
+_LINE_PREFIX = re.compile(r"^\s*\d+\s{2}", re.MULTILINE)
+
+
+def strip_line_numbers(text: str) -> str:
+    """Remove the gutter read_file_range puts on every line.
+
+    The reading tool returns "   312  def all(self):" and the editing tool
+    demanded byte-exact text, so the model had to strip six-space-padded line
+    numbers off every line and reproduce the indentation underneath perfectly.
+    A 30B model does not, and the first real coding run spent eleven steps
+    failing the same edit and changed nothing.
+
+    Only stripped when every non-empty line carries a prefix, so a genuine line
+    of code that happens to begin with digits is left alone.
+    """
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) >= 2 and all(_LINE_PREFIX.match(line) for line in lines):
+        return "\n".join(_LINE_PREFIX.sub("", line) for line in text.splitlines())
+    return text
+
+
+def find_span(haystack: str, needle: str) -> tuple[str, str] | None:
+    """Locate ``needle`` in ``haystack``, tolerating how it was transcribed.
+
+    Exact first. Then the same text with the reading tool's line numbers
+    removed. Then ignoring leading whitespace on each line, which is where a
+    model reproducing an indented block most often differs, and only when that
+    identifies exactly one place: an ambiguous loose match is the model not
+    knowing which occurrence it means, and resolving it here would edit the
+    wrong one.
+
+    Returns the text to replace as it actually appears, and how it was found.
+    """
+    if haystack.count(needle) == 1:
+        return needle, "exact"
+
+    stripped = strip_line_numbers(needle)
+    if stripped != needle and haystack.count(stripped) == 1:
+        return stripped, "line numbers removed"
+
+    wanted = [line.strip() for line in stripped.splitlines() if line.strip()]
+    if not wanted:
+        return None
+    lines = haystack.splitlines(keepends=True)
+    bare = [line.strip() for line in lines]
+    matches: list[tuple[int, int]] = []
+    for start in range(len(lines)):
+        cursor, index = start, 0
+        while cursor < len(lines) and index < len(wanted):
+            if not bare[cursor]:
+                cursor += 1
+                continue
+            if bare[cursor] != wanted[index]:
+                break
+            cursor += 1
+            index += 1
+        if index == len(wanted):
+            matches.append((start, cursor))
+    if len(matches) == 1:
+        start, end = matches[0]
+        return "".join(lines[start:end]), "indentation ignored"
+    return None
+
+
+def _reindent(actual: str, replacement: str) -> str:
+    """Shift the replacement to the indentation the file actually uses."""
+    def leading(text: str) -> str:
+        for line in text.splitlines():
+            if line.strip():
+                return line[: len(line) - len(line.lstrip())]
+        return ""
+
+    have, want = leading(strip_line_numbers(replacement)), leading(actual)
+    if have == want:
+        return replacement
+    out = []
+    for line in strip_line_numbers(replacement).splitlines():
+        out.append(want + line[len(have):] if line.startswith(have) else line)
+    return "\n".join(out)
+
+
+def _nearby(original: str, wanted: str) -> str:
+    """Show what is actually there, so a retry has something to aim at.
+
+    "does not appear" told the model nothing it could act on, and it retried
+    the same edit with cosmetic changes four times."""
+    first = next((line.strip() for line in strip_line_numbers(wanted).splitlines()
+                  if line.strip()), "")
+    if not first:
+        return "Read the file again."
+    for number, line in enumerate(original.splitlines(), start=1):
+        if first[:40] and first[:40] in line:
+            return (
+                f"Line {number} is {line.strip()[:100]!r}, which is close. "
+                "Copy the text from the file exactly, without line numbers."
+            )
+    return "Read the file again: it may have changed since you last saw it."
 
 
 def _baseline(root: Path, relative: str):
@@ -320,12 +420,6 @@ async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
 
         original = target.read_text(encoding="utf-8", errors="replace")
         occurrences = original.count(args.old_string)
-        if occurrences == 0:
-            raise ToolError(
-                f"the text to replace does not appear in {args.path}. Read the file "
-                "again: it may have changed, or the indentation may differ.",
-                code="no_match",
-            )
         if occurrences > 1:
             raise ToolError(
                 f"the text to replace appears {occurrences} times in {args.path}. "
@@ -333,7 +427,22 @@ async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
                 code="ambiguous_match",
             )
 
-        updated = original.replace(args.old_string, args.new_string, 1)
+        located = find_span(original, args.old_string)
+        if located is None:
+            raise ToolError(
+                f"the text to replace does not appear in {args.path}. "
+                + _nearby(original, args.old_string),
+                code="no_match",
+            )
+        actual, how = located
+        new_text = args.new_string
+        if how == "indentation ignored":
+            # Re-indent the replacement to the indentation actually in the
+            # file, or a matched-but-differently-indented block would be
+            # replaced with text at the model's guessed indentation.
+            new_text = _reindent(actual, args.new_string)
+
+        updated = original.replace(actual, new_text, 1)
         if len(updated.encode()) > MAX_BYTES:
             raise ToolError(f"result exceeds {MAX_BYTES} bytes", code="too_large")
         baseline = _baseline(wt.root, args.path)
@@ -347,9 +456,9 @@ async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
                 code="invalid_change",
             )
 
-        before = original[: original.index(args.old_string)].count("\n") + 1
-        removed = args.old_string.count("\n") + 1
-        added = args.new_string.count("\n") + 1
+        before = original[: original.index(actual)].count("\n") + 1
+        removed = actual.count("\n") + 1
+        added = new_text.count("\n") + 1
         return _with_report(ToolResult(
             tool="edit_worktree_file",
             summary=(
@@ -359,8 +468,9 @@ async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
                 "path": args.path,
                 "branch": wt.branch,
                 "line": before,
-                "old_string": args.old_string,
-                "new_string": args.new_string,
+                "old_string": actual,
+                "new_string": new_text,
+                "matched_by": how,
             },
             evidence=[
                 Evidence(
@@ -368,7 +478,7 @@ async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
                     kind=EvidenceKind.OBSERVED,
                     source_type=SourceType.REPOSITORY,
                     source_id=args.path,
-                    excerpt=args.new_string[:400],
+                    excerpt=new_text[:400],
                     collected_by="edit_worktree_file",
                     citations=[Citation(source_type=SourceType.REPOSITORY,
                                         locator=f"{args.path}:{before}", path=args.path)],
