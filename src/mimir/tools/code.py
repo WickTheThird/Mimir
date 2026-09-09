@@ -161,6 +161,22 @@ def _reindent(actual: str, replacement: str) -> str:
     return "\n".join(out)
 
 
+def _context_around(original: str, line: int, span: int = 4) -> str:
+    """Show the real lines around a position, with their real indentation.
+
+    A revert that says only "does not parse" gives the model nothing to correct
+    against, and it retries the same shape. Showing the file is what lets it
+    see the indentation it got wrong.
+    """
+    lines = original.splitlines()
+    start = max(0, line - span)
+    shown = [
+        f"{number:>5}  {text}"
+        for number, text in enumerate(lines[start : line + span], start=start + 1)
+    ]
+    return "The file there reads:\n" + "\n".join(shown)
+
+
 def _nearby(original: str, wanted: str) -> str:
     """Show what is actually there, so a retry has something to aim at.
 
@@ -452,7 +468,8 @@ async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
         if report is not None and report.reverted:
             raise ToolError(
                 f"that edit left {args.path} unparseable "
-                f"({report.violations[0].title}). The file was restored.",
+                f"({report.violations[0].title}). The file was restored. "
+                + _context_around(original, original[: original.index(actual)].count("\n") + 1),
                 code="invalid_change",
             )
 
@@ -482,6 +499,117 @@ async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
                     collected_by="edit_worktree_file",
                     citations=[Citation(source_type=SourceType.REPOSITORY,
                                         locator=f"{args.path}:{before}", path=args.path)],
+                )
+            ],
+        ), report)
+
+    return await asyncio.to_thread(work)
+
+
+class InsertInput(BaseModel):
+    task: str
+    path: str = Field(description="Path relative to the worktree root.")
+    after_line: int = Field(
+        ge=0,
+        description="Insert after this line number, as shown by read_file_range. 0 for the top.",
+    )
+    content: str = Field(description="The lines to insert, indented as they should appear.")
+    repo: str | None = None
+
+
+@tool(
+    "insert_worktree_lines",
+    description=(
+        "Insert new lines into a file at a line number, without reproducing any existing "
+        "code. Use this to add a function, method, import or block. Line numbers come "
+        "from read_file_range. Prefer this over edit_worktree_file when you are adding "
+        "rather than changing."
+    ),
+    capability=Capability.CODE,
+    risk=RiskClass.R1,
+    mutating=True,
+    tags=("repository", "worktree", "write"),
+)
+async def insert_worktree_lines(args: InsertInput, ctx: ToolContext) -> ToolResult:
+    """Add lines at a position, rather than by matching what is already there.
+
+    Both edit failures in the first real coding runs were about reproducing
+    existing text: first its line-number gutter, then its indentation. Adding a
+    method needs neither. The line number is already in front of the model,
+    because that is how the file was shown to it, and the only thing it has to
+    get right is the code it is actually writing.
+
+    The syntax gate still runs, so an insert at the wrong depth is reverted
+    rather than left in place.
+    """
+    root = await _repo_root(ctx, args.repo)
+
+    def work() -> ToolResult:
+        manager = _manager(ctx)
+        try:
+            wt = manager.find(root, args.task)
+            target = resolve_inside(wt.root, args.path)
+        except WorktreeError as exc:
+            raise _wrap(exc) from exc
+        if not target.is_file():
+            raise ToolError(
+                f"{args.path} does not exist in the worktree. "
+                "Use write_worktree_file to create it.",
+                code="not_found",
+            )
+
+        original = target.read_text(encoding="utf-8", errors="replace")
+        lines = original.splitlines(keepends=True)
+        if args.after_line > len(lines):
+            raise ToolError(
+                f"{args.path} has {len(lines)} lines; cannot insert after line "
+                f"{args.after_line}.",
+                code="invalid_arguments",
+            )
+
+        body = strip_line_numbers(args.content)
+        if not body.endswith("\n"):
+            body += "\n"
+        # A blank line before an inserted block when it follows code, because
+        # every style this is likely to meet wants one and the model routinely
+        # omits it.
+        preceding = lines[args.after_line - 1] if args.after_line else ""
+        if preceding.strip() and not body.startswith("\n"):
+            body = "\n" + body
+
+        updated = "".join(lines[: args.after_line]) + body + "".join(lines[args.after_line:])
+        if len(updated.encode()) > MAX_BYTES:
+            raise ToolError(f"result exceeds {MAX_BYTES} bytes", code="too_large")
+
+        baseline = _baseline(wt.root, args.path)
+        target.write_text(updated, encoding="utf-8")
+        report = _verify(ctx, wt.root, args.path, updated=updated,
+                         original=original, baseline=baseline)
+        if report is not None and report.reverted:
+            raise ToolError(
+                f"inserting there left {args.path} unparseable "
+                f"({report.violations[0].title}). "
+                + _context_around(original, args.after_line),
+                code="invalid_change",
+            )
+
+        added = body.count("\n")
+        return _with_report(ToolResult(
+            tool="insert_worktree_lines",
+            summary=f"{args.path}: {added} line(s) inserted after line {args.after_line}",
+            data={"path": args.path, "branch": wt.branch, "line": args.after_line + 1,
+                  "old_string": "", "new_string": body},
+            evidence=[
+                Evidence(
+                    claim=f"inserted {added} line(s) into {args.path}",
+                    kind=EvidenceKind.OBSERVED,
+                    source_type=SourceType.REPOSITORY,
+                    source_id=args.path,
+                    excerpt=body[:400],
+                    collected_by="insert_worktree_lines",
+                    citations=[Citation(source_type=SourceType.REPOSITORY,
+                                        locator=f"{args.path}:{args.after_line + 1}",
+                                        path=args.path)],
                 )
             ],
         ), report)
@@ -624,6 +752,7 @@ __all__ = [
     "diff_task_worktree",
     "discard_task_worktree",
     "edit_worktree_file",
+    "insert_worktree_lines",
     "list_task_worktrees",
     "run_worktree_tests",
     "write_worktree_file",

@@ -40,13 +40,12 @@ CODING_TOOLS: tuple[str, ...] = (
     "search_repository",
     "read_file_range",
     "locate_tests",
-    "inspect_git_history",
     # resolve, rather than guess
     "lsp_definition",
     "lsp_references",
-    "lsp_symbols",
     "lsp_diagnostics",
     # change
+    "insert_worktree_lines",
     "edit_worktree_file",
     "write_worktree_file",
     # verify
@@ -57,7 +56,14 @@ CODING_TOOLS: tuple[str, ...] = (
 )
 """The coding surface, named rather than derived from a capability.
 
-Thirteen tools, against the seventy six registered. The council was offered
+Twelve tools, against the seventy six registered.
+
+insert_worktree_lines was added and two lookup tools removed to pay for it,
+because adherence falls with schema volume and the surface must not grow. Both
+edit failures in the first real coding runs were about reproducing existing
+text, first its line-number gutter and then its indentation; inserting at a
+line number needs neither. inspect_git_history and lsp_symbols went, being the
+two whose questions read_file_range and search_repository already answer. The council was offered
 thirty five at one point and its prompts more than doubled.
 
 The cost argument for keeping this small turned out to be wrong and is worth
