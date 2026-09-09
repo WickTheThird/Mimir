@@ -77,3 +77,24 @@ class TestParsing:
     def test_what_the_model_says_reaches_the_operator(self):
         step = parse_step('{"say": "looking in payments", "tool": "answer"}')
         assert step.say == "looking in payments"
+
+
+class TestFinishing:
+    def test_the_answer_branch_says_it_is_how_you_finish(self):
+        """Under a constrained decoder the model cannot wander into prose to
+        signal it is done, so the only way it learns to stop is the schema.
+        Without this it retrieved what was asked for and then repeated the same
+        successful call six times until the step budget ran out."""
+        schema = build_schema(_specs("get_logs"))
+        answer = next(
+            b for b in schema["anyOf"] if b["properties"]["tool"]["const"] == ANSWER
+        )
+        assert "Finish" in answer["description"]
+        assert "answer" in answer["properties"]["say"]["description"].lower()
+
+    def test_a_tool_branch_says_it_continues(self):
+        schema = build_schema(_specs("get_logs"))
+        branch = next(
+            b for b in schema["anyOf"] if b["properties"]["tool"]["const"] == "get_logs"
+        )
+        assert "Call get_logs" in branch["description"]

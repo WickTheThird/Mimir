@@ -927,3 +927,42 @@ class TestEditToleratesHowTheFileWasShown:
         message = _nearby(self.HAYSTACK, "    def all(self):\n        return 2")
         assert "Line 2" in message
         assert "def all(self):" in message
+
+
+class TestRepeatedCallsEndTheTurn:
+    """A model that runs the same call again has stopped making progress, and
+    under a constrained decoder it cannot wander into prose to say so."""
+
+    def _call(self):
+        from mimir.llm.base import ToolCall
+
+        return ToolCall(name="list_repositories", arguments={})
+
+    def test_the_same_call_twice_is_marked_as_a_repeat(self):
+        agent, _, _ = _agent([("x", [self._call()]), ("x", [self._call()]), ("done", [])])
+        events = asyncio.run(_drain(agent))
+        ends = [e for e in events if e.type is AgentEventType.TOOL_END]
+        assert ends[0].extra_repeat is False
+        assert ends[1].extra_repeat is True
+
+    def test_three_repeats_end_the_turn(self):
+        """Rather than burning the whole step budget on the same answer."""
+        agent, _, _ = _agent([("x", [self._call()])] * 10)
+        events = asyncio.run(_drain(agent))
+        assert agent.outcome.stopped == "repeating"
+        assert events[-1].type is AgentEventType.DONE
+        assert agent.outcome.steps < agent.max_steps
+
+    def test_the_model_is_told_the_result_was_the_same(self):
+        agent, _, _ = _agent([("x", [self._call()]), ("x", [self._call()]), ("done", [])])
+        asyncio.run(_drain(agent))
+        tool_messages = [m.content for m in agent.messages if m.role.value == "tool"]
+        assert any("same call you already made" in c for c in tool_messages)
+
+    def test_a_turn_starts_with_nothing_seen(self):
+        agent, _, _ = _agent([("x", [self._call()]), ("done", [])])
+        asyncio.run(_drain(agent, "first"))
+        asyncio.run(_drain(agent, "second"))
+        ends = [e for e in asyncio.run(_drain(agent, "third"))
+                if e.type is AgentEventType.TOOL_END]
+        assert all(not e.extra_repeat for e in ends)

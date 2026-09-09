@@ -43,6 +43,8 @@ class AgentEvent:
     result: ToolResult | None = None
     elapsed_s: float = 0.0
     error: str = ""
+    extra_repeat: bool = False
+    """Whether this call had already been made, identically, this turn."""
 
     @property
     def timeline(self) -> TimelineEntry | None:

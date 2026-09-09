@@ -81,6 +81,35 @@ class StructuredOutputError(ModelError):
         self.raw = raw
 
 
+def _native_messages(messages: Sequence[LLMMessage]) -> list[dict[str, Any]]:
+    """Serialise for the runtime's own chat API rather than the OpenAI one.
+
+    The two disagree about tool turns. The OpenAI shape carries tool_call_id on
+    a tool result and a tool_calls array on the assistant turn that caused it;
+    the native endpoint rejects the request outright. A first constrained call
+    therefore worked and the second, which was the first one that had a tool
+    result in its history, returned 400.
+
+    Under constrained decoding the assistant's move is already a JSON object,
+    so it is carried as content, and a tool result is a tool turn with text.
+    No structure is lost because none of it was in the tool-call channel.
+    """
+    out: list[dict[str, Any]] = []
+    for message in messages:
+        role = message.role.value
+        content = message.content or ""
+        if message.tool_calls and not content:
+            content = json.dumps([
+                {"tool": call.name, "arguments": call.arguments}
+                for call in message.tool_calls
+            ])
+        entry: dict[str, Any] = {"role": role, "content": content}
+        if role == "tool" and message.name:
+            entry["name"] = message.name
+        out.append(entry)
+    return out
+
+
 class ModelRouter:
     """Resolves task classes to models and owns the shared client lifecycle."""
 
@@ -258,7 +287,7 @@ class ModelRouter:
 
         payload = {
             "model": model.model,
-            "messages": [m.to_openai() for m in messages],
+            "messages": _native_messages(messages),
             "stream": False,
             "format": schema,
             "options": {"temperature": 0, "num_predict": max_tokens},

@@ -58,11 +58,25 @@ class ConstrainedStep:
         return ToolCall(name=self.tool, arguments=self.arguments or {})
 
 
+ANSWER_HELP = (
+    "Finish. Choose this as soon as you have what was asked for, and put the "
+    "answer in say. Every other branch runs a tool and continues."
+)
+
+
 def _branch(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
     branch: dict[str, Any] = {
         "type": "object",
+        "description": ANSWER_HELP if name == ANSWER else f"Call {name}.",
         "properties": {
-            "say": {"type": "string", "description": "One short sentence for the operator."},
+            "say": {
+                "type": "string",
+                "description": (
+                    "The answer for the operator."
+                    if name == ANSWER
+                    else "One short sentence saying what you are about to do."
+                ),
+            },
             "tool": {"const": name},
         },
         "required": ["tool", "say"],

@@ -131,6 +131,9 @@ class TurnOutcome:
     corrections: int = 0
     """Times the model wrote a tool call as prose and was told to try again."""
 
+    repeats: int = 0
+    """Calls that repeated one already made this turn, exactly."""
+
 
 class AgentLoop:
     """Call the model, run what it asks for, feed the result back, repeat.
@@ -175,6 +178,9 @@ class AgentLoop:
 
         self.observed: list[str] = []
         """Every tool result of this turn, as the ground truth for grounding."""
+
+        self.seen: dict[str, str] = {}
+        """Calls already made this turn, so a repeat is recognisable."""
 
     # -- binding ---------------------------------------------------------
 
@@ -253,6 +259,7 @@ class AgentLoop:
         self.outcome = TurnOutcome()
         self.instruction = instruction
         self.observed = []
+        self.seen: dict[str, str] = {}
         self.note_instruction(instruction)
         options = GenerationOptions(tools=self.schemas(), temperature=0.0)
         corrections = 0
@@ -313,9 +320,29 @@ class AgentLoop:
                 yield AgentEvent(type=AgentEventType.DONE, step=step, text=answer)
                 return
 
+            repeated = 0
             for call in calls:
                 async for event in self._dispatch(call, step):
                     yield event
+                    if event.type is AgentEventType.TOOL_END and event.extra_repeat:
+                        repeated += 1
+
+            # A model that runs the same call again has stopped making
+            # progress, and under a constrained decoder it cannot wander into
+            # prose to signal that. Three identical calls end the turn rather
+            # than burning the step budget on the same answer.
+            if repeated and repeated == len(calls):
+                self.outcome.repeats += 1
+                if self.outcome.repeats >= 3:
+                    self.outcome.stopped = "repeating"
+                    answer = self.observed[-1] if self.observed else ""
+                    self.outcome.grounding = self._grounding(answer)
+                    self._learn()
+                    yield AgentEvent(
+                        type=AgentEventType.DONE, step=step,
+                        text="Stopped: the same call was repeated with the same result.",
+                    )
+                    return
 
         self.outcome.stopped = "max_steps"
         yield AgentEvent(
@@ -335,10 +362,12 @@ class AgentLoop:
             arguments=call.arguments,
         )
         started = time.time()
-        result = await self.registry.invoke(
-            call.name, self.bind(call.name, call.arguments), self.ctx
-        )
+        arguments = self.bind(call.name, call.arguments)
+        signature = f"{call.name}:{json.dumps(arguments, sort_keys=True, default=str)}"
+        repeat = signature in self.seen
+        result = await self.registry.invoke(call.name, arguments, self.ctx)
         elapsed = time.time() - started
+        self.seen[signature] = result.summary or ""
 
         self.outcome.tool_calls += 1
         if call.name in ("edit_worktree_file", "write_worktree_file") and result.ok:
@@ -347,6 +376,11 @@ class AgentLoop:
             self.outcome.tests_run += 1
 
         rendered = self._render(result)
+        if repeat:
+            rendered += (
+                "\n[this is the same call you already made, with the same result. "
+                "Do something different, or finish.]"
+            )
         # The model sees the trimmed render; the grounding check sees
         # everything the tool returned. Checking an answer against a truncated
         # copy of its own evidence flags what was quoted from the part that got
@@ -355,7 +389,7 @@ class AgentLoop:
         self.messages.append(
             LLMMessage.tool_result(call.id, rendered, name=call.name)
         )
-        yield AgentEvent(
+        event = AgentEvent(
             type=AgentEventType.TOOL_END,
             step=step,
             tool=call.name,
@@ -363,6 +397,8 @@ class AgentLoop:
             result=result,
             elapsed_s=elapsed,
         )
+        event.extra_repeat = repeat
+        yield event
 
     async def _constrained_step(self, step: int) -> tuple[list[str], list[ToolCall], str]:
         """One decoded step whose shape the runtime guarantees.
