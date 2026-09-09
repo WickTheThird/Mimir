@@ -25,6 +25,9 @@ from __future__ import annotations
 
 import ast
 import json
+import shutil
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -48,6 +51,7 @@ class ChangeReport:
     reverted: bool = False
     violations: list[Violation] = field(default_factory=list)
     new_diagnostics: list[dict[str, Any]] = field(default_factory=list)
+    new_lint: list[dict[str, Any]] = field(default_factory=list)
     checks_run: list[str] = field(default_factory=list)
     checks_skipped: list[str] = field(default_factory=list)
 
@@ -57,7 +61,9 @@ class ChangeReport:
 
     @property
     def ok(self) -> bool:
-        return not self.blocking and not self.new_diagnostics and not self.reverted
+        return not (
+            self.blocking or self.new_diagnostics or self.new_lint or self.reverted
+        )
 
     def summary(self) -> str:
         if self.reverted:
@@ -71,6 +77,9 @@ class ChangeReport:
             )
         if self.new_diagnostics:
             bits.append(f"{len(self.new_diagnostics)} new error(s) from the language server")
+        if self.new_lint:
+            codes = ", ".join(sorted({str(f["code"]) for f in self.new_lint})[:4])
+            bits.append(f"{len(self.new_lint)} new lint finding(s): {codes}")
         if not bits:
             checked = ", ".join(self.checks_run) or "nothing to check"
             return f"verified ({checked})"
@@ -81,6 +90,11 @@ class ChangeReport:
         lines += [
             f"{self.path}:{d.get('line', 1)} {str(d.get('message', ''))[:120]}"
             for d in self.new_diagnostics[:8]
+        ]
+        lines += [
+            f"{self.path}:{f.get('line', 1)} {f.get('code', '')} "
+            f"{str(f.get('message', ''))[:110]}"
+            for f in self.new_lint[:8]
         ]
         return lines
 
@@ -120,6 +134,51 @@ def check_syntax(path: str, text: str) -> Violation | None:
     return None
 
 
+def _lint(root: Path, relative: str) -> list[dict[str, Any]] | None:
+    """What the project's own linter says, or ``None`` when it cannot say.
+
+    Parsing is not enough and a real run proved it. Asked to add one method,
+    the model inserted its block in the middle of another method, leaving that
+    method's tail orphaned after a comment and its own definition duplicated.
+    The file parsed. The new method worked. It was broken, and the syntax gate
+    passed it, and the loop reported success.
+
+    A linter finds that in milliseconds: redefinition of an existing name, and
+    a variable assigned and never used where the tail was severed. These are
+    the shape of mistake an editing model makes, and they are exactly what a
+    linter is for.
+    """
+    if Path(relative).suffix.lower() != ".py":
+        return None
+    binary = shutil.which("ruff") or str(Path(sys.executable).parent / "ruff")
+    if not Path(binary).exists() and not shutil.which("ruff"):
+        return None
+    try:
+        finished = subprocess.run(
+            [binary, "check", "--output-format", "json", "--force-exclude", relative],
+            cwd=str(root), capture_output=True, text=True, timeout=60, check=False,
+        )
+        findings = json.loads(finished.stdout or "[]")
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return None
+    out = [
+        {
+            "line": (f.get("location") or {}).get("row", 1),
+            "code": f.get("code") or "",
+            "message": f.get("message") or "",
+        }
+        for f in findings
+        if isinstance(f, dict)
+    ]
+    # E902 is the linter saying it could not read the file, not something it
+    # found in it. Counting that as a new finding would report a defect on the
+    # evidence that no evidence was gathered, which is the shape this whole
+    # gate exists to refuse.
+    if any(f["code"] == "E902" for f in out):
+        return None
+    return out
+
+
 def _diagnostics(root: Path, relative: str) -> list[dict[str, Any]] | None:
     """Errors the language server reports, or ``None`` when it cannot say."""
     if Path(relative).suffix.lower() not in _LSP_EXTENSIONS:
@@ -145,6 +204,7 @@ def verify_change(
     original: str | None,
     settings: Any,
     baseline: list[dict[str, Any]] | None = None,
+    baseline_lint: list[dict[str, Any]] | None = None,
 ) -> ChangeReport:
     """Check one written file. Reverts only what cannot be read.
 
@@ -178,6 +238,18 @@ def verify_change(
     else:
         report.checks_skipped.append("no project rules configured")
 
+    lint_after = _lint(Path(root), relative)
+    if lint_after is None:
+        report.checks_skipped.append("no linter for this file")
+    else:
+        known_lint = {
+            (f.get("code"), f.get("message")) for f in (baseline_lint or [])
+        }
+        report.new_lint = [
+            f for f in lint_after if (f.get("code"), f.get("message")) not in known_lint
+        ]
+        report.checks_run.append("linter")
+
     after = _diagnostics(Path(root), relative)
     if after is None:
         report.checks_skipped.append("no language server for this file")
@@ -199,4 +271,16 @@ def baseline_diagnostics(root: Path, relative: str) -> list[dict[str, Any]] | No
     return _diagnostics(Path(root), relative)
 
 
-__all__ = ["ChangeReport", "baseline_diagnostics", "check_syntax", "verify_change"]
+def baseline_lint(root: Path, relative: str) -> list[dict[str, Any]] | None:
+    """Lint findings before a change, so a file that was already failing its
+    own linter is not blamed on the edit that touched it."""
+    return _lint(Path(root), relative)
+
+
+__all__ = [
+    "ChangeReport",
+    "baseline_diagnostics",
+    "baseline_lint",
+    "check_syntax",
+    "verify_change",
+]

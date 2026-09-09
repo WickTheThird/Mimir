@@ -60,7 +60,7 @@ def _wrap(exc: WorktreeError) -> ToolError:
 
 
 def _verify(ctx: ToolContext, root: Path, relative: str, *, updated: str,
-            original: str | None, baseline=None):
+            original: str | None, baseline=None, baseline_lint=None):
     """Check a written file, and revert it if it cannot be read.
 
     Every write goes through this. The model is asked to know the language, the
@@ -73,7 +73,7 @@ def _verify(ctx: ToolContext, root: Path, relative: str, *, updated: str,
     try:
         return verify_change(
             root, relative, updated=updated, original=original,
-            settings=ctx.settings, baseline=baseline,
+            settings=ctx.settings, baseline=baseline, baseline_lint=baseline_lint,
         )
     except Exception:  # noqa: BLE001 - a broken checker must not eat the edit
         log.warning("change_verification_failed", path=relative)
@@ -254,6 +254,15 @@ def _baseline(root: Path, relative: str):
         return None
 
 
+def _baseline_lint(root: Path, relative: str):
+    from mimir.verify.change import baseline_lint
+
+    try:
+        return baseline_lint(root, relative)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _with_report(result: ToolResult, report) -> ToolResult:
     """Fold a verification report into the tool result the model reads."""
     if report is None:
@@ -388,11 +397,14 @@ async def write_worktree_file(args: WriteInput, ctx: ToolContext) -> ToolResult:
         original = (
             target.read_text(encoding="utf-8", errors="replace") if existed else None
         )
-        baseline = _baseline(wt.root, args.path) if existed else None
+        baseline = _baseline(wt.root, args.path)
+        lint_before = _baseline_lint(wt.root, args.path) if existed else None
+        lint_before = _baseline_lint(wt.root, args.path) if existed else None
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(args.content, encoding="utf-8")
         report = _verify(ctx, wt.root, args.path, updated=args.content,
-                         original=original, baseline=baseline)
+                         original=original, baseline=baseline,
+                         baseline_lint=lint_before)
         if report is not None and report.reverted:
             raise ToolError(
                 f"{args.path} {report.violations[0].title}. The file was left as it was.",
@@ -512,9 +524,11 @@ async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
         if len(updated.encode()) > MAX_BYTES:
             raise ToolError(f"result exceeds {MAX_BYTES} bytes", code="too_large")
         baseline = _baseline(wt.root, args.path)
+        lint_before = _baseline_lint(wt.root, args.path)
         target.write_text(updated, encoding="utf-8")
         report = _verify(ctx, wt.root, args.path, updated=updated,
-                         original=original, baseline=baseline)
+                         original=original, baseline=baseline,
+                         baseline_lint=lint_before)
         if report is not None and report.reverted:
             raise ToolError(
                 f"that edit left {args.path} unparseable "
@@ -632,9 +646,11 @@ async def insert_worktree_lines(args: InsertInput, ctx: ToolContext) -> ToolResu
             raise ToolError(f"result exceeds {MAX_BYTES} bytes", code="too_large")
 
         baseline = _baseline(wt.root, args.path)
+        lint_before = _baseline_lint(wt.root, args.path)
         target.write_text(updated, encoding="utf-8")
         report = _verify(ctx, wt.root, args.path, updated=updated,
-                         original=original, baseline=baseline)
+                         original=original, baseline=baseline,
+                         baseline_lint=lint_before)
         if report is not None and report.reverted:
             raise ToolError(
                 f"inserting there left {args.path} unparseable "

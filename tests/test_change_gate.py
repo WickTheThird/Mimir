@@ -122,12 +122,14 @@ class TestRules:
 
 class TestReporting:
     def test_a_clean_change_says_what_it_checked(self, tmp_path, settings):
+        (tmp_path / "a.py").write_text("x = 1\n")
         report = verify_change(tmp_path, "a.py", updated="x = 1\n",
                                original=None, settings=settings)
         assert report.ok
         assert "syntax" in report.summary()
 
     def test_what_could_not_be_checked_is_named(self, tmp_path, settings):
+        (tmp_path / "a.rs").write_text("fn main() {}\n")
         report = verify_change(tmp_path, "a.rs", updated="fn main() {}\n",
                                original=None, settings=settings)
         assert report.checks_skipped
@@ -183,3 +185,70 @@ class TestInsertedBlocksLandAtTheRightDepth:
 
         body = _at_depth(self.SOURCE, 3, "total = 0")
         assert body.startswith("        total = 0")
+
+
+class TestTheLinterCanDecline:
+    def test_a_file_it_cannot_read_reports_nothing_rather_than_a_defect(
+        self, tmp_path, settings
+    ):
+        """Reporting a defect on the evidence that no evidence was gathered is
+        the shape this whole gate exists to refuse."""
+        report = verify_change(tmp_path, "gone.py", updated="x = 1\n",
+                               original=None, settings=settings)
+        assert report.new_lint == []
+        assert any("linter" in note for note in report.checks_skipped)
+
+
+class TestParsingIsNotEnough:
+    """A real run proved it.
+
+    Asked to add one method, the model inserted its block into the middle of
+    another method, leaving that method's tail orphaned after a comment and its
+    own definition duplicated. The file parsed. The new method worked. It was
+    broken, the syntax gate passed it, and the loop reported success.
+    """
+
+    CORRUPTED = (
+        "class A:\n"
+        "    def prune(self):\n"
+        "        cursor = self.run()\n"
+        "\n"
+        "    def prune(self):\n"
+        "        cursor = self.run()\n"
+        "        return cursor\n"
+    )
+
+    def test_a_duplicated_definition_is_reported(self, tmp_path, settings):
+        import shutil
+
+        if not shutil.which("ruff"):
+            pytest.skip("no linter available")
+        target = tmp_path / "a.py"
+        target.write_text(self.CORRUPTED)
+        report = verify_change(tmp_path, "a.py", updated=self.CORRUPTED,
+                               original="class A:\n    pass\n", settings=settings,
+                               baseline_lint=[])
+        assert not report.ok
+        codes = {f["code"] for f in report.new_lint}
+        assert "F811" in codes, "a redefinition is the shape an editing model produces"
+
+    def test_it_parses_perfectly_well(self):
+        """Which is why the syntax gate let it through."""
+        assert check_syntax("a.py", self.CORRUPTED) is None
+
+    def test_findings_the_file_already_had_are_not_blamed_on_the_edit(
+        self, tmp_path, settings
+    ):
+        import shutil
+
+        if not shutil.which("ruff"):
+            pytest.skip("no linter available")
+        target = tmp_path / "a.py"
+        target.write_text(self.CORRUPTED)
+        already = [{"line": 5, "code": "F811",
+                    "message": "Redefinition of unused `prune` from line 2: "
+                               "`prune` redefined here"}]
+        report = verify_change(tmp_path, "a.py", updated=self.CORRUPTED,
+                               original=self.CORRUPTED, settings=settings,
+                               baseline_lint=already)
+        assert "F811" not in {f["code"] for f in report.new_lint}
