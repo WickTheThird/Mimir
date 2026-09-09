@@ -40,7 +40,8 @@ class Candidate:
     task: str
     root: Path
     files_changed: int = 0
-    lines_changed: int = 0
+    lines_added: int = 0
+    lines_removed: int = 0
     steps: int = 0
     parses: bool = True
     lint_findings: int = 0
@@ -59,6 +60,10 @@ class Candidate:
         return bool(self.files_changed) and self.parses and not self.error
 
     @property
+    def lines_changed(self) -> int:
+        return self.lines_added + self.lines_removed
+
+    @property
     def score(self) -> tuple:
         """Ordered by what was verified, not by how it reads.
 
@@ -73,7 +78,12 @@ class Candidate:
             self.tests_passed,
             self.tests_ran,
             -self.lint_findings,
-            -self.lines_changed,
+            # Deletion before size. One attempt removed 248 lines and added 76
+            # while passing syntax, lint, tests and the definition check, and a
+            # single combined line count hid it: 324 changed looked like a
+            # large edit rather than a file being gutted.
+            -self.lines_removed,
+            -self.lines_added,
         )
 
     def render(self) -> str:
@@ -81,7 +91,7 @@ class Candidate:
             return f"#{self.index} failed: {self.error[:80]}"
         if not self.files_changed:
             return f"#{self.index} changed nothing"
-        bits = [f"{self.files_changed} file(s)", f"{self.lines_changed} line(s)"]
+        bits = [f"{self.files_changed} file(s)", f"+{self.lines_added}/-{self.lines_removed}"]
         if not self.parses:
             bits.append("does not parse")
         if self.lint_findings:
@@ -119,16 +129,20 @@ def changed_files(root: Path) -> list[str]:
     return [line[3:].strip() for line in out.splitlines() if line.strip()]
 
 
-def _line_count(root: Path) -> int:
-    stat = _git(root, "diff", "--numstat")
-    total = 0
-    for line in stat.splitlines():
+def _line_counts(root: Path) -> tuple[int, int]:
+    """Added and removed, kept apart.
+
+    Summing them into one number made a change that deleted 248 lines and
+    added 76 report as "324 lines changed", which reads as a large edit rather
+    than as a file being gutted.
+    """
+    added = removed = 0
+    for line in _git(root, "diff", "--numstat").splitlines():
         parts = line.split()
-        if len(parts) >= 2:
-            for value in parts[:2]:
-                if value.isdigit():
-                    total += int(value)
-    return total
+        if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+            added += int(parts[0])
+            removed += int(parts[1])
+    return added, removed
 
 
 def inspect(
@@ -144,7 +158,7 @@ def inspect(
 
     files = changed_files(candidate.root)
     candidate.files_changed = len(files)
-    candidate.lines_changed = _line_count(candidate.root)
+    candidate.lines_added, candidate.lines_removed = _line_counts(candidate.root)
     if not files:
         return candidate
 

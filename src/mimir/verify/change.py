@@ -53,6 +53,8 @@ class ChangeReport:
     new_diagnostics: list[dict[str, Any]] = field(default_factory=list)
     new_lint: list[dict[str, Any]] = field(default_factory=list)
     broke_formatting: bool = False
+    lines_added: int = 0
+    lines_removed: int = 0
     checks_run: list[str] = field(default_factory=list)
     checks_skipped: list[str] = field(default_factory=list)
 
@@ -61,10 +63,24 @@ class ChangeReport:
         return [v for v in self.violations if v.blocking]
 
     @property
+    def guts_the_file(self) -> bool:
+        """Removed a lot, and much more than it added.
+
+        One attempt removed 248 lines and added 76 while passing every check
+        there was. Deleting is legitimate, so this is reported rather than
+        refused, but it must not be silent: a change that takes out three
+        times what it puts in is either a refactor the operator asked for or
+        an accident, and only they can tell which.
+        """
+        return self.lines_removed >= 20 and self.lines_removed >= 3 * max(
+            1, self.lines_added
+        )
+
+    @property
     def ok(self) -> bool:
         return not (
             self.blocking or self.new_diagnostics or self.new_lint
-            or self.reverted or self.broke_formatting
+            or self.reverted or self.broke_formatting or self.guts_the_file
         )
 
     def summary(self) -> str:
@@ -84,6 +100,10 @@ class ChangeReport:
             bits.append(f"{len(self.new_lint)} new lint finding(s): {codes}")
         if self.broke_formatting:
             bits.append("the file no longer matches the project formatter")
+        if self.guts_the_file:
+            bits.append(
+                f"removed {self.lines_removed} lines and added {self.lines_added}"
+            )
         if not bits:
             checked = ", ".join(self.checks_run) or "nothing to check"
             return f"verified ({checked})"
@@ -238,6 +258,16 @@ def verify_change(
     """
     report = ChangeReport(path=relative)
     target = Path(root) / relative
+    if original is not None:
+        import difflib
+
+        for line in difflib.unified_diff(
+            original.splitlines(), updated.splitlines(), n=0, lineterm=""
+        ):
+            if line.startswith("+") and not line.startswith("+++"):
+                report.lines_added += 1
+            elif line.startswith("-") and not line.startswith("---"):
+                report.lines_removed += 1
 
     syntax = check_syntax(relative, updated)
     if syntax is not None:

@@ -71,9 +71,9 @@ class TestScoring:
     def test_passing_tests_outrank_everything_else(self, repo, settings):
         winner = _candidate(repo, 0)
         winner.files_changed, winner.tests_ran, winner.tests_passed = 1, True, True
-        winner.lines_changed = 400
+        winner.lines_added = 400
         loser = _candidate(repo, 1)
-        loser.files_changed, loser.lines_changed = 1, 2
+        loser.files_changed, loser.lines_added = 1, 2
         assert winner.score > loser.score
 
     def test_the_smaller_diff_wins_a_tie(self):
@@ -81,7 +81,7 @@ class TestScoring:
         was asked and no more."""
         small, large = _candidate("/x", 0), _candidate("/x", 1)
         for c, lines in ((small, 5), (large, 90)):
-            c.files_changed, c.lines_changed = 1, lines
+            c.files_changed, c.lines_added = 1, lines
             c.tests_ran = c.tests_passed = True
         assert small.score > large.score
 
@@ -180,6 +180,38 @@ class TestChangedFiles:
         (repo / "src" / "a.py").write_text("x = 1\n")
         (repo / "src" / "b.py").write_text("y = 2\n")
         assert set(changed_files(repo)) == {"src/a.py", "src/b.py"}
+
+
+class TestDeletionIsNotJustSize:
+    """One attempt removed 248 lines and added 76 while passing syntax, lint,
+    tests and the definition check. A single combined count reported it as "324
+    lines changed", which reads as a large edit rather than a file being
+    gutted."""
+
+    def test_an_attempt_that_deletes_loses_to_one_that_does_not(self):
+        keeps, guts = _candidate("/x", 0), _candidate("/x", 1)
+        for c in (keeps, guts):
+            c.files_changed = 1
+            c.tests_ran = c.tests_passed = True
+        keeps.lines_added, keeps.lines_removed = 20, 0
+        guts.lines_added, guts.lines_removed = 76, 248
+        assert keeps.score > guts.score
+
+    def test_the_render_shows_both_directions(self):
+        c = _candidate("/x", 0)
+        c.files_changed, c.lines_added, c.lines_removed = 1, 76, 248
+        assert "+76/-248" in c.render()
+
+    def test_deletion_outranks_pure_size(self):
+        """A bigger addition that deletes nothing beats a smaller one that
+        removes a hundred lines."""
+        bigger, deleter = _candidate("/x", 0), _candidate("/x", 1)
+        for c in (bigger, deleter):
+            c.files_changed = 1
+            c.tests_ran = c.tests_passed = True
+        bigger.lines_added, bigger.lines_removed = 200, 0
+        deleter.lines_added, deleter.lines_removed = 5, 100
+        assert bigger.score > deleter.score
 
 
 class TestASkippedCheckIsVisible:

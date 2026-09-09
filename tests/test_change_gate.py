@@ -405,3 +405,43 @@ class TestTheTestCommandCanActuallyRun:
             if isinstance(node, ast.Call)
         }
         assert not any("which" in name for name in called)
+
+
+class TestAChangeThatMostlyDeletes:
+    """One attempt removed 248 lines and added 76 while passing syntax, lint,
+    tests and the definition check. The scorer summed both directions into "324
+    lines changed", which reads as a large edit rather than a file being
+    gutted."""
+
+    def _report(self, before, after, settings, tmp_path):
+        (tmp_path / "a.py").write_text(after)
+        return verify_change(tmp_path, "a.py", updated=after, original=before,
+                             settings=settings)
+
+    def test_removing_far_more_than_it_adds_is_reported(self, tmp_path, settings):
+        before = "".join(f"x{i} = {i}\n" for i in range(60))
+        after = "x0 = 0\nx1 = 1\n"
+        report = self._report(before, after, settings, tmp_path)
+        assert report.guts_the_file
+        assert not report.ok
+        assert "removed" in report.summary()
+
+    def test_a_change_that_mostly_adds_is_not(self, tmp_path, settings):
+        before = "x0 = 0\n"
+        after = "".join(f"x{i} = {i}\n" for i in range(60))
+        report = self._report(before, after, settings, tmp_path)
+        assert not report.guts_the_file
+
+    def test_a_small_replacement_is_not(self, tmp_path, settings):
+        """Deleting is legitimate; this is about proportion and scale."""
+        before = "a = 1\nb = 2\nc = 3\n"
+        after = "a = 1\n"
+        report = self._report(before, after, settings, tmp_path)
+        assert not report.guts_the_file
+
+    def test_both_directions_are_counted(self, tmp_path, settings):
+        before = "a = 1\nb = 2\n"
+        after = "a = 1\nc = 3\n"
+        report = self._report(before, after, settings, tmp_path)
+        assert report.lines_added == 1
+        assert report.lines_removed == 1
