@@ -265,6 +265,7 @@ class ModelRouter:
         session_id: str | None = None,
         purpose: str = "",
         max_tokens: int = 900,
+        temperature: float = 0.0,
         tool_calls_before: int = 0,
     ) -> str:
         """One call whose output must satisfy ``schema``.
@@ -290,7 +291,7 @@ class ModelRouter:
             "messages": _native_messages(messages),
             "stream": False,
             "format": schema,
-            "options": {"temperature": 0, "num_predict": max_tokens},
+            "options": {"temperature": temperature, "num_predict": max_tokens},
         }
         started = time.time()
         self.invocations_attempted += 1

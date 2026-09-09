@@ -26,7 +26,10 @@ from rich.text import Text
 
 from mimir.agent.events import AgentEvent, AgentEventType, TimelineEntry
 from mimir.agent.loop import format_arguments
+from mimir.logging import get_logger
 from mimir.tools.base import ToolResult
+
+log = get_logger(__name__)
 
 MARK = "⏺"
 INDENT = "  "
@@ -553,6 +556,76 @@ def start_ops_view(console: Console, runner: Any, environment: Any) -> AgentView
     agent.ctx.environment = environment
     agent.glossary = _glossary(runner.settings)
     return AgentView(console, agent)
+
+
+async def run_best_of(
+    console: Console,
+    runner: Any,
+    task: str,
+    instruction: str,
+    *,
+    attempts: int = 3,
+    repo: str | None = None,
+    test_command: str = "",
+) -> Any:
+    """Try the task several times in separate worktrees and keep the best.
+
+    Each attempt gets its own worktree so they cannot see each other, and the
+    losers are discarded. Sampling needs temperature above zero or the attempts
+    are one attempt repeated, which is the mistake that invalidated the first
+    measurement of this.
+    """
+    from mimir.agent.select import best_of
+
+    console.print(
+        Text(f"trying {attempts} times, keeping whichever the rules prefer", style="dim")
+    )
+    views: list[AgentView] = []
+
+    def make(index: int) -> AgentView:
+        view = start_coding_session(console, runner, f"{task}-{index + 1}", repo)
+        view.agent.temperature = 0.0 if attempts == 1 else 0.7
+        view.panel = False
+        views.append(view)
+        return view
+
+    winner, _ = await best_of(
+        attempts, make, instruction,
+        settings=runner.settings, test_command=test_command, console=console,
+    )
+    console.print()
+    if winner is None:
+        console.print(Text("no attempt produced a usable change", style="yellow"))
+    else:
+        console.print(
+            Text(f"kept attempt #{winner.index + 1}: {winner.render()}", style="green")
+        )
+        console.print(
+            Text(f"/worktree diff {winner.task} to review it", style="dim")
+        )
+    _discard_losers(runner, views, winner)
+    return winner
+
+
+def _discard_losers(runner: Any, views: list[Any], winner: Any) -> None:
+    """Delete the worktrees that were not chosen.
+
+    Leaving them would fill the home directory with abandoned attempts, and
+    keeping the wrong one around is how the wrong one gets reviewed.
+    """
+    from mimir.tools.repo import get_repository_directory
+    from mimir.worktree import WorktreeManager
+
+    manager = WorktreeManager(runner.settings.home)
+    directory = get_repository_directory(runner.settings)
+    for view in views:
+        if winner is not None and view.task == winner.task:
+            continue
+        try:
+            source = directory.resolve(view.repo).root
+            manager.discard(manager.find(source, view.task))
+        except Exception:  # noqa: BLE001 - discarding a loser is best effort
+            log.debug("worktree_not_discarded", task=view.task)
 
 
 def start_coding_session(

@@ -158,6 +158,7 @@ class AgentLoop:
         max_steps: int = 20,
         task_class: str = "deep_investigation",
         constrained: bool = True,
+        temperature: float = 0.0,
     ) -> None:
         self.router = router
         self.registry = registry
@@ -167,6 +168,10 @@ class AgentLoop:
         self.task_class = task_class
         self.constrained = constrained
         """Decode against a schema instead of trusting the tool-call channel."""
+
+        self.temperature = temperature
+        """Zero for a single run. Sampling k of them needs it above zero, or
+        the k trajectories are one trajectory reported k times."""
 
         self.specs = [s for s in (registry.get(n) for n in tools) if s is not None]
         self.system = system
@@ -433,6 +438,7 @@ class AgentLoop:
                 task_class=self.task_class,
                 session_id=self.ctx.session_id,
                 purpose=f"{self.label}:{self.task_class}",
+                temperature=self.temperature,
                 tool_calls_before=self.outcome.tool_calls,
             )
         except ModelError as exc:
