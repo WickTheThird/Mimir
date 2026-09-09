@@ -366,3 +366,42 @@ class TestAnInsertThatChangesNothingSaysSo:
         assert not second.ok
         assert second.error_code == "already_present"
         assert "already in" in second.error
+
+
+class TestTheTestCommandCanActuallyRun:
+    """A worktree has no virtualenv, and on this machine there is no working
+    plain "python" either, so every test command the model wrote exited 127. It
+    could not verify its own change, never learned the change had worked, and
+    spent the rest of the turn poking at the file."""
+
+    def test_a_bare_python_becomes_the_project_interpreter(self, tmp_path):
+        from mimir.tools.code import _resolve_interpreter
+
+        venv = tmp_path / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        (venv / "python").write_text("#!/bin/sh\n")
+        resolved = _resolve_interpreter("python -m pytest tests/ -q", tmp_path)
+        assert resolved.startswith(str(venv / "python"))
+        assert resolved.endswith("-m pytest tests/ -q")
+
+    def test_anything_else_is_left_alone(self, tmp_path):
+        from mimir.tools.code import _resolve_interpreter
+
+        for command in ("make test", "cargo test", "npm test", "./run.sh"):
+            assert _resolve_interpreter(command, tmp_path) == command
+
+    def test_a_resolvable_name_is_not_trusted_over_a_real_interpreter(self, tmp_path):
+        """which answers with a pyenv shim that exists as a file and fails when
+        run. Existing is not working."""
+        import ast
+        import inspect
+
+        from mimir.tools import code
+
+        tree = ast.parse(inspect.getsource(code._resolve_interpreter).strip())
+        called = {
+            ast.unparse(node.func)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+        }
+        assert not any("which" in name for name in called)

@@ -16,6 +16,7 @@ import asyncio
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -144,6 +145,35 @@ def find_span(haystack: str, needle: str) -> tuple[str, str] | None:
         start, end = matches[0]
         return "".join(lines[start:end]), "indentation ignored"
     return None
+
+
+def _resolve_interpreter(command: str, repo_root: Path) -> str:
+    """Point a bare python at one that exists and has the project's packages.
+
+    A worktree has no virtualenv, and on this machine there is no plain
+    "python" on PATH at all, so every test command the model wrote exited 127.
+    It could not verify its own change, so it never learned the change had
+    worked, and spent the rest of the turn poking at the file.
+
+    The project's own interpreter is preferred over the one MIMIR runs under,
+    because that is the one with the repository's test dependencies.
+
+    shutil.which is deliberately not consulted. On this machine it answers
+    /Users/x/.pyenv/shims/python, a shim that exists as a file and fails when
+    run with "pyenv: python: command not found". Checking that something exists
+    is not checking that it works, and a real interpreter is better than a
+    resolvable name either way.
+    """
+    head, _, tail = command.strip().partition(" ")
+    if head not in ("python", "python3"):
+        return command
+    for candidate in (
+        Path(repo_root) / ".venv" / "bin" / "python",
+        Path(sys.executable),
+    ):
+        if candidate.exists():
+            return f"{candidate} {tail}".strip()
+    return command
 
 
 def _reindent(actual: str, replacement: str) -> str:
@@ -825,9 +855,10 @@ async def run_worktree_tests(args: TestInput, ctx: ToolContext) -> ToolResult:
         }
         env["HOME"] = str(wt.root)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
+        command = _resolve_interpreter(args.command, root)
         try:
             proc = subprocess.run(
-                args.command, shell=True, cwd=str(wt.root), env=env,
+                command, shell=True, cwd=str(wt.root), env=env,
                 capture_output=True, text=True, timeout=args.timeout_s, check=False,
             )
         except subprocess.TimeoutExpired:
@@ -835,6 +866,12 @@ async def run_worktree_tests(args: TestInput, ctx: ToolContext) -> ToolResult:
                 f"tests exceeded {args.timeout_s:.0f}s and were killed", code="timeout"
             ) from None
         tail = (proc.stdout or "")[-4000:] + (proc.stderr or "")[-2000:]
+        if proc.returncode == 127:
+            tail += (
+                "\n[the command was not found. A worktree has no virtualenv of its "
+                "own; name the interpreter as 'python' and it is resolved to the "
+                "project's.]"
+            )
         passed = proc.returncode == 0
         return ToolResult(
             ok=True,
