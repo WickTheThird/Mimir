@@ -252,3 +252,42 @@ class TestParsingIsNotEnough:
                                original=self.CORRUPTED, settings=settings,
                                baseline_lint=already)
         assert "F811" not in {f["code"] for f in report.new_lint}
+
+
+class TestInsertsDoNotDuplicateTheirSurroundings:
+    """Models include the code around the insertion point in what they insert,
+    apparently to show where it goes. Twice in six real runs: once a section
+    comment, which was untidy, and once an entire method, which left the
+    original's tail orphaned and its definition duplicated."""
+
+    def _drop(self, body, neighbours, after):
+        from mimir.tools.code import _drop_repeated_context
+
+        return _drop_repeated_context(body, neighbours, after)
+
+    def test_a_repeated_trailing_comment_is_dropped(self):
+        body = "    def count(self):\n        return 0\n\n    # -- seeding ---\n"
+        after = ["    # -- seeding ---\n", "\n", "    def seed(self):\n"]
+        assert self._drop(body, after, 0) == "    def count(self):\n        return 0\n"
+
+    def test_a_repeated_multi_line_tail_is_dropped_whole(self):
+        """The damaging case is several lines long, and comparing one line at a
+        time walks straight past it."""
+        body = (
+            "    def count(self):\n        return 0\n"
+            "        self._db.commit()\n        return cursor.rowcount or 0\n"
+        )
+        after = ["        self._db.commit()\n", "        return cursor.rowcount or 0\n"]
+        assert self._drop(body, after, 0) == "    def count(self):\n        return 0\n"
+
+    def test_a_repeated_leading_line_is_dropped(self):
+        body = "    def prune(self):\n    def count(self):\n        return 0\n"
+        assert self._drop(body, ["    def prune(self):\n"], 1) == (
+            "    def count(self):\n        return 0\n"
+        )
+
+    def test_a_genuine_repeat_further_down_survives(self):
+        """Only runs touching the seam count."""
+        body = "    def count(self):\n        return 0\n"
+        after = ["\n", "    def other(self):\n", "        return 0\n"]
+        assert self._drop(body, after, 0) == body

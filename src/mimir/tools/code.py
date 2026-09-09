@@ -211,6 +211,50 @@ def _at_depth(lines: list[str], after_line: int, content: str) -> str:
     return "\n".join(out) + "\n"
 
 
+def _drop_repeated_context(body: str, lines: list[str], after_line: int) -> str:
+    """Remove lines the insert would duplicate from its own surroundings.
+
+    Models include the code around the insertion point in what they insert,
+    apparently to show where it goes. Twice in six runs: once a section
+    comment, which was untidy, and once an entire method, which left the
+    original's tail orphaned and its definition duplicated.
+
+    The longest run that repeats is what gets dropped, not the first line that
+    happens to match, because the damaging case is several lines long and a
+    one-line comparison walks straight past it. Only runs touching the seam
+    count, so a genuine second call to the same function further down survives.
+    """
+    block = body.splitlines()
+    meaningful = [i for i, line in enumerate(block) if line.strip()]
+    if not meaningful:
+        return body
+
+    def longest(block_side: list[str], neighbour_side: list[str]) -> int:
+        limit = min(len(block_side), len(neighbour_side))
+        for size in range(limit, 0, -1):
+            if block_side[-size:] == neighbour_side[:size]:
+                return size
+        return 0
+
+    stripped = [block[i].strip() for i in meaningful]
+    after = [line.strip() for line in lines[after_line:] if line.strip()]
+    before = [line.strip() for line in lines[:after_line] if line.strip()]
+
+    tail = longest(stripped, after)
+    if tail:
+        block = block[: meaningful[len(meaningful) - tail]]
+        meaningful = [i for i, line in enumerate(block) if line.strip()]
+        stripped = [block[i].strip() for i in meaningful]
+
+    head = longest(list(reversed(stripped)), list(reversed(before)))
+    if head and meaningful:
+        block = block[meaningful[head - 1] + 1 :]
+
+    while block and not block[-1].strip():
+        block.pop()
+    return "\n".join(block) + ("\n" if block else "")
+
+
 def _context_around(original: str, line: int, span: int = 4) -> str:
     """Show the real lines around a position, with their real indentation.
 
@@ -632,6 +676,7 @@ async def insert_worktree_lines(args: InsertInput, ctx: ToolContext) -> ToolResu
             )
 
         body = _at_depth(lines, args.after_line, strip_line_numbers(args.content))
+        body = _drop_repeated_context(body, lines, args.after_line)
         if not body.endswith("\n"):
             body += "\n"
         # A blank line before an inserted block when it follows code, because
