@@ -255,6 +255,30 @@ def verify_change(
     if Path(relative).suffix.lower() in _PARSERS:
         report.checks_run.append("syntax")
 
+    # Did the change connect what it added. Four attempts at one task passed
+    # syntax, lint and tests while two of them introduced a constant and never
+    # used it, and the incomplete ones had the smallest diffs.
+    from mimir.verify import definitions
+
+    for issue in definitions.check(original, updated):
+        report.violations.append(
+            Violation(
+                rule=f"definition-{issue.kind}",
+                title=issue.message,
+                path=relative,
+                line=issue.line,
+                excerpt="",
+                why=(
+                    "A change that adds something nothing uses has not finished "
+                    "connecting it."
+                    if issue.kind == "dead"
+                    else "One definition too many."
+                ),
+                severity="error",
+            )
+        )
+    report.checks_run.append("definitions")
+
     rules = load_rules(rule_roots(settings, root))
     if rules:
         report.violations.extend(check_rules(rules, relative, updated))

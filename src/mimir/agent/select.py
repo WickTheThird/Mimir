@@ -44,6 +44,8 @@ class Candidate:
     steps: int = 0
     parses: bool = True
     lint_findings: int = 0
+    dead_definitions: int = 0
+    """Names it introduced that nothing reads, or defined twice."""
     tests_ran: bool = False
     tests_passed: bool = False
     tests_wanted: bool = False
@@ -67,6 +69,7 @@ class Candidate:
         """
         return (
             self.usable,
+            self.dead_definitions == 0,
             self.tests_passed,
             self.tests_ran,
             -self.lint_findings,
@@ -83,6 +86,8 @@ class Candidate:
             bits.append("does not parse")
         if self.lint_findings:
             bits.append(f"{self.lint_findings} lint finding(s)")
+        if self.dead_definitions:
+            bits.append(f"{self.dead_definitions} unused/duplicate definition(s)")
         if self.tests_ran:
             bits.append("tests pass" if self.tests_passed else "TESTS FAIL")
         elif self.tests_wanted:
@@ -91,6 +96,12 @@ class Candidate:
             # fail-open shape this project exists to refuse.
             bits.append("TESTS DID NOT RUN")
         return f"#{self.index} " + ", ".join(bits)
+
+
+def _original(root: Path, relative: str) -> str | None:
+    """The file as it was before the change, from git."""
+    out = _git(root, "show", f"HEAD:{relative}")
+    return out or None
 
 
 def _git(root: Path, *args: str) -> str:
@@ -127,6 +138,7 @@ def inspect(
     repo_root: Path | None = None,
 ) -> Candidate:
     """Score one attempt against the rules. No model is consulted."""
+    from mimir.verify import definitions
     from mimir.verify.change import check_syntax
     from mimir.verify.rules import check_rules, load_rules, rule_roots
 
@@ -147,6 +159,14 @@ def inspect(
             candidate.parses = False
             candidate.notes.append(f"{relative} does not parse")
         candidate.lint_findings += len(check_rules(rules, relative, text))
+
+        # An attempt that added something nothing uses did not finish the job,
+        # and its diff is smaller than one that did, so without this the tie
+        # break actively prefers the incomplete answer.
+        before = _original(candidate.root, relative)
+        for issue in definitions.check(before, text):
+            candidate.dead_definitions += 1
+            candidate.notes.append(f"{relative}:{issue.line} {issue.message}")
 
     candidate.lint_findings += _lint_count(candidate.root, files)
     if test_command:
