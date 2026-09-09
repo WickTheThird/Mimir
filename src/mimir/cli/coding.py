@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -42,15 +43,115 @@ def _tool_style(tool: str) -> str:
     return _STYLES.get(tool, _READ)
 
 
+def fit(text: str, width: int) -> str:
+    """Clip to one line rather than letting it wrap.
+
+    A wrapped diff line is worse than a clipped one: the continuation lands in
+    the left gutter where the line numbers are, so it reads as another line of
+    code. The same is true of a tool summary, which becomes two lines of which
+    the second has no context.
+    """
+    text = text.replace("\t", "    ").rstrip()
+    return text if len(text) <= width else text[: max(1, width - 1)] + "…"
+
+
+class StreamWriter:
+    """Writes streamed model text with a hanging indent.
+
+    Rich wraps each ``print`` independently, and a stream arrives in fragments
+    that are not lines, so letting it wrap puts the continuation of every
+    sentence at column zero and destroys the gutter that separates prose from
+    tool calls. Tracking the column here is the only way to wrap text that
+    arrives a few characters at a time.
+    """
+
+    def __init__(self, console: Console, indent: str = INDENT) -> None:
+        self.console = console
+        self.indent = indent
+        self.width = max(40, console.width - len(indent) - 1)
+        self.column = 0
+        self.blanks = 0
+        self.any_output = False
+        self._pending = ""
+
+    def write(self, text: str) -> None:
+        self._pending += text
+        # Hold back the trailing partial word: it may still grow, and wrapping
+        # on a fragment breaks words in half.
+        cut = max(self._pending.rfind(" "), self._pending.rfind("\n"))
+        if cut < 0:
+            return
+        chunk, self._pending = self._pending[: cut + 1], self._pending[cut + 1 :]
+        self._emit(chunk)
+
+    def close(self) -> None:
+        if self._pending:
+            self._emit(self._pending)
+            self._pending = ""
+        if self.column:
+            self.console.print()
+            self.column = 0
+
+    def _emit(self, chunk: str) -> None:
+        for token in re.split(r"(\s+)", chunk):
+            if not token:
+                continue
+            if "\n" in token:
+                self._break(token.count("\n"))
+            elif token.isspace():
+                if self.column:
+                    self._raw(" ")
+                    self.column += 1
+            else:
+                self._word(token)
+
+    def _word(self, word: str) -> None:
+        # A token longer than the line has no break point of its own. Models
+        # emit these constantly: absolute paths, dotted symbols, hashes.
+        while len(word) > self.width:
+            if self.column:
+                self._break(1)
+            self._raw(self.indent)
+            self._raw(word[: self.width])
+            word = word[self.width :]
+            self.column = self.width
+            self._break(1)
+        if self.column and self.column + len(word) > self.width:
+            self._break(1)
+        if self.column == 0:
+            self._raw(self.indent)
+        self._raw(word)
+        self.column += len(word)
+        self.blanks = 0
+        self.any_output = True
+
+    def _break(self, count: int) -> None:
+        if self.column:
+            self.console.print()
+            self.column = 0
+            self.blanks = 0
+            count -= 1
+        # A model that emits four newlines should not push the tool call it is
+        # about to make off the screen.
+        for _ in range(min(count, 1 - self.blanks)):
+            self.console.print()
+            self.blanks += 1
+
+    def _raw(self, text: str) -> None:
+        self.console.print(Text(text), end="", soft_wrap=True, highlight=False)
+
+
 def render_tool_start(console: Console, tool: str, arguments: dict[str, Any]) -> None:
+    room = console.width - len(INDENT) - len(tool) - 4
     console.print(
         Text.assemble(
             (INDENT, ""),
             (f"{MARK} ", _tool_style(tool)),
             (tool, f"bold {_tool_style(tool)}"),
             ("  ", ""),
-            (format_arguments(tool, arguments), "dim"),
-        )
+            (fit(format_arguments(tool, arguments), max(10, room)), "dim"),
+        ),
+        soft_wrap=True,
     )
 
 
@@ -58,15 +159,23 @@ def render_tool_end(console: Console, event: AgentEvent) -> None:
     result = event.result
     if result is None:
         return
+    lead = f"{INDENT}  -> "
+    room = console.width - len(lead)
     if not result.ok:
         console.print(
-            Text(f"{INDENT}  -> {result.error or 'failed'}", style="red")
+            Text(lead + fit(result.error or f"{event.tool} failed", room), style="red"),
+            soft_wrap=True,
         )
         return
     summary = (result.summary or "ok").strip().splitlines()
-    console.print(Text(f"{INDENT}  -> {summary[0] if summary else 'ok'}", style="dim"))
+    console.print(
+        Text(lead + fit(summary[0] if summary else "ok", room), style="dim"),
+        soft_wrap=True,
+    )
     for line in summary[1:4]:
-        console.print(Text(f"{INDENT}     {line}", style="dim"))
+        console.print(
+            Text(f"{INDENT}     " + fit(line, room), style="dim"), soft_wrap=True
+        )
 
     if event.tool == "edit_worktree_file":
         render_edit_diff(console, result)
@@ -93,11 +202,18 @@ def render_edit_diff(console: Console, result: ToolResult) -> None:
             continue
         if line.startswith("@@"):
             continue
+        room = console.width - len(INDENT) - 9
         if line.startswith("-"):
-            console.print(Text(f"{INDENT}  {old_no:>5}  {line}", style="red"))
+            console.print(
+                Text(f"{INDENT}  {old_no:>5}  {fit(line, room)}", style="red"),
+                soft_wrap=True,
+            )
             old_no += 1
         elif line.startswith("+"):
-            console.print(Text(f"{INDENT}  {new_no:>5}  {line}", style="green"))
+            console.print(
+                Text(f"{INDENT}  {new_no:>5}  {fit(line, room)}", style="green"),
+                soft_wrap=True,
+            )
             new_no += 1
     console.print()
 
@@ -110,16 +226,22 @@ def render_timeline(console: Console, entries: Sequence[TimelineEntry]) -> None:
     console.print()
     for entry in entries:
         mark = "x" if not entry.ok else ("*" if entry.kept else "-")
+        subject = entry.subject or entry.tool
+        room = console.width - len(entry.verb) - len(subject) - 6
         console.print(
             Text.assemble(
                 (f" {mark} ", "red" if not entry.ok else ("cyan" if entry.kept else "dim")),
                 (f"{entry.verb} ", "dim"),
-                (entry.subject or entry.tool, "bold"),
-                (f"  {entry.constraint}" if entry.constraint else "", "dim"),
-            )
+                (fit(subject, max(10, console.width - len(entry.verb) - 6)), "bold"),
+                (f"  {fit(entry.constraint, max(0, room))}" if entry.constraint else "", "dim"),
+            ),
+            soft_wrap=True,
         )
         if entry.found:
-            console.print(Text(f"     {entry.found}", style="dim"))
+            console.print(
+                Text("     " + fit(entry.found, console.width - 5), style="dim"),
+                soft_wrap=True,
+            )
     console.print()
 
 
@@ -155,21 +277,14 @@ class CodingSession:
         """
         console = self.console
         console.print()
-        line_open = False
+        stream = StreamWriter(console)
         try:
             async for event in self.agent.run(instruction):
                 if event.type is AgentEventType.TEXT:
-                    if not line_open:
-                        console.print(INDENT, end="")
-                        line_open = True
-                    console.print(
-                        Text(event.text.replace("\n", "\n" + INDENT)), end=""
-                    )
+                    stream.write(event.text)
                     continue
 
-                if line_open:
-                    console.print()
-                    line_open = False
+                stream.close()
 
                 if event.type is AgentEventType.TOOL_START:
                     console.print()
@@ -184,13 +299,14 @@ class CodingSession:
                 elif event.type is AgentEventType.DONE:
                     pass
         except asyncio.CancelledError:
-            console.print(Text(f"\n{INDENT}stopped", style="yellow"))
+            stream.close()
+            console.print(Text(f"{INDENT}stopped", style="yellow"))
             raise
         except KeyboardInterrupt:
-            console.print(Text(f"\n{INDENT}stopped", style="yellow"))
+            stream.close()
+            console.print(Text(f"{INDENT}stopped", style="yellow"))
         finally:
-            if line_open:
-                console.print()
+            stream.close()
 
         self._summarise()
 
@@ -302,6 +418,8 @@ def start_coding_session(
 
 __all__ = [
     "CodingSession",
+    "StreamWriter",
+    "fit",
     "render_edit_diff",
     "render_timeline",
     "render_tool_end",

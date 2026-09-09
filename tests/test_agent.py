@@ -284,3 +284,148 @@ class TestEditTool:
                             old_string="a", new_string="b")
         assert not result.ok
         assert result.error_code == "not_found"
+
+
+class TestRendering:
+    """The prompt is where this is used, so how it looks is part of whether it
+    works. Every case here is one that was actually wrong at 100 columns."""
+
+    def _console(self, width=100):
+        import io
+
+        from rich.console import Console
+
+        return Console(width=width, file=io.StringIO(), record=True)
+
+    def _lines(self, console):
+        return console.export_text().splitlines()
+
+    def test_streamed_prose_wraps_with_a_hanging_indent(self):
+        """Rich wraps each print independently and a stream arrives in
+        fragments, so letting it wrap put every continuation at column zero."""
+        from mimir.cli.coding import StreamWriter
+
+        console = self._console(72)
+        writer = StreamWriter(console)
+        prose = (
+            "the retry policy is referenced in three places and changing it "
+            "in one of them would leave the others inconsistent with the first."
+        )
+        for word in prose.split():
+            writer.write(word + " ")
+        writer.close()
+
+        lines = [line for line in self._lines(console) if line.strip()]
+        assert len(lines) > 1, "this text has to wrap for the test to mean anything"
+        assert all(line.startswith("  ") for line in lines)
+        assert all(len(line) <= 72 for line in lines)
+
+    def test_a_token_longer_than_the_line_is_split_rather_than_overflowing(self):
+        from mimir.cli.coding import StreamWriter
+
+        console = self._console(60)
+        writer = StreamWriter(console)
+        writer.write("see " + "a/very/long/path/" * 8 + "file.py now")
+        writer.close()
+        assert all(len(line) <= 60 for line in self._lines(console))
+
+    def test_runs_of_blank_lines_do_not_push_the_next_call_off_screen(self):
+        from mimir.cli.coding import StreamWriter
+
+        console = self._console()
+        writer = StreamWriter(console)
+        writer.write("one\n\n\n\n\ntwo")
+        writer.close()
+        text = console.export_text()
+        assert "\n\n\n" not in text
+
+    def test_a_diff_line_is_clipped_not_wrapped(self):
+        """A wrapped diff line lands in the gutter where the line numbers are,
+        so it reads as another line of code."""
+        from mimir.cli.coding import render_edit_diff
+
+        console = self._console(80)
+        render_edit_diff(
+            console,
+            ToolResult(
+                tool="edit_worktree_file",
+                data={
+                    "line": 42,
+                    "old_string": "    raise",
+                    "new_string": "    delay = min(2 ** attempt, 30)  " + "# " + "x" * 200,
+                },
+            ),
+        )
+        lines = [line for line in self._lines(console) if line.strip()]
+        assert all(len(line) <= 80 for line in lines)
+        assert any("…" in line for line in lines)
+        assert all(line.startswith("    ") for line in lines), "the gutter survives"
+
+    def test_the_diff_numbers_each_side_from_the_line_it_edited(self):
+        from mimir.cli.coding import render_edit_diff
+
+        console = self._console()
+        render_edit_diff(
+            console,
+            ToolResult(
+                tool="edit_worktree_file",
+                data={"line": 42, "old_string": "a\nb", "new_string": "c\nd\ne"},
+            ),
+        )
+        text = console.export_text()
+        assert "   42  -a" in text
+        assert "   43  -b" in text
+        assert "   44  +e" in text
+
+    def test_a_long_tool_summary_stays_on_one_line(self):
+        from mimir.agent.events import AgentEvent, AgentEventType
+        from mimir.cli.coding import render_tool_end
+
+        console = self._console(72)
+        render_tool_end(
+            console,
+            AgentEvent(
+                type=AgentEventType.TOOL_END,
+                tool="search_repository",
+                result=ToolResult(tool="search_repository", summary="x " * 90),
+            ),
+        )
+        assert len([line for line in self._lines(console) if line.strip()]) == 1
+
+    def test_a_failure_line_names_the_tool_when_there_is_no_message(self):
+        from mimir.agent.events import AgentEvent, AgentEventType
+        from mimir.cli.coding import render_tool_end
+
+        console = self._console()
+        render_tool_end(
+            console,
+            AgentEvent(
+                type=AgentEventType.TOOL_END,
+                tool="read_file_range",
+                result=ToolResult(tool="read_file_range", ok=False),
+            ),
+        )
+        assert "read_file_range failed" in console.export_text()
+
+    def test_the_timeline_fits_the_terminal(self):
+        from mimir.agent.events import TimelineEntry
+        from mimir.cli.coding import render_timeline
+
+        console = self._console(72)
+        render_timeline(
+            console,
+            [
+                TimelineEntry.of(
+                    1,
+                    "read_file_range",
+                    {"path": "src/mimir/agent/prompt.py"},
+                    ToolResult(
+                        tool="read_file_range",
+                        ok=False,
+                        error="'src/mimir/agent/prompt.py' does not exist in "
+                              "repository 'smoke-timeline-worktree'",
+                    ),
+                )
+            ],
+        )
+        assert all(len(line) <= 72 for line in self._lines(console))
