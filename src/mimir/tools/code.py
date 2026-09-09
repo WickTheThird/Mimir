@@ -161,6 +161,56 @@ def _reindent(actual: str, replacement: str) -> str:
     return "\n".join(out)
 
 
+_BLOCK_START = re.compile(r"^\s*(?:@|async\s+def\s|def\s|class\s)")
+
+
+def _indent_of(line: str) -> str:
+    return line[: len(line) - len(line.lstrip())]
+
+
+def _at_depth(lines: list[str], after_line: int, content: str) -> str:
+    """Re-indent an inserted block to the depth the file uses there.
+
+    The model decides what to insert and where. It should not also have to
+    decide how deep, and when it did, three runs in a row produced a file that
+    no longer parsed. The position already determines the answer.
+
+    For a block that opens a definition, the depth comes from the nearest
+    preceding definition, which is what makes a method land beside its siblings
+    rather than inside the body of the one above it. Otherwise it comes from the
+    nearest preceding non-blank line. Relative indentation inside the block is
+    preserved either way.
+    """
+    body = content.splitlines()
+    first = next((line for line in body if line.strip()), "")
+    if not first:
+        return content
+
+    before = [line for line in lines[:after_line] if line.strip()]
+    want = ""
+    if _BLOCK_START.match(first):
+        anchor = next((line for line in reversed(before) if _BLOCK_START.match(line)), None)
+        if anchor is not None:
+            want = _indent_of(anchor)
+        elif before:
+            want = _indent_of(before[-1])
+    elif before:
+        want = _indent_of(before[-1])
+
+    have = _indent_of(first)
+    if have == want:
+        return content
+    out = []
+    for line in body:
+        if not line.strip():
+            out.append("")
+        elif line.startswith(have):
+            out.append(want + line[len(have):])
+        else:
+            out.append(want + line.lstrip())
+    return "\n".join(out) + "\n"
+
+
 def _context_around(original: str, line: int, span: int = 4) -> str:
     """Show the real lines around a position, with their real indentation.
 
@@ -567,7 +617,7 @@ async def insert_worktree_lines(args: InsertInput, ctx: ToolContext) -> ToolResu
                 code="invalid_arguments",
             )
 
-        body = strip_line_numbers(args.content)
+        body = _at_depth(lines, args.after_line, strip_line_numbers(args.content))
         if not body.endswith("\n"):
             body += "\n"
         # A blank line before an inserted block when it follows code, because

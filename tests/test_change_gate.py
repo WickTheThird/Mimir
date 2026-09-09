@@ -131,3 +131,55 @@ class TestReporting:
         report = verify_change(tmp_path, "a.rs", updated="fn main() {}\n",
                                original=None, settings=settings)
         assert report.checks_skipped
+
+
+class TestInsertedBlocksLandAtTheRightDepth:
+    """The model decides what to insert and where. It should not also have to
+    decide how deep, and when it did, three runs in a row produced a file that
+    no longer parsed."""
+
+    SOURCE = [
+        "class Glossary:\n",
+        "    def lookup(self):\n",
+        "        rows = query()\n",
+        "        return dict(rows)\n",
+        "\n",
+        "    def all(self):\n",
+        "        return []\n",
+    ]
+
+    def _insert(self, after, content):
+        import ast
+
+        from mimir.tools.code import _at_depth
+
+        body = _at_depth(self.SOURCE, after, content)
+        merged = "".join(self.SOURCE[:after]) + "\n" + body + "".join(self.SOURCE[after:])
+        ast.parse(merged)
+        return body
+
+    def test_a_method_lands_beside_its_siblings_not_inside_the_one_above(self):
+        """The line before the insertion point is inside a method body, so
+        following it would nest the new method in that body."""
+        body = self._insert(4, "def count(self):\n    return 0")
+        assert body.startswith("    def count(self):")
+        assert "        return 0" in body
+
+    def test_indentation_the_model_supplied_is_corrected(self):
+        body = self._insert(4, "        def count(self):\n            return 0")
+        assert body.startswith("    def count(self):")
+
+    def test_relative_indentation_inside_the_block_survives(self):
+        body = self._insert(4, "def count(self):\n    if True:\n        return 0")
+        assert "        if True:" in body
+        assert "            return 0" in body
+
+    def test_a_decorated_method_is_treated_as_a_block(self):
+        body = self._insert(4, "@property\ndef count(self):\n    return 0")
+        assert body.startswith("    @property")
+
+    def test_a_plain_statement_follows_the_line_before_it(self):
+        from mimir.tools.code import _at_depth
+
+        body = _at_depth(self.SOURCE, 3, "total = 0")
+        assert body.startswith("        total = 0")
