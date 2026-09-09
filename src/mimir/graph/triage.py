@@ -54,53 +54,34 @@ _CONCRETE = re.compile(
 )
 
 
-# An action the operator can point at a resource and have carried out. These
-# are the verbs that make a request an instruction rather than a question.
-_RETRIEVAL = re.compile(
+# A request to comment on material already in the prompt, or to weigh causes,
+# wants the council even when it names a target. The asymmetry from this
+# module's docstring applies: sending an investigation to the retrieval loop
+# under-answers it, which is worse than sending an instruction to the council
+# and being slow.
+# A request to change something never goes to the retrieval loop, whatever
+# else it looks like. "restart the api deployment" parses as an action against
+# a named target, and the loop reads. Mutation belongs to the council, which
+# has the prepare, approve and execute path.
+_MUTATION = re.compile(
     r"""\b(
-        logs?|tail|describe|events?|status|restarts?|top|usage|
-        rollout|manifest|yaml|image|env|endpoints?
+        restart|rollout|scale|delete|remove|drain|cordon|uncordon|evict|
+        apply|patch|edit|create|update|upgrade|downgrade|rollback|revert|
+        raise|lower|increase|decrease|set|enable|disable|kill|terminate|
+        deploy|redeploy|promote|failover|reset
     )\b""",
     re.IGNORECASE | re.VERBOSE,
 )
 
-# Something concrete enough to act on without asking which one is meant.
-#
-# The loose form of the resource branch used to be "kind followed by a word",
-# which matched "checkout service. The" in a corpus case about reading supplied
-# logs and would have routed a reasoning question to the retrieval loop. A kind
-# followed by any word is not a reference to a resource. So a name must arrive
-# in one of the shapes a name actually takes: after -n, after namespace or
-# context, in kind/name form, or as a hyphenated DNS label, which English words
-# are not.
-_TARGET = re.compile(
-    r"""(
-        -n\s+[a-z0-9][\w.-]*
-      | \bnamespace\s+[a-z0-9][\w.-]*
-      | \bcontext\s+[a-z0-9][\w.-]*
-      | \b(?:pod|deployment|statefulset|daemonset|svc|service|node|job|
-            cronjob|ingress|configmap|secret)s?\s*/\s*[a-z0-9][\w.-]*
-      | \b(?:pod|deployment|statefulset|daemonset|svc|service|node|job|
-            cronjob|ingress|configmap|secret)s?\s+(?:named\s+|called\s+)?
-        [a-z0-9]+(?:-[a-z0-9]+)+
-      | \bkubectl\b
-    )""",
-    re.IGNORECASE | re.VERBOSE,
-)
-
-# A question about why, or a request to compare, weigh or explain, wants the
-# council even when it names a target. The asymmetry from the module docstring
-# applies here too: sending an investigation to the direct loop under-answers
-# it, which is worse than sending an instruction to the council and being slow.
 _DELIBERATIVE = re.compile(
     r"""\b(
-        why|root\s+cause|diagnose|investigate|explain\s+why|what\s+caused|
+        why|root\s+cause|diagnose|investigate|explain|what\s+caused|
         compare|should\s+i|is\s+it\s+safe|what\s+is\s+wrong|troubleshoot|
-        debug|analyse|analyze|recommend
+        debug|analyse|analyze|recommend|rank|indicate|indicates|likely|
+        which\s+side|what\s+does|these\s+logs\s+are|suggests?
     )\b""",
     re.IGNORECASE | re.VERBOSE,
 )
-
 
 class Triage(StrEnum):
     INVESTIGATE = "investigate"
@@ -132,7 +113,16 @@ class TriageResult:
 
     @property
     def cheap(self) -> bool:
-        return self.kind is not Triage.INVESTIGATE
+        """Whether the graph can be skipped entirely and a reply returned.
+
+        DIRECT is deliberately not cheap. It is a routing hint for the prompt,
+        which runs the retrieval loop instead of the graph; the graph itself
+        must treat it exactly like INVESTIGATE. Marking it cheap short
+        circuited the coordinate node into returning a canned reply that does
+        not exist for this verdict, and it would have changed what the
+        evaluation corpus measures.
+        """
+        return self.kind not in (Triage.INVESTIGATE, Triage.DIRECT)
 
 
 _REPLIES = {
@@ -157,15 +147,33 @@ _REPLIES = {
 def _direct_or_investigate(text: str) -> Triage:
     """Both halves are required, and either doubt sends it to the council.
 
-    A retrieval verb alone ("check the logs") names no target. A target alone
-    ("the payments namespace") names no action. Only the pair is an
-    instruction, and even then a deliberative word takes it back to the
-    council, because "why are the whatsapp pods restarting" names both and is
+    The halves come from the same parser the loop binds from, rather than from
+    a second set of patterns kept in step by hand: an action the operator asked
+    for, and something concrete to point it at. An action alone ("check the
+    logs") names no target; a target alone ("the payments namespace") names no
+    action. Even the pair goes to the council when a deliberative word is
+    present, because "why are the whatsapp pods restarting" names both and is
     still a question about cause.
+
+    The first version of this used its own regex for the target and required a
+    namespace flag or a hyphenated name, so "the last 10 logs of any messaging
+    outbound pod in a cluster with ch1" fell through to the council, which
+    listed 211 namespaces, invented a pod to exec into, never read a log line,
+    and reported that no such pod existed. Two were running.
     """
-    if _DELIBERATIVE.search(text):
+    if _DELIBERATIVE.search(text) or _MUTATION.search(text):
         return Triage.INVESTIGATE
-    if _RETRIEVAL.search(text) and _TARGET.search(text):
+
+    from mimir.agent.request import parse_request
+
+    request = parse_request(text)
+    targeted = bool(
+        request.namespace
+        or request.context
+        or request.context_contains
+        or request.name_contains
+    )
+    if request.action and targeted:
         return Triage.DIRECT
     return Triage.INVESTIGATE
 

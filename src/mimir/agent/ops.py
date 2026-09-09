@@ -27,9 +27,11 @@ import re
 from typing import Any
 
 from mimir.agent.loop import AgentLoop
+from mimir.agent.request import ParsedRequest, parse_request
 
 OPS_TOOLS: tuple[str, ...] = (
     # find the thing
+    "find_workloads",
     "get_current_context",
     "list_workloads",
     "summarise_pod_health",
@@ -62,10 +64,13 @@ How to work:
 - The operator has usually already named the namespace, the workload or the
   cluster. Use what they named. Do not re-derive it, and do not list every
   namespace in a cluster to find one you were given.
-- When they describe a cluster instead of naming it ("a dev cluster with ch1
-  in it"), get_current_context returns every context in the kubeconfig. Pick
-  the ones that match and pass the context explicitly on every later call.
-  Never answer from the current context when they described a different one.
+- When they describe what they want rather than naming a namespace ("any
+  messaging outbound pod in a cluster with ch1"), call find_workloads once. It
+  searches every namespace, and every context whose name matches, in one go.
+  Do not go looking namespace by namespace.
+- When they describe a cluster instead of naming it, get_current_context
+  returns every context in the kubeconfig. Never answer from the current
+  context when they described a different one.
 - Narrow with filters rather than by reading long lists: list_workloads takes
   name_contains, summarise_pod_health takes a pod name prefix.
 - A workload search that returns nothing does not mean nothing is running.
@@ -100,6 +105,11 @@ class OpsAgent(AgentLoop):
 
     label = "ops"
 
+    def system_for(self, instruction: str) -> str:
+        """The base prompt plus what the instruction stated, as facts."""
+        stated = self.request.render()
+        return f"{self.system}\n\n{stated}" if stated else self.system
+
     def __init__(self, *, environment: Any = None, tools=OPS_TOOLS, **kwargs: Any) -> None:
         self.environment = environment
         self.scope: dict[str, str] = {}
@@ -108,12 +118,28 @@ class OpsAgent(AgentLoop):
         self.asked: dict[str, str] = {}
         """Scope the operator stated in the instruction itself."""
 
+        self.request = ParsedRequest()
+        """Everything the instruction stated, extracted by rule."""
+
         super().__init__(tools=tools, system=SYSTEM.format(context=_describe(environment)),
                          **kwargs)
 
     def note_instruction(self, instruction: str) -> None:
-        match = _ASKED_NAMESPACE.search(instruction or "")
-        self.asked = {"namespace": match.group(1)} if match else {}
+        """Take the stated parameters out of the sentence, by rule.
+
+        Everything found here is bound onto the calls rather than left for the
+        model to remember. A request naming a namespace, a cluster fragment, a
+        workload and a line count gives the model four chances to drop one, and
+        a dropped parameter fails silently: the call succeeds against the wrong
+        scope and the answer reads as if it were about the right one.
+        """
+        self.request = parse_request(instruction)
+        self.asked = {
+            k: v for k, v in (
+                ("namespace", self.request.namespace),
+                ("context", self.request.context),
+            ) if v
+        }
         self.scope = {}
 
     def bind(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -149,6 +175,21 @@ class OpsAgent(AgentLoop):
         # without ever saying which one it had read.
         if name == "get_current_context" and "include_contexts" in fields:
             bound.setdefault("include_contexts", True)
+
+        # The stated parameters are supplied when the call omits them, and a
+        # count the operator gave is not negotiable: "the last 10 logs" that
+        # returns a hundred lines has answered a different question.
+        if self.request.tail and "tail" in fields:
+            bound["tail"] = self.request.tail
+        if self.request.since and "since" in fields and not bound.get("since"):
+            bound["since"] = self.request.since
+        if name == "find_workloads":
+            for key, value in (
+                ("name_contains", self.request.name_contains),
+                ("context_contains", self.request.context_contains),
+            ):
+                if value and not bound.get(key):
+                    bound[key] = value
 
         for field, attribute in (("context", "cluster_context"), ("namespace", "namespace")):
             if field not in fields:

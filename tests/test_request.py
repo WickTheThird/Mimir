@@ -1,0 +1,126 @@
+"""Deterministic extraction of what the operator asked for.
+
+Every case is a phrasing from a real session. The governing rule is that this
+never guesses: a parser that fills in a plausible value when it is unsure
+reintroduces the silent wrongness it exists to remove.
+"""
+
+from __future__ import annotations
+
+from mimir.agent.request import parse_request
+
+
+class TestTheRequestThatStartedThis:
+    def test_every_parameter_is_taken_out_of_the_sentence(self):
+        """The council was given five parameters in one sentence, carried none
+        of them through six tool calls, and reported that a pod which was
+        running did not exist."""
+        request = parse_request(
+            "can you tell me the last 10 logs of any messaging outbound pod "
+            "that is inside dev and in a cluster with ch1?"
+        )
+        assert request.name_contains == "messaging-outbound"
+        assert request.context_contains == "ch1"
+        assert request.environment == "dev"
+        assert request.action == "logs"
+        assert request.tail == 10
+        assert not request.namespace, "none was stated, so none is invented"
+
+    def test_a_widening_fallback_is_offered_but_not_taken(self):
+        """"messaging outbound" widens to "outbound", not to "messaging",
+        which is a prefix of forty other things."""
+        request = parse_request("logs of any messaging outbound pod")
+        assert request.name_candidates[0] == "messaging-outbound"
+        assert "outbound" in request.name_candidates
+        assert "messaging" not in request.name_candidates
+
+
+class TestScope:
+    def test_a_namespace_before_the_noun_beats_the_word_after_it(self):
+        """"in the payments namespace over the last 2 hours" matches
+        "namespace over" if the forms are tried in the wrong order."""
+        request = parse_request("show restarts in the payments namespace over the last 2 hours")
+        assert request.namespace == "payments"
+
+    def test_a_flag_is_read(self):
+        assert parse_request("-n messaging-squad get logs").namespace == "messaging-squad"
+
+    def test_a_cluster_described_two_words_out_is_still_found(self):
+        """"the ch1 dev cluster" puts the environment nearest the noun, so
+        taking only the adjacent word yields "dev", which names no cluster."""
+        request = parse_request("tail 50 lines from the kannel client pods on the ch1 dev cluster")
+        assert request.context_contains == "ch1"
+        assert request.environment == "dev"
+        assert request.name_contains == "kannel-client"
+
+    def test_a_named_context_is_not_a_fragment(self):
+        request = parse_request("logs for api with context prod-eu-1")
+        assert request.context == "prod-eu-1"
+        assert not request.context_contains
+
+
+class TestCountsAndWindows:
+    def test_a_count_is_a_count(self):
+        assert parse_request("the last 10 logs of api pods").tail == 10
+        assert parse_request("tail 50 lines from api").tail == 50
+
+    def test_a_duration_is_not_a_count(self):
+        """"the last 2 hours" read as two lines silently answers a different
+        question."""
+        request = parse_request("show restarts over the last 2 hours")
+        assert request.tail == 0
+        assert request.since == "2h"
+
+    def test_minutes_are_recognised(self):
+        assert parse_request("fetch the last 30 minutes of logs for api").since == "30m"
+
+
+class TestNames:
+    def test_kind_slash_name_wins_over_prose(self):
+        request = parse_request("get the logs for deployment/api in namespace payments")
+        assert request.name_contains == "api"
+        assert request.namespace == "payments"
+
+    def test_an_environment_is_never_a_workload_name(self):
+        assert parse_request("logs from the dev pods").name_contains != "dev"
+
+    def test_a_question_with_no_target_states_nothing(self):
+        assert parse_request("why is checkout slow").stated == {}
+
+
+class TestRouting:
+    def _kind(self, text):
+        from mimir.graph.triage import triage
+
+        return triage(text).kind.value
+
+    def test_a_described_target_routes_to_the_loop(self):
+        """The first version required a namespace flag or a hyphenated name, so
+        this fell through to the council, which listed 211 namespaces, invented
+        a pod to exec into, never read a log line, and reported that no such
+        pod existed. Two were running."""
+        assert self._kind(
+            "can you tell me the last 10 logs of any messaging outbound pod "
+            "that is inside dev and in a cluster with ch1?"
+        ) == "direct"
+
+    def test_a_mutation_never_reaches_the_read_only_loop(self):
+        """"restart the api deployment" parses as an action against a named
+        target, and the loop reads. Mutation belongs to the council, which has
+        the prepare, approve and execute path."""
+        for text in (
+            "restart the api deployment",
+            "scale the api deployment to 5 in namespace payments",
+            "Raise the memory limit on the api deployment in the prod-eu-1 cluster.",
+            "delete the failing pod in -n payments",
+        ):
+            assert self._kind(text) == "investigate", text
+
+    def test_direct_never_short_circuits_the_graph(self):
+        """Marking it cheap returned a canned reply that does not exist for
+        this verdict, and would have changed what the corpus measures."""
+        from mimir.graph.triage import triage
+
+        verdict = triage("fetch the last 30 minutes of logs for the api deployment")
+        assert verdict.kind.value == "direct"
+        assert not verdict.cheap

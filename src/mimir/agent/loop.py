@@ -172,6 +172,10 @@ class AgentLoop:
     def note_instruction(self, instruction: str) -> None:
         """Called at the start of every turn, for scope the operator stated."""
 
+    def system_for(self, instruction: str) -> str:
+        """The system message for this turn. Rebuilt, never appended to."""
+        return self.system
+
     def _fields(self, name: str) -> set[str]:
         spec = self.registry.get(name)
         return set(spec.input_model.model_fields) if spec is not None else set()
@@ -227,9 +231,8 @@ class AgentLoop:
         # tokens, and it fails silently, because a turn with no tool calls
         # looks exactly like a turn that finished.
         hint = self._hint(instruction)
-        self.messages[0] = LLMMessage.system(
-            f"{self.system}\n\n{hint}" if hint else self.system
-        )
+        base = self.system_for(instruction)
+        self.messages[0] = LLMMessage.system(f"{base}\n\n{hint}" if hint else base)
         self.messages.append(LLMMessage.user(instruction))
         self.outcome = TurnOutcome()
         self.instruction = instruction

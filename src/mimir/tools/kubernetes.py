@@ -1284,6 +1284,167 @@ async def describe_resource(args: DescribeResourceArgs, ctx: ToolContext) -> Too
 _DURATION = re.compile(r"^\d+[smhd]$")
 
 
+class FindWorkloadsArgs(BaseModel):
+    """No namespace, and no single context. That is the point of this tool."""
+
+    name_contains: str = Field(
+        description="Substring of the pod or workload name, for example 'outbound'."
+    )
+    context_contains: str | None = Field(
+        default=None,
+        description=(
+            "Substring of the cluster context, for example 'ch1'. Every matching "
+            "context is searched. Omit to search only the current context."
+        ),
+    )
+    namespace_contains: str | None = Field(
+        default=None, description="Optional substring of the namespace."
+    )
+    limit: int = Field(default=40, ge=1, le=200)
+
+
+@tool(
+    "find_workloads",
+    description=(
+        "Find pods by name across every namespace, and across every cluster context "
+        "whose name matches. Use this whenever the operator describes what they want "
+        "rather than naming a namespace: 'any messaging outbound pod in a cluster with "
+        "ch1'. It is one call, and it is exact substring matching, not a guess."
+    ),
+    capability=Capability.KUBERNETES,
+    risk=RiskClass.R1,
+    tags=("kubernetes", "search"),
+)
+async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResult:
+    """Search by substring, deterministically.
+
+    This tool exists because it was missing. Asked for "any messaging outbound
+    pod inside dev in a cluster with ch1", MIMIR had no way to look across
+    namespaces at all: list_workloads takes one namespace, and when none is
+    given the kubeconfig supplies one. So the search ran in whatever namespace
+    the kubeconfig happened to bind, found nothing, and reported that no such
+    pod existed. Two of them were running.
+
+    The model's workaround was worse than the gap: it proposed
+    ``kubectl exec test-pod -- kubectl get pods --all-namespaces``, inventing a
+    pod name to exec into so it could run kubectl from inside the cluster.
+
+    Nothing here is decided by a model. The contexts come from the kubeconfig,
+    the match is a substring, and the ordering is stable, so the same question
+    returns the same answer.
+    """
+    wanted = _safe_token(args.name_contains, "name_contains").lower()
+    contexts = await _matching_contexts(ctx, args.context_contains)
+    if not contexts:
+        raise ToolError(
+            f"no kubectl context matches {args.context_contains!r}",
+            code="not_found",
+        )
+
+    commands = [
+        _build(
+            ctx,
+            args=["get", "pods", "--all-namespaces", "-o", "json"],
+            purpose=f"find pods matching {wanted!r} across namespaces",
+            context=name,
+            tool_name="find_workloads",
+        )
+        for name in contexts
+    ]
+    records = await _run_batch(ctx, commands)
+
+    now = time.time()
+    rows: list[dict[str, Any]] = []
+    unreachable: list[str] = []
+    for name, command in zip(contexts, commands, strict=True):
+        record = records[command.id]
+        if not record.ok:
+            unreachable.append(name)
+            continue
+        try:
+            items = _items(_parse_json(record, "listing pods"))
+        except ToolError:
+            unreachable.append(name)
+            continue
+        for item in items:
+            view = _pod_view(item, now)
+            pod_name = str(view.get("name", ""))
+            namespace = str((item.get("metadata") or {}).get("namespace", ""))
+            if wanted not in pod_name.lower():
+                continue
+            if args.namespace_contains and (
+                args.namespace_contains.lower() not in namespace.lower()
+            ):
+                continue
+            rows.append({
+                "context": name,
+                "namespace": namespace,
+                "pod": pod_name,
+                "ready": view.get("ready"),
+                "restarts": view.get("restarts"),
+                "phase": view.get("phase"),
+            })
+
+    # Stable ordering: the same question returns the same answer, and the first
+    # row is a defensible default for a follow-up.
+    rows.sort(key=lambda r: (r["context"], r["namespace"], r["pod"]))
+    shown = rows[: args.limit]
+
+    where = f" in contexts matching {args.context_contains!r}" if args.context_contains else ""
+    if not rows:
+        summary = f"no pod name contains {wanted!r}{where}"
+    else:
+        places = sorted({f"{r['context']}/{r['namespace']}" for r in shown})
+        summary = (
+            f"{len(rows)} pod(s) matching {wanted!r}{where}, in "
+            f"{len(places)} namespace(s): {', '.join(places[:4])}"
+        )
+    if unreachable:
+        summary += f" ({len(unreachable)} context(s) unreachable)"
+
+    return ToolResult(
+        tool="find_workloads",
+        summary=summary,
+        data={
+            "matches": shown,
+            "total": len(rows),
+            "contexts_searched": contexts,
+            "contexts_unreachable": unreachable,
+        },
+        truncated=len(rows) > len(shown),
+        evidence=[
+            _evidence(
+                ctx,
+                records[commands[0].id],
+                f"{len(rows)} pod(s) match {wanted!r} across {len(contexts)} context(s)",
+                tool_name="find_workloads",
+            )
+        ] if rows else [],
+    )
+
+
+async def _matching_contexts(ctx: ToolContext, fragment: str | None) -> list[str]:
+    """Kubeconfig contexts whose name contains ``fragment``, in sorted order."""
+    if not fragment:
+        return [await _resolve_context(ctx, None)]
+    listing = _build(
+        ctx,
+        args=["config", "get-contexts", "-o", "name"],
+        purpose="list contexts so the named cluster can be resolved",
+        context=None,
+        tool_name="find_workloads",
+    )
+    record = await _run_one(ctx, listing)
+    if not record.ok:
+        return [await _resolve_context(ctx, None)]
+    needle = fragment.strip().lower()
+    return sorted(
+        line.strip()
+        for line in record.stdout.splitlines()
+        if line.strip() and needle in line.strip().lower()
+    )
+
+
 _LOG_KINDS = frozenset({
     "pod", "po", "pods", "deployment", "deploy", "deployments",
     "statefulset", "sts", "daemonset", "ds", "job", "cronjob", "cj",
