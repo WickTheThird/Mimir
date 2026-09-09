@@ -150,6 +150,7 @@ class AgentLoop:
         self.max_steps = max_steps
         self.task_class = task_class
         self.specs = [s for s in (registry.get(n) for n in tools) if s is not None]
+        self.system = system
         self.messages: list[LLMMessage] = [LLMMessage.system(system)]
         self.outcome = TurnOutcome()
         self.instruction = ""
@@ -167,6 +168,9 @@ class AgentLoop:
 
     def bind(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return arguments
+
+    def note_instruction(self, instruction: str) -> None:
+        """Called at the start of every turn, for scope the operator stated."""
 
     def _fields(self, name: str) -> set[str]:
         spec = self.registry.get(name)
@@ -205,24 +209,32 @@ class AgentLoop:
         not a command: re-reading the same four files for a two line follow-up
         is most of what makes a local model feel unusable.
         """
-        # The hint rides on the user turn rather than the system prompt: it is
-        # about these words, and a system prompt that grows a section per turn
-        # is paid for on every step of every later turn.
+        # The hint goes in the system message, which is rebuilt rather than
+        # appended to, so it never grows across turns.
         #
-        # It goes after the instruction, and that is not cosmetic. Placed
-        # before it, 162 characters of preamble was enough to make
+        # It took three attempts to land here and the reason is worth keeping.
+        # Put before the instruction, 162 characters of preamble made
         # qwen3-coder:30b stop emitting tool calls entirely and write them into
-        # its prose instead, at temperature zero, reproducibly. Measured
-        # against six placements: before the instruction was the only one that
-        # broke it. Leading with the operator's words keeps the turn framed as
-        # something to act on rather than a document to respond to.
+        # its prose instead, at temperature zero, reproducibly. Moved after the
+        # instruction it worked in a six-way probe, and then failed in the real
+        # loop with a 75 character hint that differed only in wording. Length
+        # was never the whole story and neither was position: the user turn is
+        # simply not a stable place to put anything but the request. Every
+        # system-prompt variant in that probe worked, long and short alike.
+        #
+        # The general lesson, which cost most of an afternoon: with a local
+        # model, added prompt text can cost protocol adherence rather than just
+        # tokens, and it fails silently, because a turn with no tool calls
+        # looks exactly like a turn that finished.
         hint = self._hint(instruction)
-        self.messages.append(
-            LLMMessage.user(f"{instruction}\n\n{hint}" if hint else instruction)
+        self.messages[0] = LLMMessage.system(
+            f"{self.system}\n\n{hint}" if hint else self.system
         )
+        self.messages.append(LLMMessage.user(instruction))
         self.outcome = TurnOutcome()
         self.instruction = instruction
         self.observed = []
+        self.note_instruction(instruction)
         options = GenerationOptions(tools=self.schemas(), temperature=0.0)
         corrections = 0
 

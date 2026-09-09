@@ -23,6 +23,7 @@ argued for. A directive whose target is already named is not one of those.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from mimir.agent.loop import AgentLoop
@@ -86,6 +87,12 @@ plainly rather than describing what you would have found.
 """
 
 
+_ASKED_NAMESPACE = re.compile(
+    r"(?:-n|--namespace|\bnamespace)\s+([a-z0-9][\w.-]*)", re.IGNORECASE
+)
+"""The namespace the operator named, if they named one."""
+
+
 class OpsAgent(AgentLoop):
     """Reads a cluster. Defaults the operator's context and namespace in."""
 
@@ -96,8 +103,16 @@ class OpsAgent(AgentLoop):
         self.scope: dict[str, str] = {}
         """Context and namespace this turn has actually used."""
 
+        self.asked: dict[str, str] = {}
+        """Scope the operator stated in the instruction itself."""
+
         super().__init__(tools=tools, system=SYSTEM.format(context=_describe(environment)),
                          **kwargs)
+
+    def note_instruction(self, instruction: str) -> None:
+        match = _ASKED_NAMESPACE.search(instruction or "")
+        self.asked = {"namespace": match.group(1)} if match else {}
+        self.scope = {}
 
     def bind(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Fill in the scope, never override one that was stated.
@@ -108,13 +123,18 @@ class OpsAgent(AgentLoop):
         and silently rewriting the argument would answer a question nobody
         asked while looking like it worked.
 
-        The order matters. When neither the call nor the operator names a
-        namespace, the value used is the last one this turn used, not the one
-        the kubeconfig binds to the context. A real run searched three names in
+        The order matters: what the call states, then what the operator's
+        session is set to, then what the operator wrote in the instruction,
+        then the last value this turn used, and only then the kubeconfig.
+
+        Both fallbacks were added after watching a run go wrong without them.
+        Without the last-used value, a turn searched three names in
         messaging-squad, omitted the namespace on the next three calls, and
-        silently searched perfectscale instead, because that is what the
-        kubeconfig binds to that context. Three empty results in a row, from a
-        namespace nobody had mentioned.
+        silently searched perfectscale, because that is what the kubeconfig
+        binds to that context. And without the operator's own words ranking
+        above it, one call that named "default" made every later omission mean
+        default too, so a request scoped to messaging-squad finished by
+        reporting on a namespace nobody asked about.
         """
         fields = self._fields(name)
         bound = dict(arguments)
@@ -135,7 +155,7 @@ class OpsAgent(AgentLoop):
                 self.scope[field] = str(bound[field])
                 continue
             stated = getattr(self.environment, attribute, None) if self.environment else None
-            fallback = stated or self.scope.get(field)
+            fallback = stated or self.asked.get(field) or self.scope.get(field)
             if fallback:
                 bound[field] = str(fallback)
         return bound

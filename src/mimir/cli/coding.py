@@ -531,6 +531,7 @@ def _glossary(settings: Any) -> Any:
         glossary = get_glossary(settings)
         if not glossary.all(limit=1):
             glossary.seed()
+        glossary.prune()
         return glossary
     except Exception:  # noqa: BLE001
         return None

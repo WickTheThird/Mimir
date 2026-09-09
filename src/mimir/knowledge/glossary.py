@@ -159,12 +159,26 @@ class Glossary:
         operator's word meant at most one of them, so requiring closeness is
         what keeps this from degenerating into "everything means everything".
         """
-        names = sorted({n.strip() for n in observed_names if n and len(n) > 3})
+        # A composite is not a name. "backend-ch1-dev/messaging-squad" is a
+        # scope printed in a tool summary, and recording it taught the glossary
+        # that "squad" means a context and a namespace joined by a slash.
+        names = sorted({
+            n.strip() for n in observed_names
+            if n and len(n) > 3 and "/" not in n and "." not in n
+        })
         if not names:
             return 0
+
+        # Nothing is learned from a name the operator already typed. "squad"
+        # meaning messaging-squad, in a turn whose instruction says
+        # messaging-squad, is a fact about the sentence rather than about the
+        # estate, and it crowds out the association that would have helped.
+        said = (instruction or "").lower()
         learned = 0
         for term in terms_of(instruction):
             for name in _close_to(term, names):
+                if name.lower() in said:
+                    continue
                 self.record(term, name, "observed name", scope=scope)
                 learned += 1
         return learned
@@ -220,20 +234,41 @@ class Glossary:
         ).fetchall()
         return [Association(*row) for row in rows]
 
-    def hint(self, text: str) -> str:
-        """One block of prompt, or nothing.
+    def hint(self, text: str, *, limit: int = 2) -> str:
+        """One short line, or nothing.
+
+        Terse on purpose, and capped. A 296 character version of this stopped
+        qwen3-coder emitting tool calls at all; a one line version does not.
+        Prompt text added to a turn is not free even when it is correct, and
+        the way it fails is silent, so the budget is spent on the two words
+        most likely to be the ones the operator got wrong.
 
         Offered as what the words have meant before, not as what they mean. The
-        estate changes, and a hint stated as a fact is a stale fact that the
-        model will defend."""
-        found = self.lookup(text)
+        estate changes, and a hint stated as a fact is a stale fact the model
+        will defend.
+        """
+        said = (text or "").lower()
+        found = [
+            a for a in self.lookup(text, limit=limit * 3)
+            if a.name.lower() not in said
+        ][:limit]
         if not found:
             return ""
-        lines = "\n".join(f"- {a.render()}" for a in found)
-        return (
-            "Words this operator has used before, and what they turned out to "
-            f"mean. Treat as a lead to check, not as a fact:\n{lines}"
+        pairs = "; ".join(f"{a.term} = {a.name}" for a in found)
+        return f"(earlier in this estate: {pairs}. A lead, not a fact.)"
+
+    def prune(self) -> int:
+        """Remove associations that should never have been recorded.
+
+        Learning rules that are tightened later do not reach what was already
+        written, and a store that keeps its early mistakes is one nobody
+        trusts. Composites came from tool summaries printing a scope rather
+        than a name."""
+        cursor = self._db.execute(
+            "DELETE FROM associations WHERE name LIKE '%/%' OR name LIKE '%.%'"
         )
+        self._db.commit()
+        return cursor.rowcount or 0
 
     # -- seeding ---------------------------------------------------------
 

@@ -769,3 +769,45 @@ class TestToolCallsWrittenAsProse:
         events = asyncio.run(_drain(agent))
         assert events[-1].type is AgentEventType.DONE
         assert agent.outcome.corrections == 0
+
+
+class TestStatedScopeOutranksDrift:
+    """What the operator wrote outranks wherever the model wandered."""
+
+    def _agent(self):
+        from mimir.agent.ops import OpsAgent
+        from mimir.tools.base import ToolContext, load_all_tools
+
+        registry = load_all_tools()
+        return OpsAgent(
+            router=ScriptedRouter(ScriptedModel([])),
+            registry=registry,
+            tool_context=ToolContext(registry=registry),
+        )
+
+    def test_the_namespace_in_the_instruction_is_the_fallback(self):
+        """One call naming "default" made every later omission mean default
+        too, so a request scoped to messaging-squad finished by reporting on a
+        namespace nobody asked about."""
+        agent = self._agent()
+        agent.note_instruction("logs for -n messaging-squad whatapp on a ch1 cluster")
+        agent.bind("list_workloads", {"namespace": "default"})
+        assert agent.bind("list_workloads", {})["namespace"] == "messaging-squad"
+
+    def test_an_explicit_argument_still_wins(self):
+        agent = self._agent()
+        agent.note_instruction("logs for -n messaging-squad")
+        assert agent.bind("list_workloads", {"namespace": "other"})["namespace"] == "other"
+
+    def test_the_long_form_is_recognised_too(self):
+        agent = self._agent()
+        agent.note_instruction("check the namespace payments for restarts")
+        assert agent.asked["namespace"] == "payments"
+
+    def test_a_turn_starts_from_a_clean_scope(self):
+        """Otherwise the namespace of one question leaks into the next."""
+        agent = self._agent()
+        agent.note_instruction("logs for -n messaging-squad")
+        agent.bind("list_workloads", {"namespace": "messaging-squad"})
+        agent.note_instruction("what about the events")
+        assert "namespace" not in agent.bind("list_workloads", {})
