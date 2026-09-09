@@ -125,6 +125,16 @@ plainly rather than describing what you would have found.
 """
 
 
+#: The tools that carry out each stated action. A turn whose action has been
+#: performed is a turn that is finished.
+_ACTION_TOOLS: dict[str, frozenset[str]] = {
+    "logs": frozenset({"get_logs"}),
+    "events": frozenset({"get_events"}),
+    "describe": frozenset({"describe_resource"}),
+    "status": frozenset({"summarise_pod_health", "list_workloads"}),
+    "restarts": frozenset({"summarise_pod_health"}),
+}
+
 _ASKED_NAMESPACE = re.compile(
     r"(?:-n|--namespace|\bnamespace)\s+([a-z0-9][\w.-]*)", re.IGNORECASE
 )
@@ -147,8 +157,52 @@ class OpsAgent(AgentLoop):
         self.request = ParsedRequest()
         """Everything the instruction stated, extracted by rule."""
 
+        self.satisfied: set[str] = set()
+        """Tools that have succeeded this turn."""
+
+        self.located: dict[str, tuple[str, str]] = {}
+        """Pod name to the context and namespace it was actually found in."""
+
         super().__init__(tools=tools, system=SYSTEM.format(context=_describe(environment)),
                          **kwargs)
+
+    def specs_now(self) -> list[Any]:
+        """Everything, until the operator's stated action has been carried out.
+
+        The parser already knows what was asked for. Once a tool of that class
+        has succeeded, offering more tools invites the loop to keep going, and
+        it does: a run that retrieved exactly the requested log lines then
+        fetched them another five times, alternating between two pods, because
+        every branch was still available and the model prefers acting to
+        stopping. Withdrawing them leaves one legal move, which is to answer.
+
+        Deterministic, and it can only fire on evidence that the thing
+        succeeded.
+        """
+        wanted = _ACTION_TOOLS.get(self.request.action)
+        if wanted and self.satisfied & wanted:
+            return []
+        return self.specs
+
+    def note_success(self, name: str, result: Any) -> None:
+        """Remember where each pod was found.
+
+        A search that spans clusters returns the context each match lives in,
+        and the next call names the pod without it. Left alone the pod name
+        resolves against whatever the kubeconfig points at: a request for logs
+        from a ch1 dev cluster returned logs from an unrelated one, and the
+        answer named the wrong cluster while looking entirely correct.
+
+        Recorded rather than inferred, from the search result itself.
+        """
+        self.satisfied.add(name)
+        if name != "find_workloads":
+            return
+        for row in (getattr(result, "data", {}) or {}).get("matches") or []:
+            pod = str(row.get("pod") or "")
+            if pod:
+                self.located[pod] = (str(row.get("context") or ""),
+                                     str(row.get("namespace") or ""))
 
     def hidden(self) -> tuple[str, ...]:
         """Arguments the loop supplies, kept out of the schema.
@@ -173,6 +227,8 @@ class OpsAgent(AgentLoop):
         # are bound onto the calls below, which is both more reliable than
         # asking and the reason the parser exists.
         self.request = parse_request(instruction)
+        self.satisfied = set()
+        self.located = {}
         self.asked = {
             k: v for k, v in (
                 ("namespace", self.request.namespace),
@@ -243,6 +299,18 @@ class OpsAgent(AgentLoop):
             # namespace is called dev, so a search that would have found both
             # pods returned nothing, and the emptiness looked like an answer.
             bound["namespace_contains"] = self.request.namespace or None
+
+        # A pod this turn already located carries the cluster it was found in.
+        # That beats every default, because it is an observation rather than a
+        # setting, and getting it wrong reads the right pod name in the wrong
+        # cluster.
+        named = str(bound.get("target") or bound.get("name") or "")
+        found = self.located.get(named)
+        if found and found[0]:
+            if "context" in fields and not arguments.get("context"):
+                bound["context"] = found[0]
+            if "namespace" in fields and not arguments.get("namespace") and found[1]:
+                bound["namespace"] = found[1]
 
         for field, attribute in (("context", "cluster_context"), ("namespace", "namespace")):
             if field not in fields:

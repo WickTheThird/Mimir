@@ -191,6 +191,19 @@ class AgentLoop:
     def bind(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return arguments
 
+    def note_success(self, name: str, result: ToolResult) -> None:
+        """A tool succeeded. Subclasses use this to learn from what it found."""
+
+    def specs_now(self) -> list[Any]:
+        """Which tools are offered at this point in the turn.
+
+        Usually all of them. A subclass narrows it when the turn has already
+        done what was asked, which under a constrained decoder is the only
+        reliable way to end one: the answer branch is always available and the
+        model does not reliably take it.
+        """
+        return self.specs
+
     def note_instruction(self, instruction: str) -> None:
         """Called at the start of every turn, for scope the operator stated."""
 
@@ -370,6 +383,8 @@ class AgentLoop:
         self.seen[signature] = result.summary or ""
 
         self.outcome.tool_calls += 1
+        if result.ok:
+            self.note_success(call.name, result)
         if call.name in ("edit_worktree_file", "write_worktree_file") and result.ok:
             self.outcome.files_changed.add(str(call.arguments.get("path", "")))
         if call.name == "run_worktree_tests" and result.ok:
@@ -410,7 +425,7 @@ class AgentLoop:
         from mimir.agent.constrained import build_schema, parse_step
         from mimir.llm.base import ModelError
 
-        schema = build_schema(self.specs, hidden=self.hidden())
+        schema = build_schema(self.specs_now(), hidden=self.hidden())
         try:
             content = await self.router.constrained(
                 self.messages,

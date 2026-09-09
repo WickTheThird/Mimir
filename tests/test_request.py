@@ -182,3 +182,96 @@ class TestBinding:
         agent = self._agent()
         agent.note_instruction("the last 10 logs of api pods in -n payments")
         assert agent.bind("get_logs", {"target": "api", "tail": 500})["tail"] == 10
+
+
+class TestALocatedPodCarriesItsCluster:
+    """A search that spans clusters returns the context each match lives in,
+    and the next call names the pod without it. Left alone the pod name
+    resolves against whatever the kubeconfig points at: a request for logs from
+    a ch1 dev cluster returned logs from an unrelated one, and the answer named
+    the wrong cluster while looking entirely correct."""
+
+    def _agent(self):
+        from mimir.agent.ops import OpsAgent
+        from mimir.tools.base import ToolContext, load_all_tools
+
+        class Router:
+            call_log: list = []
+            invocations_attempted = 0
+
+            def for_task(self, task):
+                return None
+
+            def digest_for(self, alias):
+                return ""
+
+        registry = load_all_tools()
+        agent = OpsAgent(
+            router=Router(),
+            registry=registry,
+            tool_context=ToolContext(registry=registry),
+        )
+        agent.note_instruction("logs of any outbound pod in dev in a cluster with ch1")
+        return agent
+
+    def _found(self, agent, context="aws-backend-ch1-dev"):
+        from mimir.tools.base import ToolResult
+
+        agent.note_success("find_workloads", ToolResult(
+            tool="find_workloads",
+            data={"matches": [{"context": context, "namespace": "messaging-squad",
+                               "pod": "messaging-outbound-abc"}]},
+        ))
+
+    def test_reading_a_located_pod_uses_the_cluster_it_was_found_in(self):
+        agent = self._agent()
+        self._found(agent)
+        bound = agent.bind("get_logs", {"target": "messaging-outbound-abc", "tail": 10})
+        assert bound["context"] == "aws-backend-ch1-dev"
+        assert bound["namespace"] == "messaging-squad"
+
+    def test_a_context_the_call_states_still_wins(self):
+        agent = self._agent()
+        self._found(agent)
+        bound = agent.bind("get_logs", {"target": "messaging-outbound-abc",
+                                        "context": "somewhere-else"})
+        assert bound["context"] == "somewhere-else"
+
+    def test_a_pod_that_was_never_located_is_not_given_a_cluster(self):
+        agent = self._agent()
+        self._found(agent)
+        bound = agent.bind("get_logs", {"target": "some-other-pod"})
+        assert bound.get("context") in (None, "")
+
+    def test_a_turn_does_not_inherit_the_last_turn_s_pods(self):
+        agent = self._agent()
+        self._found(agent)
+        agent.note_instruction("now check events")
+        assert agent.located == {}
+
+
+class TestTheTurnEndsWhenTheAskedActionIsDone:
+    """Under a constrained decoder the answer branch is always available and
+    the model does not reliably take it. A run that retrieved exactly the
+    requested log lines then fetched them another five times."""
+
+    def _agent(self):
+        return TestALocatedPodCarriesItsCluster._agent(self)
+
+    def test_tools_stay_available_until_the_action_succeeds(self):
+        agent = self._agent()
+        assert agent.specs_now()
+
+    def test_once_the_action_has_succeeded_only_answering_is_left(self):
+        from mimir.tools.base import ToolResult
+
+        agent = self._agent()
+        agent.note_success("get_logs", ToolResult(tool="get_logs"))
+        assert agent.specs_now() == []
+
+    def test_an_unrelated_success_does_not_end_the_turn(self):
+        from mimir.tools.base import ToolResult
+
+        agent = self._agent()
+        agent.note_success("list_workloads", ToolResult(tool="list_workloads"))
+        assert agent.specs_now()
