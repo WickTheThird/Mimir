@@ -567,7 +567,9 @@ async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
         if located is None:
             raise ToolError(
                 f"the text to replace does not appear in {args.path}. "
-                + _nearby(original, args.old_string),
+                + _nearby(original, args.old_string)
+                + " If you are adding code rather than changing it, use "
+                "insert_worktree_lines, which needs no existing text.",
                 code="no_match",
             )
         actual, how = located

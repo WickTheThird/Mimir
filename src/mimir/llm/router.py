@@ -264,10 +264,10 @@ class ModelRouter:
         task_class: str = TaskClass.DEFAULT,
         session_id: str | None = None,
         purpose: str = "",
-        max_tokens: int = 900,
+        max_tokens: int = 0,
         temperature: float = 0.0,
         tool_calls_before: int = 0,
-    ) -> str:
+    ) -> tuple[str, str]:
         """One call whose output must satisfy ``schema``.
 
         Goes through the runtime's native endpoint because that is where the
@@ -286,12 +286,20 @@ class ModelRouter:
         if not base:
             raise ModelError("constrained decoding needs a runtime base url")
 
+        # The profile's own output budget, not a number chosen here. A
+        # constrained tool call carries its arguments inline, and a coding
+        # tool's arguments are whole blocks of code: a 900 token cap truncated
+        # them mid-string, the JSON no longer parsed, and the turn ended having
+        # changed nothing. Operations calls carry short strings and never hit
+        # it, which is why the two loops behaved differently.
+        budget = max_tokens or getattr(profile, "max_output_tokens", 0) or 4096
+
         payload = {
             "model": model.model,
             "messages": _native_messages(messages),
             "stream": False,
             "format": schema,
-            "options": {"temperature": temperature, "num_predict": max_tokens},
+            "options": {"temperature": temperature, "num_predict": budget},
         }
         started = time.time()
         self.invocations_attempted += 1
@@ -315,6 +323,7 @@ class ModelRouter:
             raise ModelError(f"constrained call failed: {exc}", retryable=True) from exc
 
         content = ((body.get("message") or {}).get("content") or "").strip()
+        reason = str(body.get("done_reason") or "stop")
         self.call_log.append(
             ModelCallRecord(
                 alias=model.alias, model=model.model, started_at=started,
@@ -322,7 +331,7 @@ class ModelRouter:
                 prompt_tokens=int(body.get("prompt_eval_count") or 0),
                 completion_tokens=int(body.get("eval_count") or 0),
                 tool_calls=0 if not content else 1,
-                finish_reason=body.get("done_reason") or "stop",
+                finish_reason=reason,
                 session_id=session_id, purpose=purpose, attempt=0,
                 runtime=getattr(profile, "runtime", ""),
                 digest=self.digest_for(model.alias),
@@ -330,7 +339,7 @@ class ModelRouter:
                 tool_calls_before=tool_calls_before,
             )
         )
-        return content
+        return content, reason
 
     # -- structured output ------------------------------------------------
 

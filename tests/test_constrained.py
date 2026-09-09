@@ -98,3 +98,43 @@ class TestFinishing:
             b for b in schema["anyOf"] if b["properties"]["tool"]["const"] == "get_logs"
         )
         assert "Call get_logs" in branch["description"]
+
+
+class TestTruncationIsNotAnAnswer:
+    """Constrained decoding regressed the coding loop from 3/3 to 0/4, and the
+    cause was a token budget. A coding tool's arguments are whole blocks of
+    code; a 900 token cap cut them off mid-string, the JSON stopped parsing,
+    and the truncated fragment was treated as the model's final word. The turn
+    ended having changed nothing. Operations calls carry short strings and
+    never hit it, which is why only one loop was affected.
+    """
+
+    def test_a_truncated_call_does_not_parse_as_a_tool_call(self):
+        cut = '{"say": "editing", "tool": "edit_worktree_file", "arguments": {"old_'
+        step = parse_step(cut)
+        assert step.as_tool_call() is None
+
+    def test_the_budget_comes_from_the_profile_not_a_constant(self):
+        import inspect as _inspect
+
+        from mimir.llm import router
+
+        source = _inspect.getsource(router.ModelRouter.constrained)
+        assert "max_output_tokens" in source
+
+    def test_the_loop_retries_once_on_a_length_stop(self):
+        import inspect as _inspect
+
+        from mimir.agent.loop import AgentLoop
+
+        source = _inspect.getsource(AgentLoop._constrained_step)
+        assert 'reason == "length"' in source
+        assert "16_384" in source
+
+    def test_a_second_truncation_is_an_error_not_an_answer(self):
+        import inspect as _inspect
+
+        from mimir.agent.loop import AgentLoop
+
+        source = _inspect.getsource(AgentLoop._constrained_step)
+        assert "cut off mid-call" in source

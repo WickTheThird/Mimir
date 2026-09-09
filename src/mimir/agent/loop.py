@@ -187,6 +187,9 @@ class AgentLoop:
         self.seen: dict[str, str] = {}
         """Calls already made this turn, so a repeat is recognisable."""
 
+        self.failures: dict[str, int] = {}
+        """How many times each tool has failed this turn."""
+
     # -- binding ---------------------------------------------------------
 
     def hidden(self) -> tuple[str, ...]:
@@ -278,6 +281,7 @@ class AgentLoop:
         self.instruction = instruction
         self.observed = []
         self.seen: dict[str, str] = {}
+        self.failures = {}
         self.note_instruction(instruction)
         options = GenerationOptions(tools=self.schemas(), temperature=0.0)
         corrections = 0
@@ -390,6 +394,8 @@ class AgentLoop:
         self.outcome.tool_calls += 1
         if result.ok:
             self.note_success(call.name, result)
+        else:
+            self.failures[call.name] = self.failures.get(call.name, 0) + 1
         if call.name in ("edit_worktree_file", "write_worktree_file") and result.ok:
             self.outcome.files_changed.add(str(call.arguments.get("path", "")))
         if call.name == "run_worktree_tests" and result.ok:
@@ -431,18 +437,36 @@ class AgentLoop:
         from mimir.llm.base import ModelError
 
         schema = build_schema(self.specs_now(), hidden=self.hidden())
-        try:
-            content = await self.router.constrained(
-                self.messages,
-                schema,
-                task_class=self.task_class,
-                session_id=self.ctx.session_id,
-                purpose=f"{self.label}:{self.task_class}",
-                temperature=self.temperature,
-                tool_calls_before=self.outcome.tool_calls,
-            )
-        except ModelError as exc:
-            return [], [], exc.message
+        budget = 0
+        for attempt in range(2):
+            try:
+                content, reason = await self.router.constrained(
+                    self.messages,
+                    schema,
+                    task_class=self.task_class,
+                    session_id=self.ctx.session_id,
+                    purpose=f"{self.label}:{self.task_class}",
+                    temperature=self.temperature,
+                    max_tokens=budget,
+                    tool_calls_before=self.outcome.tool_calls,
+                )
+            except ModelError as exc:
+                return [], [], exc.message
+
+            # A call cut off mid-argument is not an answer. Treating truncated
+            # JSON as the model's final word ended coding turns silently,
+            # having changed nothing, because a coding tool's arguments are
+            # whole blocks of code and the first budget was too small for them.
+            if reason == "length" and attempt == 0:
+                budget = 16_384
+                log.info("constrained_output_truncated", step=step, retry_budget=budget)
+                continue
+            if reason == "length":
+                return [], [], (
+                    "the model's output was cut off mid-call even at the larger "
+                    "budget; the change it was making is too large for one step"
+                )
+            break
 
         decoded = parse_step(content)
         call = decoded.as_tool_call()
@@ -565,6 +589,25 @@ class CodingAgent(AgentLoop):
 
     def hidden(self) -> tuple[str, ...]:
         return _BOUND
+
+    def specs_now(self) -> list[Any]:
+        """Withdraw a tool that has failed the same way twice.
+
+        edit_worktree_file needs the existing text reproduced exactly. Asked to
+        add a method, the model repeatedly chose it with thirty, then
+        thirty-seven, then forty lines of old_string, and reproducing forty
+        lines byte-exactly inside a JSON string does not happen. It never fell
+        back to insert_worktree_lines, which needs no existing text at all and
+        is the right tool for adding something.
+
+        Telling it so in the description did not work. Removing the branch
+        does, and it is a rule rather than a request: after two failures the
+        tool is gone for the rest of the turn and the alternatives are what is
+        left.
+        """
+        if self.failures.get("edit_worktree_file", 0) < 2:
+            return self.specs
+        return [s for s in self.specs if s.name != "edit_worktree_file"]
 
     def bind(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         fields = self._fields(name)

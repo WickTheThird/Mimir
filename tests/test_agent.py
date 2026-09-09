@@ -966,3 +966,46 @@ class TestRepeatedCallsEndTheTurn:
         ends = [e for e in asyncio.run(_drain(agent, "third"))
                 if e.type is AgentEventType.TOOL_END]
         assert all(not e.extra_repeat for e in ends)
+
+
+class TestAToolThatKeepsFailingIsWithdrawn:
+    """edit_worktree_file needs the existing text reproduced exactly. Asked to
+    add a method, the model chose it three times with thirty, thirty-seven and
+    forty lines of old_string, and reproducing forty lines byte-exactly inside
+    a JSON string does not happen. It never fell back to insert_worktree_lines,
+    which needs no existing text at all.
+
+    Saying so in the tool description did not work. Removing the branch does.
+    """
+
+    def test_it_stays_available_while_it_is_working(self):
+        agent, _, _ = _agent([])
+        names = [s.name for s in agent.specs_now()]
+        assert "edit_worktree_file" in names
+
+    def test_one_failure_is_not_enough_to_withdraw_it(self):
+        """A single miss may just be a stale read."""
+        agent, _, _ = _agent([])
+        agent.failures["edit_worktree_file"] = 1
+        assert "edit_worktree_file" in [s.name for s in agent.specs_now()]
+
+    def test_two_failures_withdraw_it_for_the_rest_of_the_turn(self):
+        agent, _, _ = _agent([])
+        agent.failures["edit_worktree_file"] = 2
+        names = [s.name for s in agent.specs_now()]
+        assert "edit_worktree_file" not in names
+        assert "insert_worktree_lines" in names, "the alternative has to remain"
+
+    def test_failures_are_counted_from_real_results(self):
+        from mimir.llm.base import ToolCall
+
+        call = ToolCall(name="read_file_range", arguments={"path": "nope.py"})
+        agent, _, _ = _agent([("x", [call]), ("done", [])])
+        asyncio.run(_drain(agent))
+        assert agent.failures.get("read_file_range", 0) >= 1
+
+    def test_a_new_turn_starts_with_a_clean_slate(self):
+        agent, _, _ = _agent([("done", [])])
+        agent.failures["edit_worktree_file"] = 5
+        asyncio.run(_drain(agent, "next"))
+        assert agent.failures == {}

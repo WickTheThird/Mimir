@@ -597,9 +597,7 @@ async def run_best_of(
     if winner is None:
         console.print(Text("no attempt produced a usable change", style="yellow"))
     else:
-        console.print(
-            Text(f"kept attempt #{winner.index + 1}: {winner.render()}", style="green")
-        )
+        console.print(Text(f"kept {winner.render()}", style="green"))
         console.print(
             Text(f"/worktree diff {winner.task} to review it", style="dim")
         )
