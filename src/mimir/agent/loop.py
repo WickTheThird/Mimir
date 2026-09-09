@@ -83,21 +83,20 @@ Every coding tool takes the worktree it operates on. Leaving that to the model
 means it is wrong occasionally, and a wrong task name is not a harmless error:
 it is an edit to a different worktree. Binding it removes the class."""
 
-_WORKTREE_TOOLS = frozenset({
-    "create_task_worktree",
-    "diff_task_worktree",
-    "discard_task_worktree",
-    "edit_worktree_file",
-    "run_worktree_tests",
-    "write_worktree_file",
-})
-"""Tools whose ``repo`` means the source checkout, not the worktree.
+def _is_worktree_tool(fields: set[str]) -> bool:
+    """Whether ``repo`` means the source checkout rather than the worktree.
 
-These take the repository and the task and derive the worktree path from the
-pair, so they need the original. Every other tool reads a tree, and the tree it
-must read is the worktree: binding all of them to the source checkout would
-make a file read back without the edit that was just made to it, which is the
-kind of defect that looks like the model hallucinating."""
+    Derived from the tool's own arguments rather than from a list. A tool that
+    takes both a task and a repo derives the worktree path from the pair, so it
+    needs the original checkout; anything else reads a tree, and the tree it
+    must read is the worktree.
+
+    This was a hand-maintained frozenset until a new worktree tool was added
+    and not put in it. Every call it made resolved against the worktree as if
+    that were the source repo, so it reported that the worktree did not exist
+    while every other tool was working on it happily.
+    """
+    return {"task", "repo"} <= fields
 
 _TOOL_TEXT = re.compile(
     r"(<function\s*=|<tool_call>|</function>|<\|tool\|>|"
@@ -477,7 +476,7 @@ class CodingAgent(AgentLoop):
         if "task" in fields:
             bound["task"] = self.task
         if "repo" in fields:
-            bound["repo"] = self.repo if name in _WORKTREE_TOOLS else self.view
+            bound["repo"] = self.repo if _is_worktree_tool(fields) else self.view
         return bound
 
 

@@ -103,6 +103,18 @@ class TestBoundArguments:
             "fix-thing-worktree"
         )
 
+    def test_which_tools_get_the_source_repo_is_derived_not_listed(self):
+        """It was a hand-maintained frozenset until a new worktree tool was
+        added and not put in it. Every call it made resolved against the
+        worktree as if that were the source repo, so it reported the worktree
+        did not exist while every other tool worked on it."""
+        agent, _, _ = _agent([])
+        for name in ("edit_worktree_file", "insert_worktree_lines",
+                     "write_worktree_file", "run_worktree_tests"):
+            assert agent.bind(name, {})["repo"] == "billing", name
+        for name in ("read_file_range", "search_repository", "lsp_definition"):
+            assert agent.bind(name, {})["repo"] == "fix-thing-worktree", name
+
     def test_a_tool_without_those_fields_is_left_alone(self):
         agent, _, _ = _agent([])
         assert agent.bind("list_repositories", {"query": "x"}) == {"query": "x"}
