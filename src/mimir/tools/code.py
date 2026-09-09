@@ -695,6 +695,16 @@ async def insert_worktree_lines(args: InsertInput, ctx: ToolContext) -> ToolResu
 
         body = _at_depth(lines, args.after_line, strip_line_numbers(args.content))
         body = _drop_repeated_context(body, lines, args.after_line)
+        if not body.strip():
+            # Everything asked for is already there, so nothing was inserted.
+            # Reporting that as a success is what let a loop insert the same
+            # method four times: each no-op looked like progress, and only the
+            # repeat guard eventually stopped it.
+            raise ToolError(
+                f"nothing was inserted: those lines are already in {args.path} "
+                f"at line {args.after_line + 1}. The change is done.",
+                code="already_present",
+            )
         if not body.endswith("\n"):
             body += "\n"
         # A blank line before an inserted block when it follows code, because

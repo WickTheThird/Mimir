@@ -320,3 +320,49 @@ class TestFormattingIsCheckedOnlyWhenItWasClean:
                                settings=settings, was_formatted=True)
         assert report.broke_formatting
         assert not report.ok
+
+
+class TestAnInsertThatChangesNothingSaysSo:
+    """A repeated insert was deduplicated down to nothing and still reported
+    success, so each no-op looked like progress and the loop inserted the same
+    method four times before the repeat guard stopped it."""
+
+    def test_inserting_what_is_already_there_is_refused(self, tmp_path):
+        import asyncio
+        import subprocess
+
+        from mimir.tools import code
+        from mimir.tools.base import ToolContext, load_all_tools
+        from mimir.worktree import WorktreeManager
+
+        repo = tmp_path / "repo"
+        (repo / "src").mkdir(parents=True)
+        (repo / "src" / "a.py").write_text("class A:\n    def f(self):\n        return 1\n")
+        for argv in (["init", "-q"], ["add", "-A"], ["-c", "user.email=t@t",
+                     "-c", "user.name=t", "commit", "-qm", "init"]):
+            subprocess.run(["git", "-C", str(repo), *argv], check=True, capture_output=True)
+
+        registry = load_all_tools()
+        ctx = ToolContext(registry=registry)
+        manager = WorktreeManager(tmp_path / "home")
+
+        async def repo_root(c, name):
+            return repo
+
+        import pytest as _pytest
+
+        monkey = _pytest.MonkeyPatch()
+        monkey.setattr(code, "_manager", lambda c: manager)
+        monkey.setattr(code, "_repo_root", repo_root)
+        manager.create(repo, "t")
+
+        args = {"task": "t", "path": "src/a.py", "after_line": 3,
+                "content": "    def g(self):\n        return 2\n"}
+        first = asyncio.run(registry.invoke("insert_worktree_lines", args, ctx))
+        assert first.ok, first.error
+
+        second = asyncio.run(registry.invoke("insert_worktree_lines", args, ctx))
+        monkey.undo()
+        assert not second.ok
+        assert second.error_code == "already_present"
+        assert "already in" in second.error
