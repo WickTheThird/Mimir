@@ -61,10 +61,28 @@ find_workloads answers that question in one call.
 """
 
 MAX_SCHEMA_CHARS = 11_500
-"""Measured, not chosen. At 11,050 characters the surface works and at 12,276
-it does not, on this model. The ceiling sits below the failure with room for a
-description to grow, and a test fails when a change crosses it, because the
-symptom otherwise appears as a turn that did nothing and reported success."""
+"""A budget, and the reason for it is not the one first written here.
+
+It was set from a single observation: one prompt at temperature zero produced a
+tool call at 11,050 characters of schema and not at 12,276, and that was
+recorded as a cliff. Measured properly, over fifteen distinct prompts per size,
+there is no cliff. There is a slope:
+
+    3,693 chars,  4 tools   80%
+    6,721 chars,  6 tools   67%
+   10,313 chars,  9 tools   53%
+   13,095 chars, 12 tools   47%
+   16,143 chars, 14 tools   40%
+   20,220 chars, 18 tools   33%
+
+Two things follow, and the second matters more. A smaller surface really is
+better, so the budget stays. And no surface is reliable: at four tools one
+prompt in five still produces no tool call, so trimming the tool list cannot
+fix this and never could. The fix is constrained decoding, which makes a tool
+call the only thing the model can emit, or sampling more than once and letting
+the deterministic gate choose. At 53% per attempt, three attempts reach 90%.
+
+mimir eval probe tool_adherence reproduces the table."""
 
 SYSTEM = """\
 You are MIMIR reading a Kubernetes estate on behalf of an operator. Everything
