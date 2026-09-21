@@ -67,15 +67,43 @@ class Verdict:
     evidence is not the same as a decision made on all of it, and a caller that
     cannot tell them apart will treat them the same."""
 
+    calibrated: bool = True
+    """Whether :attr:`probability` means anything.
+
+    A discriminative model scores every option against one encoding of the
+    context, so its number is a probability by construction. A backend that
+    instead constrains a generative model to a closed set gets the closed set
+    but not the score: what comes back is a softmax over a first token, which
+    ranks poorly and whose magnitude is meaningless. Both are useful and they
+    are not interchangeable.
+
+    Callers that gate on a threshold must check this first. The alternative
+    was for an uncalibrated backend to report a number anyway, and a caller
+    comparing 0.0 against a 0.7 floor would discard every correct decision
+    while looking like it was being careful.
+
+    Same rule as FinalAnswer.probability, which stays None until a calibration
+    model exists: a field that cannot be trusted says so structurally rather
+    than by convention."""
+
     @property
     def margin(self) -> float:
         """Distance from the runner-up. A win by a nose is not a decision."""
         ranked = sorted(self.distribution.values(), reverse=True)
         return round(ranked[0] - ranked[1], 4) if len(ranked) > 1 else 1.0
 
+    @property
+    def confident(self) -> bool:
+        """Whether a threshold gate may be applied to this verdict at all."""
+        return self.calibrated
+
     def render(self) -> str:
-        mark = " (truncated)" if self.truncated else ""
-        return f"{self.field}={self.choice} p={self.probability:.2f}{mark}"
+        marks = "".join(
+            [" (truncated)" if self.truncated else "",
+             "" if self.calibrated else " (uncalibrated)"]
+        )
+        score = f" p={self.probability:.2f}" if self.calibrated else ""
+        return f"{self.field}={self.choice}{score}{marks}"
 
 
 @runtime_checkable

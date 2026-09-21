@@ -291,7 +291,7 @@ def judge_completeness(
         verdict = verdicts.get("satisfies")
         if verdict is None:
             continue
-        if (
+        if verdict.calibrated and (
             verdict.probability < settings.decisions.min_probability
             or verdict.margin < settings.decisions.min_margin
         ):
