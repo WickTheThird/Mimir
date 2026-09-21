@@ -121,7 +121,12 @@ class SkillAccess:
             skill = self.registry.get(name)
             if skill is None:
                 return None
-            return list(self.runner.permitted_tools(skill, specialist).allowed)
+            # The names, not the specs. available_tools() narrows by name and
+            # puts what it is given into a set, so handing it ToolSpec objects
+            # raised "unhashable type: ToolSpec" on every specialist step that
+            # a skill narrowed. ToolPermissions carries a names property for
+            # exactly this and the call site reached past it.
+            return self.runner.permitted_tools(skill, specialist).names
         except Exception as exc:  # noqa: BLE001
             log.warning("skill_tool_filter_failed", skill=name, error=str(exc))
             return None

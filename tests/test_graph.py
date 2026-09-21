@@ -556,3 +556,59 @@ def test_a_context_mismatch_refuses_the_comparison():
     problems = comparable(clean, mismatched)
     assert any("262144" in p for p in problems)
     assert any("not what the runtime served" in p for p in problems)
+
+
+class TestSkillNarrowingPassesNames:
+    """A skill narrows a specialist's tool set by name. The call site handed
+    over ToolSpec objects instead, and available_tools puts what it is given
+    into a set, so every specialist step that a skill narrowed died with
+    "unhashable type: ToolSpec". ToolPermissions carries a names property for
+    exactly this."""
+
+    def test_permissions_expose_names_as_well_as_specs(self):
+        from mimir.models.specialist import SpecialistName
+        from mimir.safety.risk import RiskClass
+        from mimir.skills.runner import ToolPermissions
+        from mimir.tools.base import load_all_tools
+
+        registry = load_all_tools()
+        permissions = ToolPermissions(
+            specialist=SpecialistName.KUBERNETES_INVESTIGATOR, max_risk=RiskClass.R1
+        )
+        permissions.allowed = [registry.get("get_logs"), registry.get("get_events")]
+        assert permissions.names == ["get_events", "get_logs"]
+        assert set(permissions.names)
+
+    def test_specs_themselves_cannot_go_into_a_set(self):
+        """Which is why passing them where names were wanted raised rather than
+        quietly narrowing to nothing."""
+        import pytest
+
+        from mimir.tools.base import load_all_tools
+
+        registry = load_all_tools()
+        specs = [registry.get("get_logs")]
+        with pytest.raises(TypeError):
+            set(specs)
+
+    def test_the_call_site_asks_for_names(self):
+        import inspect
+
+        from mimir.graph.nodes import SkillAccess
+
+        source = inspect.getsource(SkillAccess.allowed_tools)
+        assert ".names" in source
+        assert ".allowed)" not in source
+
+    def test_narrowing_by_name_keeps_only_those_tools(self):
+        from mimir.council.specialists import build_council
+        from mimir.llm.router import ModelRouter
+        from mimir.tools.base import load_all_tools
+
+        registry = load_all_tools()
+        council = build_council(registry=registry, router=ModelRouter())
+        from mimir.models.specialist import SpecialistName
+
+        specialist = council[SpecialistName.KUBERNETES_INVESTIGATOR]
+        narrowed = specialist.available_tools(["get_logs"])
+        assert [s.name for s in narrowed] == ["get_logs"]

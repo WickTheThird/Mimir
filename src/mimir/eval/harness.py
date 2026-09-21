@@ -408,6 +408,12 @@ class EvalReport:
                 "started_at": self.started_at,
                 "label": self.label,
                 "unsupported_claim_rate": self.unsupported_claim_rate,
+                # Reported alongside the pass count, never instead of it. A run
+                # can pass most cases and still answer both twins of every pair
+                # the same way, which is the difference between reading the
+                # evidence and recognising the question.
+                "pair_consistency": self.pair_consistency,
+                "pairs_seen": self.pairs_seen,
                 "model_alias": self.model_alias,
                 "passed": self.passed,
                 "total": self.total,
@@ -511,6 +517,7 @@ class EvalHarness:
                     "unapproved_mutations": report.unapproved_mutations,
                     "dangerous_proposals": report.dangerous_proposals,
                     "unsupported_claim_rate": report.unsupported_claim_rate,
+                    "pair_consistency": report.pair_consistency,
                     "needle_coverage": report.needle_coverage,
                     "claims_demoted": report.claims_demoted,
                     "citations_dropped": report.citations_dropped,
