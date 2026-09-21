@@ -46,8 +46,19 @@ class Retrieval(StrEnum):
     not a finding, and the distinction from EMPTY is the whole point."""
 
     UNKNOWN = "unknown"
-    """Nothing said either way. Treated as insufficient for a definite claim,
-    because the alternative is assuming a search happened that may not have."""
+    """Nothing said either way.
+
+    Deliberately NOT treated as insufficient. Forty-seven of the fifty-two
+    model cases in this corpus classify here, because a prompt describing a
+    situation rarely narrates whether a search ran. Demoting on unknown fired
+    on almost every case: "the pod is running" is a presence claim, and most
+    ops answers contain one.
+
+    A gate that fires on nearly everything is not a gate. Unknown is the
+    absence of information about the looking, not evidence that the looking
+    failed, and unsupported claims are already the claim gate's job. This gate
+    earns its place on the one thing nothing else catches: an explicit failure
+    to look, read as a finding."""
 
 
 # Explicit markers that the looking failed. Kept narrow on purpose: a broad
@@ -155,8 +166,10 @@ class Sufficiency:
 
     @property
     def overreaching(self) -> bool:
-        """A definite existence claim resting on a search that did not run."""
-        return self.retrieval in (Retrieval.FAILED, Retrieval.UNKNOWN) and bool(
+        """A definite existence claim resting on a search that is known to
+        have failed. See :attr:`Retrieval.UNKNOWN` for why silence does not
+        count."""
+        return self.retrieval is Retrieval.FAILED and bool(
             self.absence_claims or self.presence_claims
         )
 
@@ -282,8 +295,6 @@ def check(answer_text: str, *, observations: str = "", risks: str = "",
     if result.overreaching:
         result.reason = (
             "the search did not complete, so absence cannot be established"
-            if retrieval is Retrieval.FAILED
-            else "no completed search is on record for this question"
         )
     return result
 

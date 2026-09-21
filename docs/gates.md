@@ -30,6 +30,16 @@ Failure beats completion when both appear. A search where two clusters
 answered and the third timed out cannot establish that the third holds
 nothing, and reading a partial result as complete is the error itself.
 
+The gate fires only on an explicit failure to look. Silence about whether a
+search ran does not count, and that restriction was not the first design.
+The first version also demoted on `unknown`, which sounds careful and is
+not: forty-seven of the fifty-two model cases in this corpus classify as
+unknown, because a prompt describing a situation rarely narrates whether a
+search ran. Since "the pod is running" is a presence claim and most ops
+answers contain one, the gate would have fired on nearly every case. A gate
+that fires on everything is not a gate. It was caught by counting before the
+sweep rather than by reading the sweep afterwards.
+
 **Why the claim gate could not catch it.** `verify/claims.py` asks whether
 each stated fact resolves to evidence. "There is no billing pod" is a claim
 about the *absence* of evidence, so it resolves to nothing by construction

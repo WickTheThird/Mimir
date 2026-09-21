@@ -218,3 +218,39 @@ def test_the_freshness_window_comes_from_config_not_from_a_literal():
     from mimir.graph.nodes import _stale_after_days
 
     assert _stale_after_days() == get_settings().knowledge.stale_after_days
+
+
+class TestTheGateDoesNotFireOnEverything:
+    """A gate that fires on nearly every case is not a gate."""
+
+    def test_silence_about_looking_does_not_demote(self):
+        """47 of the 52 model cases in this corpus classify as unknown,
+        because a prompt describing a situation rarely narrates whether a
+        search ran. Demoting on unknown fired on almost all of them."""
+        result = check("The pod is running.", observations="The pod is important.")
+        assert result.retrieval is Retrieval.UNKNOWN
+        assert not result.overreaching
+
+    def test_a_routine_presence_claim_survives_an_unnarrated_situation(self):
+        answer = FinalAnswer(answer="There are 3 replicas running.", confidence=0.8)
+        before = answer.answer
+        answer, moved = demote_overreach(
+            answer, check(before, observations="Replica counts were checked.")
+        )
+        assert moved == 0
+        assert answer.answer == before
+
+    def test_only_an_explicit_failure_to_look_demotes(self):
+        assert check("There is no billing pod.", observations=FAILED).overreaching
+
+    def test_the_corpus_would_not_be_demoted_wholesale(self):
+        """The guard that would have caught this before the sweep."""
+        from mimir.eval.harness import EvalHarness
+
+        fires = sum(
+            1
+            for case in EvalHarness.load_corpus()
+            if not case.deterministic
+            and check("The pod is running.", observations=case.prompt).overreaching
+        )
+        assert fires <= 5, f"gate fires on {fires} model cases, which is not a gate"
