@@ -306,3 +306,18 @@ prompts at several surface sizes, replicated. The pairing matters more than it
 looks: an early version used the coding system prompt with cluster tools and
 cluster questions and measured that mismatch instead, reporting a flat 20%
 across every size.
+
+
+## What a single run supports
+
+Two runs of the same model over the same 84 cases returned an identical
+aggregate, 63 of 82 scored and 6 of 15 pairs, while 16 cases, a fifth of the
+corpus, flipped verdict between them.
+
+Both halves of that matter. The aggregate reproduces, so comparing tiers on
+pass rate and pair consistency is meaningful from one run each. The per-case
+result does not, so "this tier fails the absence pair" is a claim a single run
+cannot support and a fifth of such claims would be noise.
+
+Diagnosis therefore needs repeats even though comparison does not. When a
+failing case is used to justify a change, it has to fail repeatedly first.
