@@ -254,3 +254,38 @@ class TestTheGateDoesNotFireOnEverything:
             and check("The pod is running.", observations=case.prompt).overreaching
         )
         assert fires <= 5, f"gate fires on {fires} model cases, which is not a gate"
+
+
+def test_no_gate_fires_on_a_large_fraction_of_the_corpus():
+    """The guard that caught the sufficiency gate demoting 47 of 52 cases.
+
+    A gate is meant to be the exception. One that fires on most cases is
+    either measuring something other than what it claims, or the corpus is
+    uniformly broken in a way that deserves its own investigation. Either
+    way it must not reach a sweep unexamined.
+    """
+    from mimir.eval.harness import EvalHarness
+    from mimir.verify.grounding import check as grounding_check
+    from mimir.verify.patterns import claims_retries
+
+    cases = [c for c in EvalHarness.load_corpus() if not c.deterministic]
+    budget = len(cases) // 5
+
+    overreach = sum(
+        1
+        for c in cases
+        if check("The pod is running.", observations=c.prompt).overreaching
+    )
+    stale = sum(
+        1 for c in cases if classify_currency(observations=c.prompt) is Currency.STALE
+    )
+    # Echoing back what the operator said must never read as an invention.
+    echoed = sum(
+        1 for c in cases if not grounding_check(c.prompt, "", asked=c.prompt).ok
+    )
+    retry = sum(1 for c in cases if claims_retries(c.prompt))
+
+    assert overreach <= budget, f"sufficiency fires on {overreach}/{len(cases)}"
+    assert stale <= budget, f"currency fires on {stale}/{len(cases)}"
+    assert echoed == 0, f"grounding flags the operator's own words on {echoed}"
+    assert retry <= budget, f"retry is eligible on {retry}/{len(cases)}"
