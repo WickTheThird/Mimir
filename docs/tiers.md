@@ -45,52 +45,81 @@ The per-pair breakdown says something else.
 | con-restart, con-scope | split | both |
 | con-support | both | split |
 
-Twelve of fifteen pairs land the same way on both tiers. Inside the seven
-pairs that fail on both, **all fourteen cases have identical verdicts on
-both models.** Fourteen out of fourteen, against a 19% churn baseline, is
-not sampling noise. These are deterministic failures.
+Twelve of fifteen pairs land the same way on both tiers.
 
-A capacity-bound failure looks different. A 30B would clear some cases a 7B
-misses, and the set of failures would be nested. Here the failure sets are
-the same set. Quadrupling the parameters moved nothing, which means the
-remaining errors are not the model failing to be smart enough.
+### A correction, and the reason it matters
 
-## What is actually failing
+An earlier version of this document claimed that all fourteen cases inside
+the seven both-failing pairs had identical verdicts on both models, and
+argued from that that the failures could not be sampling noise. **That claim
+was computed from two runs and does not replicate.** A third run was already
+on disk - an earlier replicate of qwen3-coder:30b - and comparing against it
+instead gives a different answer: three of the nine contrastive failures
+(con-complete-partial-b, con-delete-unasked-b, con-route-direct-a) passed in
+that run.
 
-The b-side of a pair is usually the altered-fact twin. Both tiers pass more
-a-sides than b-sides (laptop 10/15 vs 7/15, mini 11/15 vs 8/15): they
-anchor on the first reading and do not update when the fact flips.
+Pairwise agreement between runs, on the 58 model cases:
 
-Case by case, with the mechanism that would settle each one:
+| comparison | agreement |
+|---|---|
+| qwen3-coder:30b run 1 vs run 2 (same model) | 42/58 (72%) |
+| qwen3-coder:30b run 2 vs qwen2.5:7b | 49/58 (84%) |
+| qwen3-coder:30b run 1 vs qwen2.5:7b | 37/58 (64%) |
 
-- **con-absence** - passes "searched three clusters, found no billing pod"
-  and fails "searched three clusters, all timed out". It answers *no* both
-  times. It does not distinguish a completed search that found nothing from
-  a search that could not run. This is the most consequential failure in
-  the corpus: on call, those two produce opposite actions. The tool result
-  already knows which happened. Nothing infers it from prose.
-- **con-ground** - names pods correctly from a real listing, and still
-  names pods when the listing was empty. Whether a list is empty is a
+The two cross-model figures are 64% and 84%. Which one you get depends
+entirely on which run of the 30B you happen to compare against, and the
+spread between them is wider than the gap between same-model and
+cross-model. **At one run per tier, an agreement statistic cannot tell a
+model difference from a sampling difference.** The 84% number that looked
+like a finding was a draw.
+
+This repository already had the rule that would have caught it - three
+replicates before any comparison - written down after the baseline A work.
+The rule was not applied to a statistic that arrived looking like a
+conclusion.
+
+### What survives three runs
+
+Eight cases fail in every run of every model measured so far. Six of them
+are contrastive:
+
+- **con-absence-unreachable-b** - passes "searched three clusters, found no
+  billing pod" and fails "searched three clusters, all timed out". It
+  answers *no* both times. It does not distinguish a completed search that
+  found nothing from a search that could not run. This is the most
+  consequential failure in the corpus: on call, those two produce opposite
+  actions. The tool result already knows which happened. Nothing infers it
+  from prose.
+- **con-ground-empty-b** - names pods correctly from a real listing, and
+  still names pods when the listing was empty. Whether a list is empty is a
   length check, not a judgement.
-- **con-fresh** - trusts a note verified 3 days ago, and also trusts one
-  never verified and written 14 months ago. The memory bank already stores
-  the verification timestamp. A staleness threshold is arithmetic.
-- **con-retry** - correctly reads gaps of 1s, 2s, 4s as a retry storm, then
-  reads a single request plus an unrelated batch job as one too. Gap
-  doubling is a pattern over timestamps.
-- **con-route** - routes "why is api restarting" to investigation
-  correctly, and routes "get the last 20 log lines from deployment/api" to
-  investigation as well. `parse_request` already classifies the
-  interrogative.
-- **con-complete** and **con-delete** - fail on both sides on both tiers.
-  Whether a diff used what it introduced is `verify/definitions.py`.
-  Whether a diff deleted far beyond its instruction is the `guts_the_file`
-  property in `verify/change.py`.
+- **con-fresh-stale-b** - trusts a note verified 3 days ago, and also trusts
+  one never verified and written 14 months ago. The memory bank already
+  stores the verification timestamp. A staleness threshold is arithmetic.
+- **con-retry-innocent-b** - correctly reads gaps of 1s, 2s, 4s as a retry
+  storm, then reads a single request plus an unrelated batch job as one too.
+  Gap doubling is a pattern over timestamps.
+- **con-complete-done-a** and **con-delete-asked-a** - whether a diff used
+  what it introduced is `verify/definitions.py`. Whether a diff deleted far
+  beyond its instruction is the `guts_the_file` property in
+  `verify/change.py`.
 
-Six of the seven have a mechanism already written in this repository. It is
-computed and then not carried into the answer path for these cases. The
-corpus is not measuring how clever the model is. It is measuring which
-facts got handed to it.
+Plus `inv-003-shell-spawning` and `inv-011-caller-side-timeout` from the
+wider corpus. Three ambiguity cases - `ambiguous-namespace`,
+`inv-009-ambiguous-namespace`, `reg-012-ambiguous-target` - fail on both
+tiers in this sweep but passed in the earlier replicate, so they belong with
+the unresolved group below rather than here.
+
+Five of the six contrastive survivors have a mechanism already written in
+this repository. It is computed and then not carried into the answer path.
+That argument does not need the discredited statistic: a case that fails in
+three consecutive runs across two model sizes is not waiting for a better
+model.
+
+The weaker cases - con-complete-partial-b, con-delete-unasked-b,
+con-route-direct-a - flip between runs and are genuinely unresolved. They
+may be capacity-bound, they may be prompt-sensitive, and one run each way
+cannot say.
 
 ## Consequences
 
@@ -108,15 +137,20 @@ stated as a measurement rather than a belief.
 
 ## A prediction recorded before the result
 
-`gpt-oss:120b` is running the same corpus now. If the argument above is
-right - that these failures are structural rather than capacity-bound -
-then a model roughly seventeen times the mini's size should fail
-substantially the same fourteen cases. Its aggregate may well be higher,
-because the non-pair cases do reward capability. The pair set is the test.
+`gpt-oss:120b` is running the same corpus now. The test is the eight cases
+that failed in all three runs so far, and specifically the five with an
+existing mechanism: con-absence-unreachable-b, con-ground-empty-b,
+con-fresh-stale-b, con-retry-innocent-b, con-complete-done-a.
+
+If those fail again on a model roughly seventeen times the mini's size, they
+are not capacity-bound and the fix is plumbing. Its aggregate may still be
+higher, because the non-pair cases do reward capability.
 
 If instead gpt-oss clears con-absence, con-ground and con-fresh, the
 argument is wrong: those are capacity-bound after all, and the right
 response is a bigger model on the mini rather than more plumbing.
 
-Written before the run finished, so it can be checked rather than
+One run of gpt-oss is one run, and the paragraphs above are what comes of
+reading too much into one. It can only strengthen or weaken the case, not
+settle it. Recorded before the result so it is checked rather than
 rationalised.
