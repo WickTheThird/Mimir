@@ -106,6 +106,44 @@ _PRESENCE_CLAIM = re.compile(
 )
 
 
+class Currency(StrEnum):
+    """How current the thing the answer rests on actually is."""
+
+    CURRENT = "current"
+    """Observed this run, or verified inside the freshness window."""
+
+    STALE = "stale"
+    """On record, and either never verified or verified long ago. Usable as a
+    lead. Not usable as a statement of what is true now."""
+
+    UNKNOWN = "unknown"
+
+
+# A note nobody ever checked is not a fact, however confidently it is written.
+_NEVER_VERIFIED = re.compile(
+    r"\b(never been verified|never verified|unverified|not been verified"
+    r"|no(?:ne)? verification|has not been checked|never checked)\b",
+    re.IGNORECASE,
+)
+
+# Age stated in the text. Months and years are always past any sane window;
+# days are compared against it.
+_AGE_MONTHS = re.compile(r"\b(\d+)\s*(?:month|year)s?\s*(?:ago|old)\b", re.IGNORECASE)
+_AGE_DAYS = re.compile(r"\b(\d+)\s*days?\s*(?:ago|old)\b", re.IGNORECASE)
+
+_NO_LIVE_CHECK = re.compile(
+    r"\b(no live check|not been (?:re)?checked live|without checking"
+    r"|no current (?:check|reading|observation))\b",
+    re.IGNORECASE,
+)
+
+_ALREADY_HEDGED = re.compile(
+    r"\b(verify|verif(?:y|ied|ication)|confirm|re-?check|check (?:it|this|first)"
+    r"|before relying)\b",
+    re.IGNORECASE,
+)
+
+
 @dataclass(slots=True)
 class Sufficiency:
     """Whether the evidence supports the definiteness of the answer."""
@@ -148,6 +186,81 @@ def classify_retrieval(
     if _COMPLETED.search(blob) or executions:
         return Retrieval.OBSERVED
     return Retrieval.UNKNOWN
+
+
+def classify_currency(
+    *,
+    observations: str = "",
+    freshness: list[str] | None = None,
+    stale_after_days: int = 30,
+    executions: int = 0,
+) -> Currency:
+    """Whether what the answer rests on is current or merely on record.
+
+    A note written fourteen months ago that nobody has ever verified is
+    treated exactly like one verified three days ago, on every model measured.
+    The difference is arithmetic, and the memory bank already stores the
+    timestamp that makes it.
+
+    ``freshness`` carries the structured verdicts from the evidence when there
+    is evidence; the text markers cover the case where the situation is stated
+    rather than retrieved.
+    """
+    if executions:
+        return Currency.CURRENT
+    values = {str(f).lower() for f in (freshness or [])}
+    if values and values <= {"stale", "unknown"}:
+        return Currency.STALE
+    if values & {"live", "recent"}:
+        return Currency.CURRENT
+
+    if _NEVER_VERIFIED.search(observations):
+        return Currency.STALE
+    if _AGE_MONTHS.search(observations):
+        return Currency.STALE
+    days = _AGE_DAYS.search(observations)
+    if days and int(days.group(1)) > stale_after_days:
+        return Currency.STALE
+    if days:
+        # An age was stated and it is inside the window. That is a positive
+        # statement of currency, not an absence of one.
+        return Currency.CURRENT
+    if _NO_LIVE_CHECK.search(observations):
+        return Currency.STALE
+    return Currency.UNKNOWN
+
+
+def demote_stale(answer: Any, currency: Currency) -> tuple[Any, int]:
+    """Say that a stale record must be verified before it is relied on.
+
+    Not deletion and not silence. The remembered value is the most useful
+    thing available and the operator should see it. What must change is its
+    status: a lead to confirm rather than a reading to act on.
+
+    An answer that already tells the operator to verify is left alone, because
+    appending a second instruction to an answer that gave the right one reads
+    as a system that does not understand its own output.
+    """
+    if currency is not Currency.STALE:
+        return answer, 0
+    prose = getattr(answer, "answer", "") or ""
+    facts = list(getattr(answer, "observed_facts", None) or [])
+    if not facts and _ALREADY_HEDGED.search(prose):
+        return answer, 0
+
+    answer.observed_facts = []
+    answer.unverified = [
+        *(getattr(answer, "unverified", None) or []),
+        *[f"{f} (from an unverified or stale record)" for f in facts],
+    ]
+    if not _ALREADY_HEDGED.search(prose):
+        answer.answer = (
+            f"{prose}\n\nThis rests on a stored note that has not been "
+            f"verified recently. Verify it against the live system before "
+            f"relying on the value."
+        ).strip()
+    answer.confidence = round(min(getattr(answer, "confidence", 0.5), 0.35), 3)
+    return answer, len(facts) or 1
 
 
 def _sentences(text: str) -> list[str]:
@@ -213,9 +326,12 @@ def demote_overreach(answer: Any, sufficiency: Sufficiency) -> tuple[Any, int]:
 
 
 __all__ = [
+    "Currency",
     "Retrieval",
     "Sufficiency",
     "check",
+    "classify_currency",
     "classify_retrieval",
     "demote_overreach",
+    "demote_stale",
 ]

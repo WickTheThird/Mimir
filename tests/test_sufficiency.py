@@ -2,6 +2,9 @@
 
 from mimir.models.specialist import FinalAnswer
 from mimir.verify.sufficiency import (
+    Currency,
+    classify_currency,
+    demote_stale,
     Retrieval,
     check,
     classify_retrieval,
@@ -130,3 +133,88 @@ def test_the_gate_reads_the_field_the_real_answer_actually_has():
         answer, check(answer.answer, observations=FAILED)
     )
     assert moved and "Unknown" in answer.answer
+
+
+VERIFIED = (
+    "A stored note says the payments service runs 6 replicas. It was last "
+    "verified 3 days ago. No live check has been run."
+)
+NEVER = (
+    "A stored note says the payments service runs 6 replicas. It has never "
+    "been verified and was written 14 months ago. No live check has been run."
+)
+
+
+class TestCurrency:
+    """A note nobody checked in fourteen months is not a current fact."""
+
+    def test_a_recently_verified_note_is_current(self):
+        assert classify_currency(observations=VERIFIED) is Currency.CURRENT
+
+    def test_a_never_verified_fourteen_month_old_note_is_stale(self):
+        """The twin of the case above, differing in one fact."""
+        assert classify_currency(observations=NEVER) is Currency.STALE
+
+    def test_an_age_in_months_is_always_past_the_window(self):
+        assert classify_currency(observations="written 8 months ago") is Currency.STALE
+
+    def test_an_age_in_days_is_compared_against_the_window(self):
+        assert classify_currency(observations="checked 2 days ago") is Currency.CURRENT
+        assert classify_currency(observations="checked 90 days ago") is Currency.STALE
+
+    def test_a_live_execution_settles_it_regardless_of_the_notes(self):
+        assert classify_currency(observations=NEVER, executions=1) is Currency.CURRENT
+
+    def test_structured_freshness_is_preferred_over_reading_prose(self):
+        assert classify_currency(freshness=["stale", "unknown"]) is Currency.STALE
+        assert classify_currency(freshness=["live"]) is Currency.CURRENT
+
+    def test_saying_nothing_about_age_is_not_a_claim_of_freshness(self):
+        assert classify_currency(observations="It runs 6 replicas.") is (
+            Currency.UNKNOWN
+        )
+
+
+class TestStaleDemotion:
+    def _answer(self, text, facts=()):
+        return FinalAnswer(answer=text, observed_facts=list(facts), confidence=0.9)
+
+    def test_a_stale_value_is_reported_with_an_instruction_to_verify(self):
+        answer = self._answer("The payments service runs 6 replicas.",
+                              ["payments runs 6 replicas"])
+        answer, moved = demote_stale(answer, Currency.STALE)
+        assert moved
+        assert "erify" in answer.answer
+        assert answer.observed_facts == []
+        assert any("6 replicas" in u for u in answer.unverified)
+
+    def test_the_remembered_value_stays_visible(self):
+        """It is the most useful thing available. What changes is its status."""
+        answer = self._answer("The payments service runs 6 replicas.")
+        answer, _ = demote_stale(answer, Currency.STALE)
+        assert "6 replicas" in answer.answer
+
+    def test_an_answer_that_already_says_verify_is_left_alone(self):
+        """Appending a second instruction to an answer that gave the right one
+        reads as a system that does not understand its own output."""
+        text = "The note says 6 replicas. Verify against the live system."
+        answer = self._answer(text)
+        answer, moved = demote_stale(answer, Currency.STALE)
+        assert moved == 0
+        assert answer.answer == text
+
+    def test_a_current_value_passes_through(self):
+        answer = self._answer("6 replicas.", ["6 replicas"])
+        answer, moved = demote_stale(answer, Currency.CURRENT)
+        assert moved == 0
+        assert answer.observed_facts == ["6 replicas"]
+
+
+def test_the_freshness_window_comes_from_config_not_from_a_literal():
+    """The first version read settings.memory.stale_after_days, which does not
+    exist, so getattr returned the default written beside it and the gate ran
+    on a 30-day window with nothing logged."""
+    from mimir.config import get_settings
+    from mimir.graph.nodes import _stale_after_days
+
+    assert _stale_after_days() == get_settings().knowledge.stale_after_days

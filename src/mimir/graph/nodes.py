@@ -46,7 +46,11 @@ from mimir.verify.claims import (
 from mimir.verify.grounding import check as grounding_check
 from mimir.verify.grounding import demote_ungrounded
 from mimir.verify.sufficiency import check as sufficiency_check
-from mimir.verify.sufficiency import demote_overreach
+from mimir.verify.sufficiency import (
+    classify_currency,
+    demote_overreach,
+    demote_stale,
+)
 
 log = get_logger(__name__)
 
@@ -735,17 +739,64 @@ def _enforce_sufficiency(answer: FinalAnswer, session: InvestigationState) -> Fi
         "overreaching": result.overreaching,
         "claims": len(result.absence_claims) + len(result.presence_claims),
     }
-    if not result.overreaching:
-        return answer
-    answer, demoted = demote_overreach(answer, result)
-    session.metadata["sufficiency"]["demoted"] = demoted
-    log.info(
-        "sufficiency_enforced",
-        session_id=session.session_id,
-        retrieval=str(result.retrieval),
-        demoted=demoted,
+    demoted = 0
+    if result.overreaching:
+        answer, demoted = demote_overreach(answer, result)
+
+    # Staleness is the same question asked of time rather than of reach: is
+    # what this rests on good enough to state as current? A note nobody has
+    # verified in fourteen months was treated exactly like one verified three
+    # days ago on every model measured.
+    currency = classify_currency(
+        observations=observations,
+        freshness=[str(e.freshness) for e in session.evidence],
+        stale_after_days=_stale_after_days(),
+        executions=len(session.commands_executed),
     )
+    answer, stale_demoted = demote_stale(answer, currency)
+    session.metadata["sufficiency"].update(
+        {"demoted": demoted, "currency": str(currency), "stale_demoted": stale_demoted}
+    )
+    if demoted or stale_demoted:
+        log.info(
+            "sufficiency_enforced",
+            session_id=session.session_id,
+            retrieval=str(result.retrieval),
+            currency=str(currency),
+            demoted=demoted,
+            stale_demoted=stale_demoted,
+        )
     return answer
+
+
+_STALE_AFTER_DAYS_DEFAULT = 180
+"""Mirrors config.knowledge.stale_after_days so the fallback is the real
+default rather than a number invented at the call site.
+
+The first version of this reached for ``settings.memory.stale_after_days``,
+which does not exist. getattr returned the literal written beside it and the
+gate ran on a 30-day window with nothing logged. Wrong config paths that fall
+back quietly are the same shape as the nine defects already catalogued here:
+the working path and the broken path produce identical output.
+"""
+
+
+def _stale_after_days() -> int:
+    """The configured freshness window.
+
+    A verification gate that crashes the run it protects has made things worse
+    than the bug it was added for, so a settings failure falls back rather than
+    raising. It says so in the log, because a silent fallback is what this
+    comment is about.
+    """
+    try:
+        from mimir.config import get_settings
+
+        return int(get_settings().knowledge.stale_after_days)
+    except Exception as exc:  # noqa: BLE001 - a gate must not break the run
+        log.warning("stale_window_unreadable", error=str(exc),
+                    using=_STALE_AFTER_DAYS_DEFAULT)
+        return _STALE_AFTER_DAYS_DEFAULT
 
 
 def _enforce_grounding(answer: FinalAnswer, session: InvestigationState) -> FinalAnswer:
