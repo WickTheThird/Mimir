@@ -307,9 +307,16 @@ class OpsAgent(AgentLoop):
         named = str(bound.get("target") or bound.get("name") or "")
         found = self.located.get(named)
         if found and found[0]:
-            if "context" in fields and not arguments.get("context"):
+            # Set, not filled. A pod this turn located came back with the
+            # context and namespace it was found in, and that is an observation;
+            # whatever the model puts in those fields is a guess about the same
+            # thing. A smaller model guesses worse: one put the context and the
+            # namespace into the namespace field as a single slash-joined
+            # string, four times, and a fill-if-absent rule let the wrong value
+            # stand because the field was not empty.
+            if "context" in fields:
                 bound["context"] = found[0]
-            if "namespace" in fields and not arguments.get("namespace") and found[1]:
+            if "namespace" in fields and found[1]:
                 bound["namespace"] = found[1]
 
         for field, attribute in (("context", "cluster_context"), ("namespace", "namespace")):

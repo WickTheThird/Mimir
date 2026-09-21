@@ -275,3 +275,43 @@ class TestTheTurnEndsWhenTheAskedActionIsDone:
         agent = self._agent()
         agent.note_success("list_workloads", ToolResult(tool="list_workloads"))
         assert agent.specs_now()
+
+
+class TestALocatedPodOverridesAGuess:
+    """A smaller model guesses the scope worse. One put the context and the
+    namespace into the namespace field as a single slash-joined string, four
+    times over, and a fill-if-absent rule let the wrong value stand because the
+    field was not empty."""
+
+    def _agent_with(self, context="aws-backend-ch1-dev", namespace="messaging-squad"):
+        from mimir.tools.base import ToolResult
+
+        agent = TestALocatedPodCarriesItsCluster._agent(self)
+        agent.note_success("find_workloads", ToolResult(
+            tool="find_workloads",
+            data={"matches": [{"context": context, "namespace": namespace,
+                               "pod": "messaging-outbound-abc"}]},
+        ))
+        return agent
+
+    def test_a_wrong_namespace_is_replaced_by_where_it_was_found(self):
+        agent = self._agent_with()
+        bound = agent.bind("get_logs", {
+            "target": "messaging-outbound-abc",
+            "namespace": "aws-backend-ch1-dev/messaging-squad",
+        })
+        assert bound["namespace"] == "messaging-squad"
+        assert bound["context"] == "aws-backend-ch1-dev"
+
+    def test_a_wrong_context_is_replaced_too(self):
+        agent = self._agent_with()
+        bound = agent.bind("get_logs", {
+            "target": "messaging-outbound-abc", "context": "somewhere-else",
+        })
+        assert bound["context"] == "aws-backend-ch1-dev"
+
+    def test_a_pod_that_was_never_located_keeps_what_the_call_said(self):
+        """Only an observation beats a guess. Without one, the guess stands."""
+        agent = self._agent_with()
+        bound = agent.bind("get_logs", {"target": "other-pod", "context": "ctx-x"})
+        assert bound["context"] == "ctx-x"
