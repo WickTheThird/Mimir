@@ -123,8 +123,15 @@ That is a table, not twelve classes.
 Each moves alone, and the corpus is re-run after each. The four gates were
 shipped together and it cost a session to find which one had regressed.
 
-1. Measure the loop fix. If `iteration_limit` falls from 16, the diagnosis
-   holds and everything below is worth doing.
+1. Measure the loop fix. **Done, 22 September.** The nine cases that hit
+   `iteration_limit` in both replicate runs were re-run on the 30B after the
+   fix: `iteration_limit` on 0 of 9. Three of the nine now pass, two of them
+   (`con-fresh-stale-b`, `con-complete-done-a`) for the first time on this
+   model. The six that still fail now fail on judgement (`missing 'unknown'`,
+   `missing 'none'`, `incorrect_root_cause`), which is exactly the population
+   steps 2 to 4 are for. Seventeen minutes on nine cases instead of an hour
+   on eighty-two: the failure category was the stable signal, so the
+   measurement could be narrowed to it.
 2. Retrieval outcome to the decision model. First tier-2 decision, replacing
    the regex that failed on a real run.
 3. Targeting to the decision model. Eight corpus cases, and the user's
