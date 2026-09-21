@@ -179,9 +179,17 @@ def classify_retrieval(
 ) -> Retrieval:
     """Whether the looking succeeded, failed, or ran and found nothing.
 
-    ``observations`` is everything the system has to go on: tool output,
-    evidence excerpts, and the statement of the situation. ``risks`` is the
-    session's recorded failures, which in production carry the tool errors.
+    ``observations`` must be the operator's own statement of the situation
+    and nothing else. ``risks`` carries recorded tool failures.
+
+    **Do not pass retrieved documents here.** The first version was fed the
+    session's evidence excerpts, which include runbooks and skill bodies, and
+    those discuss timeouts and unreachable hosts as subject matter. The word
+    "timeout" inside a runbook about investigating rollouts classified a
+    healthy case as a failed search, and the gate then injected "Unknown"
+    into an answer that was correct. A comment two screens up warns that a
+    broad pattern fires on text that merely discusses failures; the pattern
+    below was then handed exactly that text.
 
     Failure wins over completion. A search where some targets answered and
     others timed out cannot establish that the missing ones hold nothing, and
@@ -326,10 +334,19 @@ def demote_overreach(answer: Any, sufficiency: Sufficiency) -> tuple[Any, int]:
 
     prose = getattr(answer, "answer", "") or ""
     if _ABSENCE_CLAIM.search(prose) or _PRESENCE_CLAIM.search(prose):
+        # Replace, do not prefix. The first version appended the original
+        # wording after "Previous wording:", which kept the false sentence in
+        # the text verbatim. The gate fired, demoted correctly, and the answer
+        # still said "there is no billing pod".
+        #
+        # The claim is not lost: demote_overreach has already moved it into
+        # unverified, which is where a claim the evidence cannot support
+        # belongs. Keeping it in the prose as well is not transparency, it is
+        # the answer still saying the wrong thing.
         answer.answer = (
             f"Unknown: {sufficiency.reason}. The evidence does not settle "
-            f"this question. Previous wording, which claimed more than the "
-            f"evidence supports: {prose}"
+            f"this question. See the unverified list for what was claimed "
+            f"before the evidence was checked."
         )
 
     answer.confidence = round(min(getattr(answer, "confidence", 0.5), 0.3), 3)

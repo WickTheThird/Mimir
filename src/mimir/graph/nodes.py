@@ -720,9 +720,13 @@ def _enforce_sufficiency(answer: FinalAnswer, session: InvestigationState) -> Fi
     is demoted to unknown whatever the model concluded, because the operator
     acting on it has no way to tell the two situations apart from the text.
     """
-    observations = "\n".join(
-        [session.user_request, *(e.excerpt for e in session.evidence[:40])]
-    )
+    # The operator's own statement only. Evidence excerpts carry retrieved
+    # runbooks, and a runbook about investigating timeouts contains the word
+    # "timeout", which classified a healthy case as a failed search and made
+    # the gate corrupt a correct answer. Whether a search actually failed is a
+    # structural fact: it lives in the executions and the recorded tool
+    # errors, not in the prose of reference material.
+    observations = session.user_request
     result = sufficiency_check(
         " ".join(
             filter(
@@ -751,7 +755,7 @@ def _enforce_sufficiency(answer: FinalAnswer, session: InvestigationState) -> Fi
     # verified in fourteen months was treated exactly like one verified three
     # days ago on every model measured.
     currency = classify_currency(
-        observations=observations,
+        observations=session.user_request,
         freshness=[str(e.freshness) for e in session.evidence],
         stale_after_days=_stale_after_days(),
         executions=len(session.commands_executed),

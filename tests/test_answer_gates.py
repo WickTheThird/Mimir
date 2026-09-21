@@ -202,6 +202,13 @@ class TestGatesTogether:
         )
         answer = _enforce_sufficiency(answer, session)
         answer = _enforce_grounding(answer, session)
+        # Sufficiency replaces the prose, so the invented name is gone from the
+        # text before grounding reads it and there is nothing left to warn
+        # about there. The demotion still happened: both claims are in
+        # unverified, which is where a claim the evidence cannot carry belongs.
         assert "Unknown" in answer.answer
-        assert "appear in nothing that was read" in answer.answer
+        assert "messaging-router-6cf8" not in answer.answer
+        unverified = " ".join(answer.unverified)
+        assert "no billing pod" in unverified
+        assert "names nothing that was read" in unverified
         assert answer.confidence <= 0.3
