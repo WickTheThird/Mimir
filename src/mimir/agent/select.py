@@ -46,6 +46,9 @@ class Candidate:
     parses: bool = True
     lint_findings: int = 0
     dead_definitions: int = 0
+    satisfies: float | None = None
+    """Scored belief that this change did what was asked, or None if unjudged."""
+
     """Names it introduced that nothing reads, or defined twice."""
     tests_ran: bool = False
     tests_passed: bool = False
@@ -78,6 +81,17 @@ class Candidate:
             self.tests_passed,
             self.tests_ran,
             -self.lint_findings,
+            # Below every deterministic check, above diff size. A scored belief
+            # cannot overrule something observed, and it only ever breaks a tie
+            # the facts have already failed to break, which is exactly where
+            # the tie break was picking the smallest incomplete answer.
+            #
+            # Unjudged sits between judged-complete and judged-incomplete, not
+            # at the bottom. Mapping it to zero made "no decision model was
+            # running" score the same as "the model is confident this did not
+            # do the job", which is the failure shape this project keeps
+            # finding: absence of evidence reading as evidence of absence.
+            self.satisfies if self.satisfies is not None else 0.5,
             # Deletion before size. One attempt removed 248 lines and added 76
             # while passing syntax, lint, tests and the definition check, and a
             # single combined line count hid it: 324 changed looked like a
@@ -98,6 +112,8 @@ class Candidate:
             bits.append(f"{self.lint_findings} lint finding(s)")
         if self.dead_definitions:
             bits.append(f"{self.dead_definitions} unused/duplicate definition(s)")
+        if self.satisfies is not None:
+            bits.append(f"satisfies p={self.satisfies:.2f}")
         if self.tests_ran:
             bits.append("tests pass" if self.tests_passed else "TESTS FAIL")
         elif self.tests_wanted:
@@ -237,6 +253,60 @@ def _run_tests(root: Path, command: str, repo_root: Path | None = None) -> tuple
     return False, False
 
 
+def judge_completeness(
+    candidates: list[Candidate], instruction: str, settings: Any
+) -> None:
+    """Ask a decision model whether each change did what was asked.
+
+    This is the one thing the deterministic checks cannot see. They establish
+    that a change parses, links up, lints and passes its tests, and four
+    attempts at one task satisfied all of that while two of them added a
+    constant and never used it. The completeness question is a classification
+    with a closed answer set, which is what a discriminative model is for.
+
+    It sits below every observed fact in the ordering and only ever breaks a
+    tie those facts left. A verdict the model is unsure about is discarded
+    rather than used, because a calibrated model's uncertainty is the reason to
+    have one.
+    """
+    from mimir.decide import Choice, build_decider
+
+    decider = build_decider(settings)
+    if not decider.available:
+        return
+
+    field = Choice(
+        name="satisfies",
+        options=("yes", "no"),
+        description="Does the change fully carry out the instruction?",
+    )
+    for candidate in candidates:
+        if not candidate.usable:
+            continue
+        diff = _git(candidate.root, "diff")
+        if not diff.strip():
+            continue
+        context = f"Instruction:\n{instruction}\n\nChange:\n{diff}"
+        verdicts = decider.decide(context, [field])
+        verdict = verdicts.get("satisfies")
+        if verdict is None:
+            continue
+        if (
+            verdict.probability < settings.decisions.min_probability
+            or verdict.margin < settings.decisions.min_margin
+        ):
+            candidate.notes.append(
+                f"completeness undecided (p={verdict.probability:.2f}, "
+                f"margin={verdict.margin:.2f})"
+            )
+            continue
+        candidate.satisfies = (
+            verdict.distribution.get("yes", 0.0) if verdict.choice == "yes" else 0.0
+        )
+        if verdict.truncated:
+            candidate.notes.append("completeness judged on a truncated diff")
+
+
 async def best_of(
     k: int,
     make_view: Any,
@@ -274,6 +344,7 @@ async def best_of(
     usable = [c for c in candidates if c.usable]
     if not usable:
         return None, candidates
+    judge_completeness(candidates, instruction, settings)
     return max(usable, key=lambda c: c.score), candidates
 
 

@@ -44,6 +44,31 @@ class ModelProfile(BaseModel):
     extra_body: dict[str, Any] = Field(default_factory=dict)
 
 
+class DecisionsConfig(BaseModel):
+    """A discriminative model for typed decisions (ADR 18.5).
+
+    Off by default. MIMIR works without one, and every caller falls back to
+    what it did before rather than treating an absent verdict as a low score.
+    """
+
+    enabled: bool = False
+    backend: Literal["http", "nimble"] = "http"
+    base_url: str = "http://127.0.0.1:8080"
+    model: str = ""
+    model_path: str = ""
+    adapter_path: str = ""
+    min_probability: float = 0.7
+    """Below this the verdict is treated as no answer.
+
+    A calibrated model's own uncertainty is the point of using one: a decision
+    it is unsure about should fall back to the deterministic path rather than
+    be taken because it was the argmax."""
+
+    min_margin: float = 0.15
+    """Required distance from the runner-up. A win by a nose is not a
+    decision, and on a two-way choice the argmax is always something."""
+
+
 class ModelRouting(BaseModel):
     """Task-class to model-alias routing (ADR 18.4).
 
@@ -320,6 +345,7 @@ class Settings(BaseSettings):
     environment: str = "local"
 
     models: ModelsConfig = Field(default_factory=ModelsConfig)
+    decisions: DecisionsConfig = Field(default_factory=DecisionsConfig)
     repos: ReposConfig = Field(default_factory=ReposConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     web: WebConfig = Field(default_factory=WebConfig)
