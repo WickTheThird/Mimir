@@ -43,6 +43,8 @@ from mimir.verify.claims import (
     demote_unsupported,
     unsupported_brief,
 )
+from mimir.verify.grounding import check as grounding_check
+from mimir.verify.grounding import demote_ungrounded
 from mimir.verify.sufficiency import check as sufficiency_check
 from mimir.verify.sufficiency import demote_overreach
 
@@ -622,6 +624,7 @@ async def synthesise(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     # per claim instead.
     answer = await _enforce_claim_support(answer, session, synth, extra)
     answer = _enforce_sufficiency(answer, session)
+    answer = _enforce_grounding(answer, session)
 
     session.final_answer = answer
     session.final_confidence = _final_confidence(answer, reports, session)
@@ -740,6 +743,49 @@ def _enforce_sufficiency(answer: FinalAnswer, session: InvestigationState) -> Fi
         "sufficiency_enforced",
         session_id=session.session_id,
         retrieval=str(result.retrieval),
+        demoted=demoted,
+    )
+    return answer
+
+
+def _enforce_grounding(answer: FinalAnswer, session: InvestigationState) -> FinalAnswer:
+    """Did the answer name anything nobody read?
+
+    The agent loop has run this check for some time. The investigation graph,
+    which is the path the ops corpus exercises, did not. An answer naming pods
+    that appear in no listing scored as an ordinary answer on every model size
+    measured.
+
+    What the operator asked is part of the ground truth. Repeating back a
+    workload name they supplied is not an invention, and flagging it would
+    teach them to ignore the warning.
+    """
+    observed = "\n".join(
+        [
+            *(e.excerpt for e in session.evidence[:40]),
+            *(r.render() for r in session.reports[:12]),
+        ]
+    )
+    result = grounding_check(
+        " ".join(
+            filter(None, [answer.answer or "", *(answer.observed_facts or [])])
+        ),
+        observed,
+        asked=session.user_request,
+    )
+    session.metadata["grounding"] = {
+        "checked": result.checked,
+        "ungrounded": len(result.ungrounded),
+        "rate": result.rate,
+    }
+    if result.ok:
+        return answer
+    answer, demoted = demote_ungrounded(answer, result)
+    session.metadata["grounding"]["demoted"] = demoted
+    log.info(
+        "grounding_enforced",
+        session_id=session.session_id,
+        ungrounded=result.ungrounded[:8],
         demoted=demoted,
     )
     return answer

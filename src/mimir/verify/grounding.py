@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 # A DNS label with at least two segments. Three was the first cut, to keep
 # hyphenated English out, and it let five invented workload names through in a
@@ -139,4 +140,44 @@ def check(answer: str, observed: str, *, asked: str = "") -> Grounding:
     return result
 
 
-__all__ = ["Grounding", "check", "identifiers"]
+def demote_ungrounded(answer: Any, grounding: Grounding) -> tuple[Any, int]:
+    """Move facts naming things nobody observed into the unverified set.
+
+    This check ran in the agent loop and not in the investigation graph, which
+    is the path the ops corpus exercises. An empty listing names nothing, and
+    an answer that names pods anyway was scored as an ordinary answer on every
+    model measured from 7B to 117B.
+
+    Demotion rather than deletion, for the reason the claim gate gives: the
+    name may be real and merely unobserved this run. Deleting it hides the
+    problem by saying less, and a gate that improves its score by emptying the
+    answer has optimised the metric.
+
+    Confidence is capped rather than scaled. An answer that invents a workload
+    name is not slightly less reliable, it is a different kind of thing, and a
+    number that still reads as fairly confident invites the operator to act on
+    it.
+    """
+    if grounding.ok:
+        return answer, 0
+    invented = set(grounding.ungrounded)
+
+    def names_invented(text: str) -> bool:
+        lowered = (text or "").lower()
+        return any(token in lowered for token in invented)
+
+    facts = list(getattr(answer, "observed_facts", None) or [])
+    kept = [f for f in facts if not names_invented(f)]
+    moved = [f for f in facts if names_invented(f)]
+    answer.observed_facts = kept
+    answer.unverified = [
+        *(getattr(answer, "unverified", None) or []),
+        *[f"{f} (names nothing that was read)" for f in moved],
+    ]
+    if names_invented(getattr(answer, "answer", "")):
+        answer.answer = f"{answer.answer}\n\nWarning: {grounding.brief()}."
+    answer.confidence = round(min(getattr(answer, "confidence", 0.5), 0.3), 3)
+    return answer, len(moved) or len(invented)
+
+
+__all__ = ["Grounding", "check", "demote_ungrounded", "identifiers"]

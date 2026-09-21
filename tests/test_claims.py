@@ -251,3 +251,62 @@ class TestScoreVersusProbability:
         text = console.export_text()
         assert "support score" in text
         assert "not a probability" in text
+
+
+class TestGroundingDemotion:
+    """An empty listing names nothing, so nothing may be named."""
+
+    def _answer(self, text, facts=()):
+        from mimir.models.specialist import FinalAnswer
+
+        return FinalAnswer(answer=text, observed_facts=list(facts), confidence=0.9)
+
+    def test_a_name_that_appears_in_no_reading_is_demoted(self):
+        from mimir.verify.grounding import check, demote_ungrounded
+
+        answer = self._answer(
+            "The running pod is messaging-router-6cf8.",
+            ["messaging-router-6cf8 is running."],
+        )
+        result = check(answer.answer, observed="", asked="Which pods are running?")
+        answer, moved = demote_ungrounded(answer, result)
+        assert moved
+        assert answer.observed_facts == []
+        assert any("messaging-router" in u for u in answer.unverified)
+        assert answer.confidence <= 0.3
+
+    def test_a_name_the_operator_supplied_is_not_an_invention(self):
+        """Repeating back a name they gave us is not hallucination, and
+        flagging it teaches the reader to ignore the warning."""
+        from mimir.verify.grounding import check, demote_ungrounded
+
+        answer = self._answer("messaging-whatsapp has no pods.")
+        result = check(
+            answer.answer,
+            observed="",
+            asked="find messaging-whatsapp pods in messaging-squad",
+        )
+        answer, moved = demote_ungrounded(answer, result)
+        assert moved == 0
+        assert answer.confidence == 0.9
+
+    def test_a_name_that_was_actually_read_survives(self):
+        from mimir.verify.grounding import check, demote_ungrounded
+
+        answer = self._answer(
+            "messaging-router-6cf8 is running.", ["messaging-router-6cf8 is running."]
+        )
+        result = check(
+            answer.answer, observed="NAME READY\nmessaging-router-6cf8 1/1 Running"
+        )
+        _, moved = demote_ungrounded(answer, result)
+        assert moved == 0
+
+    def test_the_warning_reaches_the_prose_not_only_the_bullets(self):
+        from mimir.verify.grounding import check, demote_ungrounded
+
+        answer = self._answer("The running pod is messaging-router-6cf8.")
+        answer, _ = demote_ungrounded(
+            answer, check(answer.answer, observed="", asked="")
+        )
+        assert "appear in nothing that was read" in answer.answer
