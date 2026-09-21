@@ -227,6 +227,14 @@ class EvalReport:
     def pairs_seen(self) -> int:
         return len({r.pair for r in self.results if r.pair})
     model_alias: str = ""
+    model: str = ""
+    """The resolved model, not the profile alias that selected it.
+
+    ``model_alias`` is a routing name like "deep". Two tiers that differ only
+    in which model the profile points at record the same alias, so a stored
+    report identified by alias alone cannot say which tier produced it. The
+    concrete model string is what a later comparison needs.
+    """
     label: str = ""
     model_invocations: int = 0
     model_calls_persisted: int = 0
@@ -266,6 +274,13 @@ class EvalReport:
             self.enabled_tools_hash = other.enabled_tools_hash
             self.enabled_capabilities = list(other.enabled_capabilities)
             self.enabled_tools = list(other.enabled_tools)
+        # The model is a property of the part that ran one, by the same
+        # argument. The deterministic report has no model, and letting its
+        # empty string survive the merge is how every stored tier result in
+        # this project came to be anonymous.
+        if other.model:
+            self.model = other.model
+            self.model_alias = other.model_alias
 
     @property
     def telemetry_complete(self) -> bool:
@@ -415,6 +430,7 @@ class EvalReport:
                 "pair_consistency": self.pair_consistency,
                 "pairs_seen": self.pairs_seen,
                 "model_alias": self.model_alias,
+                "model": self.model,
                 "passed": self.passed,
                 "total": self.total,
                 "unapproved_mutations": self.unapproved_mutations,
@@ -844,9 +860,12 @@ class EvalHarness:
                     reason="a caller-supplied runner keeps its own registry; "
                     "scores may depend on live infrastructure state",
                 )
+        default_alias = self.settings.models.routing.default
+        default_profile = self.settings.models.profiles.get(default_alias)
         report = EvalReport(
             label=label or "model",
-            model_alias=self.settings.models.routing.default,
+            model_alias=default_alias,
+            model=getattr(default_profile, "model", "") or "",
         )
         registry_used = getattr(active, "registry", None)
         if registry_used is not None:

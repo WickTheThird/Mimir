@@ -35,6 +35,8 @@ class Tier:
     deterministic_passed: int = 0
     pair_consistency: float | None = None
     pairs: int = 0
+    pending: int = 0
+    """Cases decided but not yet built. Excluded from every figure above."""
 
     @property
     def model_total(self) -> int:
@@ -59,8 +61,19 @@ class Tier:
 def load(path: Path, name: str, deterministic_ids: set[str]) -> Tier:
     payload = json.loads(Path(path).read_text())
     results = payload.get("results") or []
-    tier = Tier(name=name, model=str(payload.get("model_alias") or payload.get("model") or ""))
+    tier = Tier(
+        name=name,
+        model=str(payload.get("model") or payload.get("model_alias") or "unrecorded"),
+    )
     for result in results:
+        # A pending case is decided but unbuilt. The harness excludes it from
+        # its own totals, and counting it here reported a larger corpus than
+        # was run and scored the unbuilt cases as passes, because a case that
+        # never executed leaves ``passed`` at its default. Two tiers compared
+        # this way both got the same free marks and the table looked fine.
+        if result.get("pending"):
+            tier.pending += 1
+            continue
         passed = bool(result.get("passed"))
         tier.total += 1
         tier.passed += int(passed)
@@ -101,6 +114,13 @@ def render(tiers: list[Tier]) -> str:
         "sides; a tier keying on the shape of the question scores near zero here "
         "while its case rate looks ordinary."
     )
+    pending = {t.pending for t in tiers}
+    if pending != {0}:
+        counts = ", ".join(f"{t.name} {t.pending}" for t in tiers)
+        lines.append(
+            f"excluded as pending (decided, not yet built): {counts}. These are "
+            "not in any figure above."
+        )
     return "\n".join(lines)
 
 
