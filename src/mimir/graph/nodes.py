@@ -43,6 +43,8 @@ from mimir.verify.claims import (
     demote_unsupported,
     unsupported_brief,
 )
+from mimir.verify.sufficiency import check as sufficiency_check
+from mimir.verify.sufficiency import demote_overreach
 
 log = get_logger(__name__)
 
@@ -619,6 +621,7 @@ async def synthesise(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     # while carrying no relationship to the text. Support is now resolved
     # per claim instead.
     answer = await _enforce_claim_support(answer, session, synth, extra)
+    answer = _enforce_sufficiency(answer, session)
 
     session.final_answer = answer
     session.final_confidence = _final_confidence(answer, reports, session)
@@ -689,6 +692,55 @@ async def _enforce_claim_support(
         summary=support.summary(),
         demoted=demoted,
         dropped=dropped,
+    )
+    return answer
+
+
+def _enforce_sufficiency(answer: FinalAnswer, session: InvestigationState) -> FinalAnswer:
+    """Refuse definite existence claims that outrun the search behind them.
+
+    The claim gate above asks whether each stated fact resolves to evidence.
+    It cannot catch this one, because "there is no billing pod" is a claim
+    about the *absence* of evidence and resolves to nothing by construction.
+    An answer that asserts absence after every cluster timed out passes the
+    claim gate cleanly, which is how the failure survived every model size
+    measured.
+
+    Deterministic and never consults a model. Under a failed search the answer
+    is demoted to unknown whatever the model concluded, because the operator
+    acting on it has no way to tell the two situations apart from the text.
+    """
+    observations = "\n".join(
+        [session.user_request, *(e.excerpt for e in session.evidence[:40])]
+    )
+    result = sufficiency_check(
+        " ".join(
+            filter(
+                None,
+                [
+                    answer.answer or "",
+                    *(answer.observed_facts or []),
+                ],
+            )
+        ),
+        observations=observations,
+        risks="\n".join(session.risks),
+        executions=len(session.commands_executed),
+    )
+    session.metadata["sufficiency"] = {
+        "retrieval": str(result.retrieval),
+        "overreaching": result.overreaching,
+        "claims": len(result.absence_claims) + len(result.presence_claims),
+    }
+    if not result.overreaching:
+        return answer
+    answer, demoted = demote_overreach(answer, result)
+    session.metadata["sufficiency"]["demoted"] = demoted
+    log.info(
+        "sufficiency_enforced",
+        session_id=session.session_id,
+        retrieval=str(result.retrieval),
+        demoted=demoted,
     )
     return answer
 
