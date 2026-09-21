@@ -89,3 +89,80 @@ class TestCorpusIsUntouched:
         assert prompts, "corpus should not be empty"
         diverted = [p for p in prompts if triage(p).cheap]
         assert diverted == [], f"triage would change these corpus cases: {diverted}"
+
+
+class TestContrastivePairs:
+    """Each pair differs in one fact and the correct answers differ with it, so
+    a model keying on the shape of the question answers both the same way and
+    gets exactly one right. That reads as fifty percent accuracy and zero
+    percent consistency, and only the second number says which it was."""
+
+    def _corpus(self):
+        from mimir.eval.harness import EvalHarness
+
+        return EvalHarness.load_corpus()
+
+    def test_every_pair_has_exactly_two_members(self):
+        from collections import Counter
+
+        counts = Counter(c.pair for c in self._corpus() if c.pair)
+        assert counts, "the corpus should contain contrastive pairs"
+        assert not {p: n for p, n in counts.items() if n != 2}
+
+    def test_the_twins_differ_in_what_they_expect(self):
+        """A pair whose members expect the same thing is two copies of one
+        case, and tests nothing about reading the evidence."""
+        pairs: dict[str, list] = {}
+        for case in self._corpus():
+            if case.pair:
+                pairs.setdefault(case.pair, []).append(case)
+        for name, (first, second) in pairs.items():
+            assert (
+                first.expect_contains != second.expect_contains
+                or first.expect_absent != second.expect_absent
+                or first.max_confidence != second.max_confidence
+            ), f"{name}: both twins expect the same thing"
+
+    def test_every_case_id_is_distinct(self):
+        ids = [c.id for c in self._corpus()]
+        assert len(ids) == len(set(ids))
+
+    def test_consistency_is_none_rather_than_zero_without_pairs(self):
+        """No pairs answered consistently and no pairs to answer are different
+        results, and a caller that cannot tell them apart will report the
+        second as the first."""
+        from mimir.eval.harness import CaseKind, CaseResult, EvalReport
+
+        report = EvalReport()
+        report.results = [CaseResult(case_id="a", kind=CaseKind.TARGETING, passed=True)]
+        assert report.pair_consistency is None
+
+    def test_a_model_answering_both_twins_alike_scores_zero(self):
+        from mimir.eval.harness import CaseKind, CaseResult, EvalReport
+
+        report = EvalReport()
+        report.results = [
+            CaseResult(case_id="a", kind=CaseKind.TARGETING, passed=True, pair="p"),
+            CaseResult(case_id="b", kind=CaseKind.TARGETING, passed=False, pair="p"),
+        ]
+        assert report.pair_consistency == 0.0
+
+    def test_both_right_scores_one(self):
+        from mimir.eval.harness import CaseKind, CaseResult, EvalReport
+
+        report = EvalReport()
+        report.results = [
+            CaseResult(case_id="a", kind=CaseKind.TARGETING, passed=True, pair="p"),
+            CaseResult(case_id="b", kind=CaseKind.TARGETING, passed=True, pair="p"),
+        ]
+        assert report.pair_consistency == 1.0
+
+    def test_an_incomplete_pair_is_not_counted(self):
+        """Half a pair says nothing about consistency."""
+        from mimir.eval.harness import CaseKind, CaseResult, EvalReport
+
+        report = EvalReport()
+        report.results = [
+            CaseResult(case_id="a", kind=CaseKind.TARGETING, passed=True, pair="p")
+        ]
+        assert report.pair_consistency is None

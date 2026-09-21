@@ -144,6 +144,14 @@ class EvalCase:
     min_confidence: float | None = None
     tags: list[str] = field(default_factory=list)
 
+    pair: str = ""
+    """Identifier shared with this case's twin.
+
+    Two cases in a pair differ in one fact and their correct answers differ
+    with it. A model recognising the shape of the question rather than reading
+    the evidence answers both the same way and gets exactly one right, which
+    looks like fifty percent accuracy and is zero percent consistency."""
+
     @property
     def deterministic(self) -> bool:
         return bool(self.argv) or bool(self.select_query)
@@ -154,6 +162,9 @@ class CaseResult:
     case_id: str
     kind: CaseKind
     passed: bool
+    pair: str = ""
+    """The twin this case is scored against, if it has one."""
+
     pending: str = ""
     claims_total: int = 0
     claims_unsupported: int = 0
@@ -189,6 +200,32 @@ class EvalReport:
     contaminated_reason: str = ""
     started_at: float = field(default_factory=time.time)
     results: list[CaseResult] = field(default_factory=list)
+
+    @property
+    def pair_consistency(self) -> float | None:
+        """Fraction of contrastive pairs where both twins were answered right.
+
+        This is the number that separates reading from recognising. Two cases
+        in a pair differ in one fact and their answers differ with it, so a
+        model keying on the shape of the question answers both the same way and
+        gets exactly one of each pair. That reads as fifty percent accuracy and
+        zero percent consistency, and only the second number says which it was.
+
+        None when the run contained no pairs, because zero pairs answered
+        consistently and no pairs to answer are not the same result.
+        """
+        pairs: dict[str, list[bool]] = {}
+        for result in self.results:
+            if result.pair:
+                pairs.setdefault(result.pair, []).append(result.passed)
+        complete = [v for v in pairs.values() if len(v) == 2]
+        if not complete:
+            return None
+        return round(sum(1 for v in complete if all(v)) / len(complete), 3)
+
+    @property
+    def pairs_seen(self) -> int:
+        return len({r.pair for r in self.results if r.pair})
     model_alias: str = ""
     label: str = ""
     model_invocations: int = 0
@@ -678,6 +715,7 @@ class EvalHarness:
                 CaseResult(
                     case_id=case.id,
                     kind=case.kind,
+                    pair=case.pair,
                     passed=not failures and not unapproved,
                     pending=case.pending,
                     detail="; ".join(failures),
@@ -709,6 +747,7 @@ class EvalHarness:
             return CaseResult(
                 case_id=case.id,
                 kind=case.kind,
+                pair=case.pair,
                 passed=False,
                 pending=case.pending,
                 detail=f"selection raised {type(exc).__name__}: {exc}",
@@ -729,6 +768,7 @@ class EvalHarness:
         return CaseResult(
             case_id=case.id,
             kind=case.kind,
+            pair=case.pair,
             passed=not failures,
             pending=case.pending,
             detail="; ".join(failures),
@@ -825,6 +865,7 @@ class EvalHarness:
                     CaseResult(
                         case_id=case.id,
                         kind=case.kind,
+                        pair=case.pair,
                         passed=False,
                         detail=f"crashed: {type(exc).__name__}: {exc}",
                         duration_s=time.perf_counter() - started,
@@ -905,6 +946,7 @@ class EvalHarness:
                 CaseResult(
                     case_id=case.id,
                     kind=case.kind,
+                    pair=case.pair,
                     passed=not failures and not executed_mutations and not audit_gap,
                     pending=case.pending,
                     failure_categories=classify_failure(
