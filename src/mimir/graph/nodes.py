@@ -44,6 +44,8 @@ from mimir.verify.claims import (
     unsupported_brief,
 )
 from mimir.verify.grounding import check as grounding_check
+from mimir.verify.patterns import claims_retries, demote_unsupported_retry
+from mimir.verify.patterns import from_text as retry_from_text
 from mimir.verify.grounding import demote_ungrounded
 from mimir.verify.sufficiency import check as sufficiency_check
 from mimir.verify.sufficiency import (
@@ -629,6 +631,7 @@ async def synthesise(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     answer = await _enforce_claim_support(answer, session, synth, extra)
     answer = _enforce_sufficiency(answer, session)
     answer = _enforce_grounding(answer, session)
+    answer = _enforce_retry_signature(answer, session)
 
     session.final_answer = answer
     session.final_confidence = _final_confidence(answer, reports, session)
@@ -839,6 +842,44 @@ def _enforce_grounding(answer: FinalAnswer, session: InvestigationState) -> Fina
         ungrounded=result.ungrounded[:8],
         demoted=demoted,
     )
+    return answer
+
+
+def _enforce_retry_signature(
+    answer: FinalAnswer, session: InvestigationState
+) -> FinalAnswer:
+    """Withdraw a retry diagnosis the timing does not show.
+
+    Retries with backoff leave the same identifier several times with the gap
+    between attempts roughly doubling. Shown a single request and a batch job
+    that opened four hundred connections, every model measured still blamed
+    retries, which makes the diagnosis uninformative: it appears whether or
+    not the pattern is there.
+
+    One-directional. A present signature is consistent with retries causing
+    the incident and does not establish it, so a match never raises
+    confidence. Only the absence demotes.
+    """
+    if not claims_retries(answer.answer or ""):
+        return answer
+    observations = "\n".join(
+        [session.user_request, *(e.excerpt for e in session.evidence[:40])]
+    )
+    evidence = retry_from_text(observations)
+    session.metadata["retry_signature"] = {
+        "occurrences": evidence.occurrences,
+        "gaps": evidence.gaps[:8],
+        "storm": evidence.is_storm,
+    }
+    answer, demoted = demote_unsupported_retry(answer, evidence)
+    if demoted:
+        session.metadata["retry_signature"]["demoted"] = demoted
+        log.info(
+            "retry_signature_absent",
+            session_id=session.session_id,
+            occurrences=evidence.occurrences,
+            demoted=demoted,
+        )
     return answer
 
 
