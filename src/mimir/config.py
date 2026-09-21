@@ -52,9 +52,9 @@ class DecisionsConfig(BaseModel):
     """
 
     enabled: bool = False
-    backend: Literal["http", "nimble"] = "http"
-    base_url: str = "http://127.0.0.1:8080"
-    model: str = ""
+    backend: Literal["kev", "nimble"] = "kev"
+    base_url: str = "http://127.0.0.1:8009"
+    model: str = "kev-latest"
     model_path: str = ""
     adapter_path: str = ""
     min_probability: float = 0.7

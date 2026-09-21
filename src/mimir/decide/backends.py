@@ -25,35 +25,40 @@ log = get_logger(__name__)
 DEFAULT_TIMEOUT = 30.0
 
 
-class HttpDecider:
-    """A decision server on the other end of a socket.
+class KevDecider:
+    """Kev's local System One server.
 
-    Written against the shape the open servers expose: one context, a flat
-    schema of enum fields, probabilities back. No generated JSON is parsed,
-    because none is generated; the numbers are a softmax over the options.
+    Written against the published API rather than guessed: POST /v1/systemone
+    with a state and a map of questions, each a noul, choice or score, and the
+    answers come back with probabilities and a confidence. Nothing is generated
+    and nothing is parsed out of prose.
+
+    Kev-0.8B is about three gigabytes, which is what makes this usable on a
+    machine that is also running a generative model and has sixteen gigabytes
+    in total.
     """
 
     def __init__(
         self,
-        base_url: str = "http://127.0.0.1:8080",
+        base_url: str = "http://127.0.0.1:8009",
         *,
-        model: str = "",
+        model: str = "kev-latest",
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.model = model
+        self.model = model or "kev-latest"
         self.timeout = timeout
         self._checked: bool | None = None
 
     @property
     def name(self) -> str:
-        return f"http:{self.model or self.base_url}"
+        return f"kev:{self.model}"
 
     @property
     def available(self) -> bool:
         """Asked once per process, and never allowed to raise.
 
-        A decision model that is not running is a reason to fall back, not a
+        A decision server that is not running is a reason to fall back, not a
         reason to fail a turn.
         """
         if self._checked is None:
@@ -63,39 +68,89 @@ class HttpDecider:
     def _probe(self) -> bool:
         import httpx
 
-        for path in ("/health", "/healthz", "/"):
-            try:
-                response = httpx.get(f"{self.base_url}{path}", timeout=3.0)
-            except httpx.HTTPError:
-                continue
-            if response.status_code < 500:
-                return True
-        log.info("decider_unavailable", base_url=self.base_url)
-        return False
+        try:
+            response = httpx.get(f"{self.base_url}/v1/models", timeout=3.0)
+        except httpx.HTTPError as exc:
+            log.info("kev_unavailable", base_url=self.base_url, error=str(exc))
+            return False
+        return response.status_code < 500
 
     def decide(self, context: str, fields: list[Choice]) -> dict[str, Verdict]:
         import httpx
 
         if not fields:
             return {}
-        text, truncated = clip(context)
-        payload: dict[str, Any] = {
-            "context": text,
-            "schema": {f.name: {"enum": list(f.options), "description": f.description}
-                       for f in fields},
+        state, truncated = clip(context)
+        payload = {
+            "state": state,
+            "model": self.model,
+            "questions": {
+                field.name: {
+                    "type": "noul" if _is_boolean(field) else "choice",
+                    "instructions": field.description or field.name,
+                    "criteria": _criteria(field),
+                }
+                for field in fields
+            },
         }
-        if self.model:
-            payload["model"] = self.model
         try:
             response = httpx.post(
-                f"{self.base_url}/decide", json=payload, timeout=self.timeout
+                f"{self.base_url}/v1/systemone", json=payload, timeout=self.timeout
             )
             response.raise_for_status()
             body = response.json()
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
-            log.warning("decider_failed", error=str(exc))
+            log.warning("kev_failed", error=str(exc))
             return {}
-        return _verdicts(body, fields, truncated)
+        return _from_kev(body.get("answers") or {}, fields, truncated)
+
+
+def _is_boolean(field: Choice) -> bool:
+    return {o.lower() for o in field.options} in ({"yes", "no"}, {"true", "false"})
+
+
+def _criteria(field: Choice) -> Any:
+    """Kev wants a description per option; the name alone is an honest one."""
+    if _is_boolean(field):
+        ordered = sorted(field.options, key=lambda o: o.lower() in ("no", "false"))
+        return {"true": ordered[0], "false": ordered[-1]}
+    return dict.fromkeys(field.options)
+
+
+def _from_kev(
+    answers: dict[str, Any], fields: list[Choice], truncated: bool
+) -> dict[str, Verdict]:
+    """Read Kev's answers into verdicts, keeping only offered options."""
+    out: dict[str, Verdict] = {}
+    for field in fields:
+        answer = answers.get(field.name)
+        if not isinstance(answer, dict):
+            continue
+        if answer.get("type") == "noul" and isinstance(answer.get("noul"), int | float):
+            probability = float(answer["noul"])
+            ordered = sorted(field.options, key=lambda o: o.lower() in ("no", "false"))
+            distribution = {ordered[0]: round(probability, 4),
+                            ordered[-1]: round(1.0 - probability, 4)}
+        else:
+            raw = answer.get("probabilities") or {}
+            distribution = {
+                option: float(raw[option])
+                for option in field.options
+                if isinstance(raw.get(option), int | float)
+            }
+            if not distribution:
+                continue
+            total = sum(distribution.values()) or 1.0
+            distribution = {k: round(v / total, 4) for k, v in distribution.items()}
+        best = max(distribution, key=lambda k: distribution[k])
+        out[field.name] = Verdict(
+            field=field.name,
+            choice=best,
+            probability=distribution[best],
+            distribution=distribution,
+            truncated=truncated,
+        )
+    return out
 
 
 def _verdicts(
@@ -189,16 +244,16 @@ def build_decider(settings: Any) -> Any:
     config = getattr(settings, "decisions", None)
     if config is None or not getattr(config, "enabled", False):
         return NoDecider()
-    kind = str(getattr(config, "backend", "http"))
+    kind = str(getattr(config, "backend", "kev"))
     if kind == "nimble":
         return NimbleDecider(
             str(getattr(config, "model_path", "")),
             adapter_path=str(getattr(config, "adapter_path", "")),
         )
-    return HttpDecider(
-        str(getattr(config, "base_url", "http://127.0.0.1:8080")),
-        model=str(getattr(config, "model", "")),
+    return KevDecider(
+        str(getattr(config, "base_url", "http://127.0.0.1:8009")),
+        model=str(getattr(config, "model", "kev-latest")),
     )
 
 
-__all__ = ["HttpDecider", "NimbleDecider", "build_decider"]
+__all__ = ["KevDecider", "NimbleDecider", "build_decider"]

@@ -1,6 +1,6 @@
 """Typed decisions: score the answers you allow, rather than generate one."""
 
-from mimir.decide.backends import HttpDecider, NimbleDecider, build_decider
+from mimir.decide.backends import KevDecider, NimbleDecider, build_decider
 from mimir.decide.base import (
     MAX_CONTEXT_CHARS,
     MAX_OPTIONS,
@@ -16,7 +16,7 @@ __all__ = [
     "MAX_OPTIONS",
     "Choice",
     "Decider",
-    "HttpDecider",
+    "KevDecider",
     "NimbleDecider",
     "NoDecider",
     "Verdict",

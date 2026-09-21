@@ -230,12 +230,16 @@ class TestALocatedPodCarriesItsCluster:
         assert bound["context"] == "aws-backend-ch1-dev"
         assert bound["namespace"] == "messaging-squad"
 
-    def test_a_context_the_call_states_still_wins(self):
+    def test_a_stated_context_loses_to_where_the_pod_was_found(self):
+        """This reversed deliberately. Where a pod was found is an observation
+        and what the model writes is a guess about the same thing. A 7B put the
+        context and namespace into one field four times running, and a
+        fill-if-absent rule let the wrong value stand."""
         agent = self._agent()
         self._found(agent)
         bound = agent.bind("get_logs", {"target": "messaging-outbound-abc",
                                         "context": "somewhere-else"})
-        assert bound["context"] == "somewhere-else"
+        assert bound["context"] == "aws-backend-ch1-dev"
 
     def test_a_pod_that_was_never_located_is_not_given_a_cluster(self):
         agent = self._agent()
