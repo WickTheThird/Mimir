@@ -18,9 +18,14 @@ identical but for one altered fact that flips the correct answer.
 | tier | model | all | model-only | pair consistency | wall clock |
 |---|---|---|---|---|---|
 | laptop | qwen3-coder:30b | 63/82 | 39/58 | 0.40 | 3287s |
-| mini | qwen2.5:7b | 64/82 | 40/58 | 0.47 | 2795s |
+| mini | qwen2.5:7b | 64/82 | 40/58 | **0.47** | 2795s |
+| upgrade | gpt-oss:120b | 65/82 | 41/58 | 0.40 | 4420s |
 
 One case, one pair, and 15% of the wall clock separate a 30B from a 7B.
+
+Two cases out of 58 separate the 7B from a 117B. The 117B has the best case
+rate in the table and the joint worst pair consistency, and it took 58%
+longer than the 7B to produce it.
 
 That gap must be read against the noise floor, which was measured rather
 than assumed: two runs of the same model on the same corpus produced the
@@ -130,10 +135,20 @@ evidence handling. Coding was never in it. Coding is generative work with a
 much larger output space, and it stays on the laptop until it has its own
 measured number.
 
-**Model upgrades are the wrong lever here.** The next unit of accuracy on
-these seven pairs comes from wiring existing determinism into the answer
-path, not from a larger model. That is the whole thesis of the project
-stated as a measurement rather than a belief.
+**Model upgrades are the wrong lever here.** Measured across 7B, 30B and
+117B, the next unit of accuracy on these pairs does not come from
+parameters. It comes from carrying facts the system already computes into
+the answer path. That is the thesis of this project stated as a measurement
+rather than a belief, and the four cases that survived every run are where
+to start:
+
+1. `con-absence` - the tool result knows whether the search errored or
+   returned empty. Carry it.
+2. `con-ground` - the listing knows its own length. Carry it.
+3. `con-fresh` - the memory bank knows when the note was last verified.
+   Threshold it.
+4. `con-retry` - gap doubling over timestamps is a pattern match, not a
+   judgement.
 
 ## A prediction recorded before the result
 
@@ -154,3 +169,53 @@ One run of gpt-oss is one run, and the paragraphs above are what comes of
 reading too much into one. It can only strengthen or weaken the case, not
 settle it. Recorded before the result so it is checked rather than
 rationalised.
+
+## The result
+
+Held for four of five.
+
+| case | 30b run 1 | 30b run 2 | 7b | 120b |
+|---|---|---|---|---|
+| con-absence-unreachable-b | fail | fail | fail | fail |
+| con-ground-empty-b | fail | fail | fail | fail |
+| con-fresh-stale-b | fail | fail | fail | fail |
+| con-retry-innocent-b | fail | fail | fail | fail |
+| con-complete-done-a | fail | fail | fail | **pass** |
+
+Seven cases now fail in all four runs across three model sizes spanning 7B
+to 117B: the four above, plus `con-delete-asked-a`, `inv-003-shell-spawning`
+and `inv-011-caller-side-timeout`.
+
+Four cases surviving four runs and a seventeen-fold parameter increase is
+the claim this document needed, and it is a claim about the system rather
+than about any model. MIMIR cannot tell a search that completed and found
+nothing from a search that could not run. It names pods from an empty
+listing. It trusts a fourteen-month-old unverified note as readily as a
+three-day-old verified one. It sees a retry storm in a single request. No
+model in the range measured fixes any of it, and every one of those four
+facts is already computed somewhere in this repository before the model is
+asked anything.
+
+`con-complete-done-a` is the honest exception. Whether a diff did what was
+asked - the positive case, where both halves are present and the correct
+answer is *yes* - was cleared by the 117B alone. That one looks at least
+partly capacity-bound, and a claim that it is pure plumbing would be wrong.
+
+## What the upgrade tier actually bought
+
+Two model cases out of 58, for 58% more wall clock and 65GB resident. Pair
+consistency went *down* against the 7B, 0.40 against 0.467.
+
+That combination is the whole argument in one row. The case rate rewards
+capability a little, because some cases are just hard. Pair consistency asks
+whether the answer changes when the fact changes, and on that measure the
+117B is no better than the 30B and worse than the 7B. Scale bought
+competence at the cases and nothing at the discrimination.
+
+The aggregate figures are trustworthy in a way the per-case ones are not:
+two runs of qwen3-coder:30b both scored exactly 63/82 while 16 of 84
+individual cases flipped. But 63, 64, 65 is a two-case spread over three
+models with one run each, and the correction above is about exactly this
+kind of reading. The safe statement is that all three are the same to within
+what this corpus can measure, and nothing here justifies buying a larger
+model for the mini.
