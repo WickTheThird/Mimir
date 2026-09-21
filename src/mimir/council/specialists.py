@@ -224,9 +224,23 @@ class Specialist:
         error: str | None = None
         final_text = ""
 
+        # Gathering and concluding are different phases and must not share a
+        # budget. The previous version gave the whole iteration budget to
+        # gathering, so a specialist that used its tool calls had nothing left
+        # to write an answer with, and died reporting that it never concluded.
+        #
+        # Measured: on qwen3-coder:30b, 16 of 19 corpus failures were this one
+        # path. On qwen2.5:7b only 4 of 18, because a weaker model calls fewer
+        # tools and falls out of the loop early. Better tool adherence made the
+        # bug bite harder, so the constrained-decoding win was feeding it.
+        concluded = False
         for _iteration in range(self.budget.max_iterations):
             if time.perf_counter() - started > self.budget.wall_clock_s:
                 error = f"specialist exceeded its {self.budget.wall_clock_s:.0f}s budget"
+                break
+
+            budget_left = self.budget.max_tool_calls - tool_calls_used
+            if budget_left <= 0:
                 break
 
             options = GenerationOptions(tools=schemas if schemas else [])
@@ -244,21 +258,11 @@ class Specialist:
 
             final_text = response.content or final_text
             if not response.has_tool_calls:
+                concluded = True
                 break
 
             messages.append(response.as_message())
-
-            remaining = self.budget.max_tool_calls - tool_calls_used
-            calls = response.tool_calls[: max(0, remaining)]
-            if not calls:
-                messages.append(
-                    LLMMessage.user(
-                        "You have used your tool budget for this turn. Report what you "
-                        "found so far, and list what you would check next."
-                    )
-                )
-                continue
-
+            calls = response.tool_calls[:budget_left]
             for call in calls:
                 tool_calls_used += 1
                 result = await self._invoke(call, by_name, ctx)
@@ -279,8 +283,11 @@ class Specialist:
                         "dropped because the budget for this turn is exhausted."
                     )
                 )
-        else:
-            error = error or "specialist hit its iteration limit without concluding"
+
+        if not concluded and error is None:
+            final_text, error = await self._conclude(
+                messages, state, final_text, tool_calls_used
+            )
 
         report = SpecialistReport(
             specialist=self.name,
@@ -302,6 +309,57 @@ class Specialist:
             error=error,
         )
         return SpecialistRun(report=report, messages=messages, tool_results=tool_results)
+
+    async def _conclude(
+        self,
+        messages: list[LLMMessage],
+        state: Any,
+        final_text: str,
+        tool_calls_used: int,
+    ) -> tuple[str, str | None]:
+        """One closing turn with no tools offered, to get an actual answer.
+
+        A turn that cannot call tools is a turn that must answer. Offering
+        schemas the budget can no longer honour is what produced the
+        non-termination: the model kept calling, every call was dropped for
+        lack of budget, and each dropped call cost an iteration until the loop
+        died with nothing written.
+
+        This turn is deliberately outside the iteration budget. It makes no
+        tool calls, so it cannot loop, and charging it to a budget that
+        gathering has already spent is what left nothing to conclude with.
+
+        A failure here is reported rather than swallowed. A specialist that
+        gathered evidence and could not write it up is a different and less
+        alarming thing than one that never looked, and the two must not
+        produce the same empty report.
+        """
+        messages = [
+            *messages,
+            LLMMessage.user(
+                "Stop here and report. Do not request any more tools. State what "
+                "the evidence you already have does and does not show, and say "
+                "plainly if it is not enough to answer."
+            ),
+        ]
+        try:
+            response = await self.router.chat(
+                messages,
+                task_class=SPECIALIST_TASK_CLASS.get(self.name, TaskClass.DEFAULT),
+                options=GenerationOptions(tools=[]),
+                session_id=state.session_id,
+                purpose=f"specialist:{self.name.value}:conclude",
+            )
+        except ModelError as exc:
+            return final_text, f"closing call failed: {exc.message}"
+
+        text = response.content or final_text
+        if not text.strip():
+            return text, (
+                f"specialist used {tool_calls_used} tool call(s) and returned no "
+                "conclusion when asked to stop and report"
+            )
+        return text, None
 
     async def _invoke(
         self, call: ToolCall, by_name: dict[str, ToolSpec[Any]], ctx: ToolContext
