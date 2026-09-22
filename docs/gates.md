@@ -135,8 +135,21 @@ conclusion drawn from it.
 
 ## Measurement
 
-Pending. All three tiers re-run on the full corpus after these landed; the
-comparison is only meaningful against the same 82 cases, so the whole sweep
-runs rather than the four cases the gates were built for. Scoring the four
-would measure whether the gates fire, which the unit tests already settle,
-and would say nothing about what they cost everywhere else.
+Two runs on qwen3-coder:30b, the six absence, ground and fresh cases.
+
+**First, gates alone (21 September):** 3 of 6, and one healthy twin
+regressed. The gates fired; the causes were a regex that read a runbook as
+an incident and a demotion that kept the false sentence in the prose.
+
+**Second, gates plus the decision layer (22 September):** 6 of 6. The
+three cases that had failed on every model from 7B to 117B pass, and their
+healthy twins still pass. Three ordering fixes stood between the runs, and
+each was found from the stored session metadata, not from the score: the
+operator's own explicit statement outranks the decider; the statement about
+a record outranks unrelated structured freshness; "cannot be verified"
+describes the problem and is not the instruction.
+
+Six cases and one run per model: a direction. The 82-case sweep with every
+step live is the number, and it is compared by failure category against
+the three prior runs so that a shifted category is distinguishable from
+churn.

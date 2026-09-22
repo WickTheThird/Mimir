@@ -275,7 +275,7 @@ the decision model is never asked to write.
 | step | built | measured |
 |---|---|---|
 | 0 decision backend (Kev-4B served) | yes | acceptance probe: distribution, margin, both twins decided |
-| 1 retrieval outcome | yes | 6 cases: 3/6 then re-run after three ordering fixes (result pending below) |
+| 1 retrieval outcome | yes | 6 cases: 3/6, then 6/6 after three ordering fixes. The three that failed on every model from 7B to 117B pass, their twins still pass. One run, one model: direction, not a number |
 | 2 recurrence (assess, replan) | yes | in the re-run |
 | 2b Warp MCP tools | yes | served over streamable HTTP; an MCP client lists construct_command, investigate, code_task. Warp session itself not yet exercised |
 | 3 entities and targeting | yes | unit level; corpus targeting cases in the next sweep |
