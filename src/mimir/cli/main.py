@@ -360,6 +360,14 @@ def calibrate(
 
 
 @app.command()
+def specialists() -> None:
+    """The specialists as a table: name, risk ceiling, tools, budget."""
+    from mimir.council.table import render_table
+
+    console.print(render_table())
+
+
+@app.command()
 def research(
     question: str = typer.Argument(..., help="A technical question for public sources."),
 ) -> None:

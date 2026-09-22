@@ -1,0 +1,23 @@
+# MIMIR on the always-on 16GB Mac mini: the ops tier (plan step 10).
+#
+# 7B for prose, Kev-4B for decisions, about 7.5GB resident. After steps 1 to
+# 4 the generative work left is prose, which the tier-parity measurement
+# says a 7B writes as well as a 117B on this corpus. Coding stays on the
+# laptop; the corpus that would justify it here does not exist yet.
+models:
+  profiles:
+    fast: {alias: fast, runtime: ollama, model: "qwen2.5:7b"}
+    deep: {alias: deep, runtime: ollama, model: "qwen2.5:7b"}
+    embed: {alias: embed, runtime: ollama, model: "nomic-embed-text"}
+  routing:
+    default: deep
+decisions:
+  enabled: true
+  backend: kev
+  base_url: http://127.0.0.1:8009
+api:
+  host: 0.0.0.0
+  port: 8000
+  # api_keys: set with `mimir keys add`; the API refuses non-loopback callers without one.
+graph:
+  max_specialist_rounds: 3

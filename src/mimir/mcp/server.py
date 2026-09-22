@@ -132,6 +132,7 @@ async def code_task_impl(
     repo: str | None = None,
     task: str | None = None,
     test_command: str = "",
+    multi_step: bool = False,
 ) -> dict[str, Any]:
     """The coding loop in a task worktree. Returns the diff, never applies it.
 
@@ -164,18 +165,30 @@ async def code_task_impl(
         settings=runner.settings,
     )
     text: list[str] = []
-    async for event in agent.run(instruction):
-        if event.type is AgentEventType.TEXT:
-            text.append(event.text)
+    steps: list[dict[str, Any]] = []
+    if multi_step:
+        from mimir.agent.plan import plan_steps, run_plan
+
+        plan = await plan_steps(runner.router, instruction)
+        plan = await run_plan(agent, plan, worktree_root=worktree.root)
+        steps = [{"title": st.title, "status": st.status, "checkpoint": st.checkpoint}
+                 for st in plan.steps]
+        text.append(plan.render())
+    else:
+        async for event in agent.run(instruction):
+            if event.type is AgentEventType.TEXT:
+                text.append(event.text)
     diff = subprocess.run(
         ["git", "-C", str(worktree.root), "diff"], capture_output=True, text=True
     ).stdout
     outcome = agent.outcome
+    await _propose_repo_lesson(runner, resolved.name, outcome, test_command)
     return {
         "worktree": str(worktree.root),
         "branch": worktree.branch,
         "diff": diff,
         "summary": "".join(text).strip()[:4000],
+        "steps": steps,
         "outcome": {
             "stopped": outcome.stopped,
             "steps": outcome.steps,
@@ -189,6 +202,28 @@ async def code_task_impl(
             "operator's checkout, and nothing was pushed."
         ),
     }
+
+
+async def _propose_repo_lesson(runner: Any, repo: str, outcome: Any, test_command: str) -> None:
+    """What this task learned about the repository, proposed as a note.
+
+    Plan step 8. Today ops sessions curate memory and coding tasks leave
+    nothing; the next task on the same repository starts from zero. This is
+    a proposal under repos/<name>, never a promotion.
+    """
+    try:
+        from mimir.knowledge.experience import repo_lesson
+
+        spec = runner.registry.get("propose_memory_note")
+        if spec is None or not outcome.files_changed:
+            return
+        note = repo_lesson(
+            repo, files_changed=sorted(outcome.files_changed), test_command=test_command,
+            tools_used=sorted(getattr(outcome, "tools_used", []) or []), stopped=outcome.stopped,
+        )
+        await spec.invoke(note, runner.tool_context(None))
+    except Exception as exc:  # noqa: BLE001 - a lesson must not fail the task
+        log.warning("repo_lesson_skipped", error=str(exc))
 
 
 def build_server() -> Any:
@@ -226,11 +261,12 @@ def build_server() -> Any:
     @server.tool()
     async def code_task(
         instruction: str, repo: str | None = None, task: str | None = None,
-        test_command: str = "",
+        test_command: str = "", multi_step: bool = False,
     ) -> dict[str, Any]:
         """Carry out a coding instruction in an isolated task worktree and return
-        the diff and test outcome. Nothing is applied to the working tree."""
-        return await code_task_impl(instruction, repo, task, test_command)
+        the diff and test outcome. multi_step splits it into checkpointed steps.
+        Nothing is applied to the working tree."""
+        return await code_task_impl(instruction, repo, task, test_command, multi_step)
 
     return server
 

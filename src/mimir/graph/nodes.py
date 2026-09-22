@@ -348,6 +348,15 @@ async def coordinate(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
         "Specialist names you may assign: "
         + ", ".join(s.value for s in SpecialistName if s != SpecialistName.COORDINATOR)
     )
+    # Rows that produced confident answers for this shape before (plan step
+    # 8 feeding step 11). Advice to the planner, not a rule: the table has
+    # data behind it now, and the coordinator should see it.
+    from mimir.council.table import preferred_for
+
+    preferred = preferred_for(str(session.task_type or ""), deps.tool_context.settings)
+    if preferred:
+        extra.append("Specialists that answered this kind of question confidently before: "
+                     + ", ".join(preferred[:4]))
 
     # Cheapest possible path first. A greeting needs no context resolution, no
     # classification, no specialists and no synthesis; running them cost over a
