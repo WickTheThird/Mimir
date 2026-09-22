@@ -56,6 +56,7 @@ from mimir.verify.sufficiency import (
     demote_empty,
     demote_overreach,
     demote_stale,
+    state_verdict,
 )
 
 log = get_logger(__name__)
@@ -1329,6 +1330,8 @@ async def _enforce_sufficiency(
         answer, result.retrieval, noun=_listing_noun(session.user_request)
     )
     demoted += stated_none
+    answer, led = state_verdict(answer, result.retrieval, noun=_listing_noun(session.user_request))
+    demoted += led
 
     # Staleness is the same question asked of time rather than of reach: is
     # what this rests on good enough to state as current? A note nobody has

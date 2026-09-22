@@ -316,6 +316,35 @@ def demote_stale(answer: Any, currency: Currency) -> tuple[Any, int]:
     return answer, len(facts) or 1
 
 
+_UNKNOWN_STATED = re.compile(r"^\s*unknown\b|\bunknown\b", re.IGNORECASE)
+
+
+def state_verdict(answer: Any, retrieval: Retrieval, *, noun: str = "items") -> tuple[Any, int]:
+    """Lead with the computed verdict word under a failed or empty retrieval.
+
+    Found in the full sweep: with the retrieval correctly classified as
+    failed, the model wrote "there is insufficient evidence to confirm
+    whether billing pods exist" and no overreach fired because no definite
+    claim was made. Right in substance, and an operator scanning for the one
+    word that settles it did not get it. The verdict is computed; its word
+    should be the first thing in the answer, whatever the prose around it.
+
+    failed -> "Unknown: the search did not complete." empty -> "None: the
+    listing returned no <noun>." Nothing is removed from the prose.
+    """
+    prose = getattr(answer, "answer", "") or ""
+    if retrieval is Retrieval.FAILED and not _UNKNOWN_STATED.search(prose):
+        answer.answer = f"Unknown: the search did not complete. {prose}".strip()
+        return answer, 1
+    if retrieval is Retrieval.EMPTY and not re.search(r"\bnone\b", prose, re.IGNORECASE):
+        from mimir.verify.grounding import identifiers
+
+        if not identifiers(prose):
+            answer.answer = f"None: the listing returned no {noun}. {prose}".strip()
+            return answer, 1
+    return answer, 0
+
+
 def demote_empty(answer: Any, retrieval: Retrieval, *, noun: str = "items") -> tuple[Any, int]:
     """Under an empty listing, say that nothing was listed.
 
@@ -435,4 +464,5 @@ __all__ = [
     "demote_empty",
     "demote_overreach",
     "demote_stale",
+    "state_verdict",
 ]

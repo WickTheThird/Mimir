@@ -335,3 +335,41 @@ class TestFromTheFirstMeasuredRun:
 
         answer = FinalAnswer(answer="messaging-router-6cf8 is running.", confidence=0.8)
         assert demote_empty(answer, Retrieval.EMPTY, noun="pods")[1] == 0
+
+
+class TestTheVerdictWordLeads:
+    """Found in the full sweep: the gate classified correctly and the answer
+    hedged in other words, so the one word that settles it never appeared."""
+
+    def test_a_failed_retrieval_leads_with_unknown_even_when_the_prose_hedges(self):
+        from mimir.verify.sufficiency import state_verdict
+
+        answer = FinalAnswer(answer="There is insufficient evidence to confirm whether billing pods exist.", confidence=0.4)
+        answer, n = state_verdict(answer, Retrieval.FAILED)
+        assert n == 1 and answer.answer.startswith("Unknown:")
+        assert "insufficient evidence" in answer.answer
+
+    def test_an_answer_already_saying_unknown_is_left_alone(self):
+        from mimir.verify.sufficiency import state_verdict
+
+        answer = FinalAnswer(answer="Unknown; the clusters timed out.", confidence=0.4)
+        assert state_verdict(answer, Retrieval.FAILED)[1] == 0
+
+    def test_an_empty_retrieval_leads_with_none_when_the_word_is_absent(self):
+        from mimir.verify.sufficiency import state_verdict
+
+        answer = FinalAnswer(answer="The listing returned no pods because only one cluster was queried.", confidence=0.5)
+        answer, n = state_verdict(answer, Retrieval.EMPTY, noun="pods")
+        assert n == 1 and answer.answer.startswith("None:")
+
+    def test_an_empty_retrieval_that_names_things_is_groundings_business(self):
+        from mimir.verify.sufficiency import state_verdict
+
+        answer = FinalAnswer(answer="messaging-router-6cf8 is running.", confidence=0.5)
+        assert state_verdict(answer, Retrieval.EMPTY, noun="pods")[1] == 0
+
+    def test_observed_retrieval_adds_nothing(self):
+        from mimir.verify.sufficiency import state_verdict
+
+        answer = FinalAnswer(answer="Three pods are running.", confidence=0.8)
+        assert state_verdict(answer, Retrieval.OBSERVED)[1] == 0
