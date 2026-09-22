@@ -518,6 +518,184 @@ async def gather(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     }
 
 
+NEXT_CHOICE = Choice(
+    name="next",
+    options=("conclude", "continue", "ask"),
+    description=(
+        "What the investigation should do now. conclude: the evidence in hand "
+        "answers the question or no further check would change the answer. "
+        "continue: a specific further check, suggested by what was just "
+        "found, would change the answer. ask: the operator holds a fact "
+        "without which no check can proceed."
+    ),
+)
+"""ADR-004 step 2, ADR-003 phase 3. The recurrence the graph never had.
+
+An investigation that cannot act on what it just found is a checklist. This
+is the one decision that turns the checklist into a loop, and it is a
+closed-set choice with no prose in it, which is why it goes to the decision
+model and not to a prompt.
+"""
+
+
+def _progress(session: InvestigationState, round_number: int) -> tuple[int, int]:
+    """(new evidence this round, total). The no-progress measure of phase 1.
+
+    Computed, not judged. A round that added nothing is a round the loop must
+    not repeat, whatever the model would have chosen, because the next round
+    would see the same evidence and choose the same thing.
+    """
+    seen_key = "evidence_seen_by_round"
+    history: dict[str, int] = session.metadata.setdefault(seen_key, {})
+    total = len(session.evidence)
+    previous = history.get(str(round_number - 1), 0)
+    history[str(round_number)] = total
+    return max(0, total - previous), total
+
+
+def _assess_context(session: InvestigationState, round_number: int, new: int, total: int) -> str:
+    findings = []
+    for report in session.reports[-6:]:
+        head = (report.conclusion or report.detail or "").strip().splitlines()
+        findings.append(f"- {report.specialist.value}: {head[0][:240] if head else '(no conclusion)'}"
+                        + (f" [failed: {report.error}]" if report.failed else ""))
+    hypotheses = [f"- {h.statement[:160]}" for h in session.hypotheses[:5] if getattr(h, "statement", "")]
+    return "\n".join(
+        [
+            f"Question: {session.user_request}",
+            f"Round {round_number} finished. New evidence this round: {new}. Total: {total}.",
+            "Findings so far:",
+            *(findings or ["- none"]),
+            *(["Open hypotheses:", *hypotheses] if hypotheses else []),
+            *([f"Recorded failures: {len(session.risks)}"] if session.risks else []),
+        ]
+    )
+
+
+async def assess(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
+    """Decide conclude / continue / ask after a round, by policy first.
+
+    Order of authority, as everywhere in ADR-004: computed facts stop the loop
+    before any model is asked. The round cap and the no-progress measure are
+    the stop policy. Only inside those bounds is the decision model asked, and
+    with no decision model configured the graph behaves exactly as before:
+    one round, then conclude.
+    """
+    session = state["session"]
+    round_number = int(state.get("round", 0))
+    max_rounds = deps.tool_context.settings.graph.max_specialist_rounds
+    new, total = _progress(session, round_number)
+
+    reason = ""
+    choice = "conclude"
+    if round_number >= max_rounds:
+        reason = f"round cap {max_rounds} reached"
+    elif new == 0 and round_number > 0:
+        reason = "no new evidence this round"
+    elif not session.reports:
+        reason = "nothing gathered to assess"
+    else:
+        verdicts = await decide_async(
+            getattr(deps, "decider", None),
+            _assess_context(session, round_number, new, total),
+            [NEXT_CHOICE],
+            session_id=session.session_id,
+        )
+        verdict = verdicts.get("next")
+        if verdict is None:
+            reason = "no decision model; single pass"
+        else:
+            config = get_settings().decisions
+            acted = (not verdict.calibrated) or (
+                verdict.probability >= config.min_probability
+                and verdict.margin >= config.min_margin
+            )
+            session.metadata.setdefault("decisions", []).append(
+                {
+                    "field": "next", "options": list(NEXT_CHOICE.options),
+                    "choice": verdict.choice, "probability": verdict.probability,
+                    "margin": verdict.margin, "calibrated": verdict.calibrated,
+                    "truncated": verdict.truncated,
+                    "backend": getattr(deps.decider, "name", "unknown"),
+                    "node": "assess", "round": round_number, "acted": acted,
+                }
+            )
+            choice = verdict.choice if acted else "conclude"
+            reason = "decided" if acted else "verdict below floor; concluding"
+
+    session.metadata.setdefault("assess", []).append(
+        {"round": round_number, "new_evidence": new, "total_evidence": total,
+         "choice": choice, "reason": reason}
+    )
+    log.info("assessed", round=round_number, choice=choice, reason=reason, new=new)
+
+    if choice == "continue":
+        route = "replan"
+    elif choice == "ask":
+        route = "replan_ask"
+    else:
+        route = state.get("route", "safety_review")
+        if route not in ("verify", "safety_review"):
+            route = "safety_review"
+    return {"session": session, "route": route,
+            "notes": [f"assess round {round_number}: {choice} ({reason})"]}
+
+
+async def replan(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
+    """Ask the coordinator for the next steps given what was found.
+
+    The plan is a tier-3 artefact: which specialist, with what objective, is
+    open prose. The decision to plan again was tier 2 and has already been
+    made. Steps that repeat a completed objective are dropped, so a
+    coordinator that proposes the same check twice cannot make the loop spin.
+    """
+    session = state["session"]
+    asking = state.get("route") == "replan_ask"
+    done = {(r.specialist, r.objective.strip().lower()) for r in session.reports}
+    findings = "\n".join(
+        f"- {r.specialist.value}: {(r.conclusion or '')[:300]}" for r in session.reports[-8:]
+    )
+    extra = [
+        f"Round {state.get('round', 0)} is complete. Findings so far:\n{findings or '- none'}",
+        "Plan only the further checks that these findings make necessary. Do not "
+        "repeat a completed objective. If a fact from the operator is required "
+        "before any check can proceed, put the question in missing_context and "
+        "plan no steps.",
+    ]
+    if asking:
+        extra.append("The assessment concluded a question for the operator is needed.")
+    coordinator = deps.specialist(SpecialistName.COORDINATOR)
+    try:
+        plan: CoordinatorPlan = await coordinator.structured_report(
+            "Plan the next round of the investigation.", session, CoordinatorPlan,
+            extra_context="\n\n".join(extra),
+        )
+    except (ModelError, StructuredOutputError) as exc:
+        log.warning("replan_failed", error=str(exc))
+        return {"session": session, "pending_steps": [], "route": "safety_review",
+                "notes": ["replan failed; concluding on what was gathered"]}
+
+    # No fallback step on a replan. The first plan gets one because failing
+    # to plan must not fail the investigation; here an empty plan means the
+    # coordinator found nothing more to check, and inventing a broad step in
+    # its place is how a loop spins on its own first question.
+    steps = [
+        st for st in (_sanitise_steps(plan.steps, session) if plan.steps else [])
+        if (st.specialist, st.objective.strip().lower()) not in done
+    ]
+    for question in plan.missing_context:
+        if question not in session.pending_questions:
+            session.pending_questions.append(question)
+    if steps:
+        route = "select_skills"
+    elif plan.missing_context or asking:
+        route = "ask_user"
+    else:
+        route = "safety_review"
+    return {"session": session, "pending_steps": steps, "route": route,
+            "notes": [f"replan: {len(steps)} new step(s), {len(plan.missing_context)} question(s)"]}
+
+
 async def verify(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     """Behaviour Verifier pass (ADR 7.2 step 5).
 

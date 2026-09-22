@@ -12,6 +12,7 @@ Shape:
       -> (ask_user | select_skills)
       -> dispatch        [fan out with Send, one branch per planned step]
       -> gather
+      -> assess          [conclude | continue -> replan -> dispatch | ask]
       -> (verify | safety_review)
       -> safety_review
       -> synthesise
@@ -36,11 +37,13 @@ from langgraph.types import Send
 from mimir.graph.nodes import (
     NodeDeps,
     ask_user,
+    assess,
     coordinate,
     curate_memory,
     finalise,
     gather,
     recall_memory,
+    replan,
     resolve_context,
     run_specialist_step,
     safety_review,
@@ -88,9 +91,16 @@ def _dispatch(state: GraphState) -> list[Send] | str:
     ]
 
 
-def _route_after_gather(state: GraphState) -> str:
+def _route_after_assess(state: GraphState) -> str:
     route = state.get("route", "safety_review")
+    if route in ("replan", "replan_ask"):
+        return "replan"
     return route if route in ("verify", "safety_review") else "safety_review"
+
+
+def _route_after_replan(state: GraphState) -> str:
+    route = state.get("route", "safety_review")
+    return route if route in ("select_skills", "ask_user", "safety_review") else "safety_review"
 
 
 def build_graph(deps: NodeDeps, *, parallel: bool = True) -> StateGraph:
@@ -104,6 +114,8 @@ def build_graph(deps: NodeDeps, *, parallel: bool = True) -> StateGraph:
     graph.add_node("select_skills", _bind(select_skills, deps))
     graph.add_node("specialist", _bind_step(run_specialist_step, deps))
     graph.add_node("gather", _bind(gather, deps))
+    graph.add_node("assess", _bind(assess, deps))
+    graph.add_node("replan", _bind(replan, deps))
     graph.add_node("verify", _bind(verify, deps))
     graph.add_node("safety_review", _bind(safety_review, deps))
     graph.add_node("synthesise", _bind(synthesise, deps))
@@ -130,10 +142,20 @@ def build_graph(deps: NodeDeps, *, parallel: bool = True) -> StateGraph:
         graph.add_conditional_edges("select_skills", _dispatch_serial, ["specialist", "gather"])
 
     graph.add_edge("specialist", "gather")
+    # The recurrent edge (ADR-003 phase 3, ADR-004 step 2). gather folds the
+    # round in, assess decides by policy then by the decision model, replan
+    # asks the coordinator for the next steps and hands them back to dispatch.
+    graph.add_edge("gather", "assess")
     graph.add_conditional_edges(
-        "gather",
-        _route_after_gather,
-        {"verify": "verify", "safety_review": "safety_review"},
+        "assess",
+        _route_after_assess,
+        {"verify": "verify", "safety_review": "safety_review", "replan": "replan"},
+    )
+    graph.add_conditional_edges(
+        "replan",
+        _route_after_replan,
+        {"select_skills": "select_skills", "ask_user": "ask_user",
+         "safety_review": "safety_review"},
     )
     graph.add_edge("verify", "safety_review")
     graph.add_edge("safety_review", "synthesise")
