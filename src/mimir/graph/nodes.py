@@ -260,6 +260,83 @@ async def recall_memory(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+async def resolve_target(
+    session: InvestigationState, store: Any, decider: Any
+) -> dict[str, Any]:
+    """Bind the workload the operator named to where it actually lives.
+
+    ADR-004 step 3. Order of authority: nothing named, nothing to do; the
+    operator already scoped it, respect that; the store has seen exactly one
+    thing by that name, bind it (a computed fact); the store has seen several,
+    the candidate set is closed and small, ask the decision model to pick or
+    to say the operator must; the store has seen none, leave it to the plan.
+    """
+    from mimir.agent.request import parse_request
+
+    parsed = parse_request(session.user_request)
+    name = parsed.name_contains
+    env = session.environment
+    if not name or store is None:
+        return {"status": "unnamed" if not name else "no_store"}
+    if env.namespace and env.cluster_context:
+        return {"status": "scoped_by_operator", "name": name}
+
+    found = store.candidates(name, kinds=("deployment", "statefulset", "daemonset",
+                                          "workload", "pod", "namespace"))
+    scopes = sorted({(e.context, e.namespace) for e in found if e.namespace or e.context})
+    if not scopes:
+        return {"status": "unknown", "name": name}
+    if len(scopes) == 1:
+        context, namespace = scopes[0]
+        env.cluster_context = env.cluster_context or context or None
+        env.namespace = env.namespace or namespace or None
+        return {"status": "bound", "name": name, "scope": f"{context}/{namespace}",
+                "source": "store"}
+
+    options = tuple(f"{c}/{n}" for c, n in scopes)[:25] + ("ask the operator",)
+    choice = Choice(
+        name="target",
+        options=options,
+        description=(
+            f"Which of these places holds the {name} the operator means. Pick one "
+            "only if the request or its context says so; otherwise choose to ask."
+        ),
+    )
+    verdicts = await decide_async(
+        decider,
+        "\n".join([f"Operator request: {session.user_request}",
+                    f"Places where a workload named like '{name}' has been seen:",
+                    *(f"- {o}" for o in options[:-1])]),
+        [choice], session_id=session.session_id,
+    )
+    verdict = verdicts.get("target")
+    if verdict is not None:
+        config = get_settings().decisions
+        acted = (not verdict.calibrated) or (
+            verdict.probability >= config.min_probability and verdict.margin >= config.min_margin
+        )
+        session.metadata.setdefault("decisions", []).append(
+            {"field": "target", "options": list(options), "choice": verdict.choice,
+             "probability": verdict.probability, "margin": verdict.margin,
+             "calibrated": verdict.calibrated, "truncated": verdict.truncated,
+             "backend": getattr(decider, "name", "unknown"), "node": "coordinate",
+             "acted": acted}
+        )
+        if acted and verdict.choice != "ask the operator":
+            context, _, namespace = verdict.choice.partition("/")
+            env.cluster_context = env.cluster_context or context or None
+            env.namespace = env.namespace or namespace or None
+            return {"status": "bound", "name": name, "scope": verdict.choice,
+                    "source": "decider"}
+    question = (
+        f"'{name}' exists in more than one place: "
+        + ", ".join(options[:-1]) + ". Which one do you mean?"
+    )
+    if question not in session.pending_questions:
+        session.pending_questions.append(question)
+    return {"status": "ambiguous", "name": name, "candidates": list(options[:-1])}
+
+
 async def coordinate(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     """Classify the request and produce a plan (ADR 7.1 S1)."""
     session = state["session"]
@@ -294,6 +371,22 @@ async def coordinate(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
             "route": "done",
             "notes": [f"triage: {verdict.kind.value}, no investigation needed"],
         }
+
+    target = await resolve_target(
+        session, getattr(deps.tool_context, "entities", None), getattr(deps, "decider", None)
+    )
+    session.metadata["target"] = target
+    if target.get("status") == "ambiguous":
+        # A computed ambiguity is a question, not a plan. Asking now costs one
+        # round trip; guessing costs a command on the wrong namespace.
+        return {
+            "session": session,
+            "pending_steps": [],
+            "route": "ask_user",
+            "notes": [f"target ambiguous: {target['name']} in {len(target['candidates'])} places"],
+        }
+    if target.get("status") == "bound":
+        extra.append(f"Target resolved from prior observations: {target['name']} in {target['scope']}.")
 
     coordinator = deps.specialist(SpecialistName.COORDINATOR)
     try:

@@ -159,6 +159,7 @@ class ToolContext:
     hooks: Any = None  # mimir.hooks.manager.HookManager
     environment: Any = None  # mimir.models.state.EnvironmentContext
     registry: Any = None  # mimir.tools.base.ToolRegistry
+    entities: Any = None  # mimir.knowledge.entities.EntityStore
     """The registry a dispatching tool must resolve through.
 
     Tools that fan out to other tools (parallel_search) previously reached the
@@ -298,6 +299,12 @@ class ToolSpec(Generic[InputT]):
 
         if hooks is not None:
             result = await hooks.after_tool(self, parsed, result, ctx)
+        # The entity store learns from every successful result (ADR-003 phase
+        # 4). It is a cache and must never fail a tool: observe() catches its
+        # own errors and logs them.
+        entities = getattr(ctx, "entities", None)
+        if entities is not None and result.ok:
+            entities.observe(self.name, parsed, result)
         return result
 
 

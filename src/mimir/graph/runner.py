@@ -85,6 +85,9 @@ class InvestigationRunner:
         if self.executor.hooks is None:
             self.executor.hooks = self.hooks
         self.skill_registry = skill_registry if skill_registry is not None else _load_skills()
+        from mimir.knowledge.entities import get_entity_store
+
+        self.entities = get_entity_store(self.settings)
         self.checkpointer = checkpointer
         self.parallel = (
             self.settings.graph.parallel_specialists if parallel is None else parallel
@@ -103,6 +106,7 @@ class InvestigationRunner:
             approvals=self.approvals,
             hooks=self.hooks,
             registry=self.registry,
+            entities=self.entities,
         )
 
     def _deps(self, session_id: str | None) -> NodeDeps:
