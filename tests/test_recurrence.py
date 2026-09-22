@@ -166,3 +166,20 @@ async def test_progress_is_measured_against_the_previous_round():
                                      source_id="c9", excerpt="x"))
     await assess({"session": session, "round": 2, "route": "verify"}, Deps(None))
     assert session.metadata["assess"][1]["new_evidence"] == 1
+
+
+@pytest.mark.asyncio
+async def test_memory_recall_is_not_progress():
+    """78 recalled notes across three rounds were counted as new evidence and
+    the loop ran to its cap on a prose case. A recall is not the world changing."""
+    from mimir.models.evidence import EvidenceKind
+
+    decider = FakeDecider("continue")
+    session = _session(evidence=0)
+    for i in range(5):
+        session.evidence.append(Evidence(claim=f"memory: note {i}", kind=EvidenceKind.INFERRED,
+                                         source_type=SourceType.IMPORTED_MEMORY, source_id=f"m{i}", excerpt="..."))
+    out = await assess({"session": session, "round": 1, "route": "verify"}, Deps(decider))
+    assert session.metadata["assess"][0]["new_evidence"] == 0
+    assert decider.calls == 0
+    assert out["route"] == "verify"

@@ -645,9 +645,15 @@ def _progress(session: InvestigationState, round_number: int) -> tuple[int, int]
     not repeat, whatever the model would have chosen, because the next round
     would see the same evidence and choose the same thing.
     """
+    # Observed evidence only. On the first measured run every "new" item
+    # across three rounds was a memory-note retrieval: the offline specialists
+    # can only recall, each round recalled more, the count never reached zero
+    # and the decision model, shown "28 new items", said continue at p=0.92.
+    # A recall is not the world changing. Progress is a tool observing
+    # something it had not observed before.
     seen_key = "evidence_seen_by_round"
     history: dict[str, int] = session.metadata.setdefault(seen_key, {})
-    total = len(session.evidence)
+    total = sum(1 for e in session.evidence if e.kind == EvidenceKind.OBSERVED)
     previous = history.get(str(round_number - 1), 0)
     history[str(round_number)] = total
     return max(0, total - previous), total
@@ -699,7 +705,8 @@ async def _score_predictions(
                  if h.status != HypothesisStatus.REJECTED and h.next_check][:6]
     if not open_ones:
         return []
-    recent = session.evidence[-min(len(session.evidence), max(new, 1)):]
+    observed = [e for e in session.evidence if e.kind == EvidenceKind.OBSERVED]
+    recent = observed[-min(len(observed), max(new, 1)):]
     evidence_block = "\n".join(f"- {e.claim[:120]}: {e.excerpt[:200]}" for e in recent[:12])
     residuals: list[dict[str, Any]] = []
     for h in open_ones:
