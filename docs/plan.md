@@ -66,15 +66,26 @@ Bounded by rounds as well as by the verdict, so a bad verdict cannot loop.
 Targets: every case where the plan's first step could not have known what
 the second step needed. `inv-011-caller-side-timeout` is the exemplar.
 
-### 3. Targeting. *A day, plus the entity store.*
+### 3. Targeting, and the entity store it needs. *Two to three days.*
 
-"Which of these workloads did the operator mean." A closed-set choice, but
-the set has to come from somewhere: a small entity store populated from
-what `kubectl` and repo metadata already return (pod, deployment,
-namespace, cluster, repo, log stream). The store is Phase 4 of ADR-003 in
-its smallest useful form. The decision model picks; the store supplies the
-candidates. Eight corpus cases, and the original `messaging-whatsapp`
-complaint.
+"Which of these workloads did the operator mean" is a closed-set choice,
+but the set has to come from somewhere. A small entity store populated
+from what `kubectl` and repo metadata already return: pod, deployment,
+namespace, cluster, repo, log stream, with the edges between them and a
+`seen_at` on every fact. This is ADR-003 Phase 4 in its smallest useful
+form, and it does three jobs, not one:
+
+- **Targeting.** The store supplies candidates; the decision model picks.
+  Eight corpus cases, and the original `messaging-whatsapp` complaint.
+- **Caller or callee.** "Is the timeout on the caller, the callee, the
+  ingress or the database" becomes a walk along the edges plus one
+  decision at the end, instead of a generative guess over log text.
+  `inv-011-caller-side-timeout` has failed on every model; this is why.
+- **Stale state.** A fact with an old `seen_at` is not a current fact. The
+  currency gate already does this for notes; the store does it for
+  topology, which is where "the deployment has 6 replicas" actually lives.
+
+Grows only from observations the system already makes. No crawler.
 
 ### 4. Sufficiency and conflict. *A day.*
 
@@ -97,33 +108,93 @@ This is also the first concrete instance of the roadmap thesis. The
 decision log is experience the organisation accumulates, and it is the
 training set for anything smarter later. No completed task is wasted.
 
-### 6. Coding: the selector already uses the decision model. Give it a corpus.
+### 6. Coding, in three parts.
 
 `agent/select.py` asks `satisfies ∈ {yes, no}` per candidate. It has been
-the only wired call site all along, running against a backend that did not
-exist. After step 0 it works. What it lacks is a number: contrastive pairs
-over diffs, same instruction, one altered fact in the repo, the correct
-change flips. Then the repository map (symbols, imports, test links, hot
-spots) and test selection, both of which feed the selector better
-candidates and the gate a smaller failure to read.
+the only wired decision all along, running against a backend that did not
+exist. After step 0 it works. Everything else coding needs is below.
 
-### 7. Predictions on hypotheses. *A day, after 2.*
+**6a. A corpus.** *Two days.* Contrastive pairs over diffs: same
+instruction, one altered fact in the repository, the correct change flips.
+Until this exists every coding claim is aspirational by ADR-002 §5, and the
+selector's decisions have nothing to be calibrated against.
 
-A hypothesis states what the next round should observe. The `assess` node
-compares. Residual moves confidence. Cheap once recurrence exists, and it
-is the mechanism by which an investigation knows it is wrong before the
-harness says so.
+**6b. A repository map, and test selection on top of it.** *Three days.*
+One indexed pass per repo: symbols, imports, which tests import which
+modules, recent change hot spots. Refreshed on change, stored beside the
+memory index. Then `run_worktree_tests` runs the tests that cover the files
+the diff touched, which is faster and gives the model a smaller failure to
+read. The LSP stays for precision; the map is the altitude it lacks. This
+is what makes coding good on a repo it has never seen.
 
-### 8. Deploy the mini. *A day.*
+**6c. Multi-step tasks and repository memory.** *Three days.* A task that
+needs "the model, then the migration, then the endpoint" gets a plan with
+checkpoints, each a worktree commit the gate has passed, so the loop can
+lose a step without losing the task. And what a task learns about a repo,
+conventions, where things live, what its tests are strict about, is
+written to the memory store under the repo's name. Today `curate_memory`
+runs for ops sessions only. The next task on that repo starts from what
+the last one found.
+
+### 7. Cognitive state, then predictions on it. *Three days, after 2.*
+
+ADR-003 Phase 2 and 5 together, because the second needs the first.
+
+**State without the transcript.** Round to round, the `assess` node needs
+to know what changed, not re-read everything. Observation, Claim,
+Hypothesis and Action become records with links, so that "new evidence
+this round" is a count and "which claims does this contradict" is a query.
+Durable state stops being the transcript plus a list. Transcript size no
+longer bounds what the system can hold across rounds.
+
+**Predictions.** A hypothesis states what the next round should observe.
+`assess` compares. The residual moves confidence, and a contradicted
+hypothesis loses rank without a model being asked to notice. This is the
+mechanism by which an investigation knows it is wrong before the harness
+says so. Cheap once the records exist and the loop exists.
+
+### 8. Memory that learns from tasks. *Ongoing from step 5.*
+
+The roadmap thesis: MIMIR improves because its organisation accumulates
+experience. Four concrete things get written, none of which are today:
+
+- Every decision, with its outcome: the calibration set from step 5, and
+  the fine-tuning set for a trained decision model later.
+- Every completed session that ended with a verified answer: a corpus case
+  draft, with its expected nouns, for a person to accept or reject. The
+  corpus grows from use instead of by hand.
+- Which tools and which specialist produced the evidence the answer cited,
+  per question shape: routing statistics, so the plan in step 2 has history
+  to prefer and the specialists table in step 10 has data behind it.
+- What a coding task learned about its repo (6c).
+
+Plus the retrieval indexes Phase 8 named and the store lacks: failure
+cases ("this shape of question went wrong before, this way") and case
+similarity ("the last three times a pod restarted in this namespace it
+was this"). Both are lookups over the records above once they exist.
+
+### 9. Exact engines where a model is still doing arithmetic. *Ongoing.*
+
+ADR-003 Phase 6. Each one replaces a generative judgement with a
+computation, evaluated independently: a config validator that checks the
+repo's manifest against the deployed state (G4's last question, "does the
+repository agree with what is running"), a deterministic command
+constructor for the families G1 lists, and unit checks over the numbers
+in log lines before a model is allowed to reason about them. The rule for
+admission is the same as for tier 1 in ADR-004: if it is computable, it
+is computed.
+
+### 10. Deploy the mini. *A day.*
 
 7B for prose, 4B Kev for decisions, about 7.5GB resident on a 16GB machine.
 The facade behind its key, Warp pointed at it. After steps 1 to 4 the
 generative work left is prose, which is what the tier-parity result says a
 7B does as well as a 117B.
 
-### 9. Collapse the specialists into a table. *After 1 to 4.*
+### 11. Collapse the specialists into a table. *After 1 to 4 and 8.*
 
-With the decisions gone from them, each is a tool budget and an objective.
+With the decisions gone from them and routing statistics behind them,
+each is a tool budget, an objective, and a row.
 
 ## What does not move, restated
 
@@ -134,10 +205,16 @@ the decision model is never asked to write.
 
 ## Targets, so the plan can be wrong
 
-| | now | after 0-4 | after 5 | after 8 |
-|---|---|---|---|---|
-| iteration_limit | 0 | 0 | 0 | 0 |
-| model-case pass | ~40/58 | 46-50 | same | same, on the 7B |
-| pair consistency | 0.40 | > 0.7 | > 0.85 | same |
-| generative calls / question | 15-25 | 6-10 | same | same |
-| decisions with a usable threshold | 0 | 0 | most | most |
+| | now | after 0-4 | after 5 | after 6 | after 7-8 |
+|---|---|---|---|---|---|
+| iteration_limit | 0 | 0 | 0 | 0 | 0 |
+| model-case pass | ~40/58 | 46-50 | same | same | 50+ |
+| pair consistency | 0.40 | > 0.7 | > 0.85 | same | same |
+| generative calls / question | 15-25 | 6-10 | same | same | 4-8 |
+| decisions with a usable threshold | 0 | 0 | most | most | all |
+| coding pass rate | unmeasured | unmeasured | unmeasured | a number | rising |
+| ADR-003 §43 criteria met | 4/12 | 6/12 | 7/12 | 8/12 | 11/12 |
+
+The twelfth criterion, action selection improved from verified transition
+history, is what step 8's records make possible and what a later trained
+model would deliver. It stays unmet until it is measured.
