@@ -663,6 +663,90 @@ def _assess_context(session: InvestigationState, round_number: int, new: int, to
     )
 
 
+PREDICTION_CHOICE = Choice(
+    name="holds",
+    options=("confirmed", "contradicted", "untested"),
+    description=(
+        "Whether the evidence gathered this round bears on the hypothesis's "
+        "stated next check. confirmed: the check came back as the hypothesis "
+        "predicts. contradicted: it came back the other way. untested: nothing "
+        "this round speaks to it."
+    ),
+)
+"""ADR-003 phase 5, plan step 7. A hypothesis states what the next check
+should show (its next_check). After a round, each open one is scored
+against the new evidence, and its likelihood moves. A contradicted
+hypothesis loses rank without a model being asked to notice, which is the
+mechanism by which an investigation knows it is wrong before the harness
+says so."""
+
+
+async def _score_predictions(
+    session: InvestigationState, deps: Any, round_number: int, new: int
+) -> list[dict[str, Any]]:
+    if new == 0:
+        return []
+    open_ones = [h for h in session.hypotheses
+                 if h.status != HypothesisStatus.REJECTED and h.next_check][:6]
+    if not open_ones:
+        return []
+    recent = session.evidence[-min(len(session.evidence), max(new, 1)):]
+    evidence_block = "\n".join(f"- {e.claim[:120]}: {e.excerpt[:200]}" for e in recent[:12])
+    residuals: list[dict[str, Any]] = []
+    for h in open_ones:
+        verdicts = await decide_async(
+            getattr(deps, "decider", None),
+            "\n".join([f"Hypothesis: {h.statement}", f"Predicted next check: {h.next_check}",
+                        "Evidence gathered this round:", evidence_block]),
+            [PREDICTION_CHOICE], session_id=session.session_id,
+        )
+        verdict = verdicts.get("holds")
+        if verdict is None:
+            continue
+        acted = _acted_on(verdict)
+        session.metadata.setdefault("decisions", []).append(
+            {"field": "holds", "options": list(PREDICTION_CHOICE.options), "choice": verdict.choice,
+             "probability": verdict.probability, "margin": verdict.margin,
+             "calibrated": verdict.calibrated, "truncated": verdict.truncated,
+             "backend": getattr(deps.decider, "name", "unknown"), "node": "assess",
+             "round": round_number, "acted": acted, "hypothesis": h.id}
+        )
+        before = h.likelihood
+        if acted and verdict.choice == "confirmed":
+            h.likelihood = round(min(0.95, h.likelihood + 0.2), 3)
+            h.supporting_evidence_ids += [e.id for e in recent[:3] if e.id not in h.supporting_evidence_ids]
+        elif acted and verdict.choice == "contradicted":
+            h.likelihood = round(max(0.05, h.likelihood - 0.25), 3)
+            h.contradicting_evidence_ids += [e.id for e in recent[:3] if e.id not in h.contradicting_evidence_ids]
+            if h.likelihood < 0.15:
+                h.status = HypothesisStatus.REJECTED
+                h.rejected_reason = "predicted check came back the other way"
+        residuals.append({"hypothesis": h.id, "holds": verdict.choice, "acted": acted,
+                          "likelihood_before": before, "likelihood_after": h.likelihood})
+    return residuals
+
+
+def _record_round(session: InvestigationState, round_number: int, new: int) -> None:
+    """State without the transcript (ADR-003 phase 2, smallest form).
+
+    One record per round: which observations arrived, which claims the
+    specialists made and on what evidence, which hypotheses are open at what
+    likelihood. The next round reads this, not the messages.
+    """
+    rounds: list[dict[str, Any]] = session.metadata.setdefault("rounds", [])
+    recent = session.evidence[-new:] if new else []
+    rounds.append({
+        "round": round_number,
+        "observations": [e.id for e in recent],
+        "claims": [{"by": r.specialist.value, "claim": (r.conclusion or "")[:200],
+                    "evidence": [e.id for e in r.evidence[:6]], "confidence": r.confidence}
+                   for r in session.reports[-6:]],
+        "hypotheses": [{"id": h.id, "likelihood": h.likelihood, "status": str(h.status)}
+                       for h in session.hypotheses[:10]],
+        "open_questions": [q for r in session.reports[-6:] for q in r.open_questions[:2]][:6],
+    })
+
+
 async def assess(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     """Decide conclude / continue / ask after a round, by policy first.
 
@@ -710,10 +794,12 @@ async def assess(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
             choice = verdict.choice if acted else "conclude"
             reason = "decided" if acted else "verdict below floor; concluding"
 
+    residuals = await _score_predictions(session, deps, round_number, new)
     session.metadata.setdefault("assess", []).append(
         {"round": round_number, "new_evidence": new, "total_evidence": total,
-         "choice": choice, "reason": reason}
+         "choice": choice, "reason": reason, "predictions": residuals}
     )
+    _record_round(session, round_number, new)
     log.info("assessed", round=round_number, choice=choice, reason=reason, new=new)
 
     if choice == "continue":
@@ -1475,6 +1561,20 @@ async def finalise(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     hooks = deps.tool_context.hooks
     if hooks is not None:
         await hooks.on_session_complete(session)
+    # What the organisation keeps from this session (plan step 8). Derived
+    # from the session, never blocking it, and never promoted without a
+    # person: the corpus draft is a file for someone to accept or reject.
+    try:
+        from mimir.knowledge.experience import get_experience_store, write_corpus_draft
+
+        session.metadata["experience"] = get_experience_store(
+            deps.tool_context.settings
+        ).record(session)
+        draft = write_corpus_draft(deps.tool_context.settings.home, session)
+        if draft is not None:
+            session.metadata["corpus_draft"] = str(draft)
+    except Exception as exc:  # noqa: BLE001 - experience must not fail the session
+        log.warning("experience_skipped", error=str(exc))
     log.info(
         "investigation_complete",
         session_id=session.session_id,
