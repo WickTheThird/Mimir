@@ -66,6 +66,34 @@ Bounded by rounds as well as by the verdict, so a bad verdict cannot loop.
 Targets: every case where the plan's first step could not have known what
 the second step needed. `inv-011-caller-side-timeout` is the exemplar.
 
+### 2b. Warp reaches the real MIMIR. *Two days. The step the goal depends on.*
+
+The facade is a model gateway. Warp keeps its own agent loop and calls
+MIMIR as if it were a model, so from Warp none of the graph, the gates,
+the decision layer or the safety engine runs. Every accuracy gain in this
+plan is behind the graph, and Warp never enters it.
+
+`docs/warp.md` names the fix and says it is unbuilt: MIMIR capabilities as
+MCP tools Warp invokes deliberately, with privileged execution staying
+local. Three tools, each running the full path with every gate:
+
+- `construct_command(request)`: the deterministic parse, the risk class,
+  the argument vector, the context and namespace it targets. Already the
+  strongest part of the system; 25 of the 37 command cases are decided by
+  rules that pass every run. This one can ship before steps 1 to 4.
+- `investigate(question)`: the graph, with recurrence once step 2 lands.
+  Returns the answer with its evidence and its unverified list.
+- `code_task(instruction, repo)`: the coding loop, worktree, gate and
+  selector. Returns the diff and the test result, never applies it.
+
+One agent loop stays in charge, Warp's, and MIMIR is a set of things it
+can call that are right for the reasons the harness measured. Nesting the
+graph behind the model endpoint stays the thing to avoid.
+
+Acceptance: a command asked for in Warp arrives through `construct_command`
+with the same risk class the CLI gives it, and a mutation is never run
+without the approval the policy engine requires.
+
 ### 3. Targeting, and the entity store it needs. *Two to three days.*
 
 "Which of these workloads did the operator mean" is a closed-set choice,
@@ -195,6 +223,21 @@ generative work left is prose, which is what the tier-parity result says a
 
 With the decisions gone from them and routing statistics behind them,
 each is a tool budget, an objective, and a row.
+
+## What "high accuracy" means, in numbers, so it is a finish line
+
+Defined now because the goal is a tool that gets used from Warp, and
+"accurate" has to be checkable before it is trusted.
+
+| surface | corpus | target | today |
+|---|---|---|---|
+| bash and command construction | a command corpus of 50+, half contrastive (same request, one flag or target changed) | 0.95, every run | 37 mixed cases; the 25 rule-decided ones pass every run |
+| ops investigation | the 84-case corpus | 0.85 on model cases, pair consistency 0.85 | 0.69 and 0.40 |
+| coding | 6a's corpus | 0.85 pass@k through the gate and selector | unmeasured |
+
+Each on the model that will actually serve it: the 7B for command and ops
+once the decisions are out of it, the 30B for coding. Three replicates
+before any of them is called met.
 
 ## What does not move, restated
 
