@@ -120,6 +120,9 @@ That is a table, not twelve classes.
 
 ### The order
 
+> Superseded on 22 September by `plan.md`, which reorders this around the
+> decision backend that already exists in the tree. The analysis below stands.
+
 Each moves alone, and the corpus is re-run after each. The four gates were
 shipped together and it cost a session to find which one had regressed.
 

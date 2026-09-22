@@ -86,6 +86,9 @@ Four of twelve. The four are the foundation. The eight are the architecture.
 
 ## What is actually missing, ranked by leverage
 
+> Superseded on 22 September by `plan.md`, which reorders this around the
+> decision backend that already exists in the tree. The analysis below stands.
+
 Not by ADR order. By how much closer each one gets to an assistant you would
 trust at 3am and hand a coding task to at 9.
 
