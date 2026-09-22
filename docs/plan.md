@@ -277,7 +277,7 @@ the decision model is never asked to write.
 | 0 decision backend (Kev-4B served) | yes | acceptance probe: distribution, margin, both twins decided |
 | 1 retrieval outcome | yes | 6 cases: 3/6 then re-run after three ordering fixes (result pending below) |
 | 2 recurrence (assess, replan) | yes | in the re-run |
-| 2b Warp MCP tools | yes | not yet, needs a Warp session |
+| 2b Warp MCP tools | yes | served over streamable HTTP; an MCP client lists construct_command, investigate, code_task. Warp session itself not yet exercised |
 | 3 entities and targeting | yes | unit level; corpus targeting cases in the next sweep |
 | 4 verify as decisions | yes | in the re-run |
 | 5 calibration | tool built | insufficient samples until more runs |
