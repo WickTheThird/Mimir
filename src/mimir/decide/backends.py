@@ -70,6 +70,16 @@ class KevDecider:
 
         try:
             response = httpx.get(f"{self.base_url}/v1/models", timeout=3.0)
+            try:
+                models = response.json().get("models") or []
+                temps = [float(m.get("temperature", 1.0)) for m in models]
+                # Kev stores a fitted temperature per checkpoint and applies
+                # it at load. 1.0 means raw logits: the Qwen3-revision
+                # checkpoints report it, and their probabilities are then
+                # not calibrated however confident they look.
+                self._calibrated = any(t != 1.0 for t in temps) if temps else False
+            except (ValueError, TypeError, AttributeError):
+                self._calibrated = False
         except httpx.HTTPError as exc:
             log.info("kev_unavailable", base_url=self.base_url, error=str(exc))
             return False
@@ -102,7 +112,15 @@ class KevDecider:
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
             log.warning("kev_failed", error=str(exc))
             return {}
-        return _from_kev(body.get("answers") or {}, fields, truncated)
+        verdicts = _from_kev(body.get("answers") or {}, fields, truncated)
+        if not getattr(self, "_calibrated", False):
+            verdicts = {
+                k: Verdict(field=v.field, choice=v.choice, probability=v.probability,
+                           distribution=v.distribution, truncated=v.truncated,
+                           calibrated=False)
+                for k, v in verdicts.items()
+            }
+        return verdicts
 
 
 def _is_boolean(field: Choice) -> bool:
@@ -237,7 +255,7 @@ class NimbleDecider:
         return _verdicts(body, fields, truncated)
 
 
-def build_decider(settings: Any) -> Any:
+def build_decider(settings: Any, *, router: Any = None) -> Any:
     """The configured backend, or one that answers nothing."""
     from mimir.decide.base import NoDecider
 
@@ -245,6 +263,10 @@ def build_decider(settings: Any) -> Any:
     if config is None or not getattr(config, "enabled", False):
         return NoDecider()
     kind = str(getattr(config, "backend", "kev"))
+    if kind == "local":
+        from mimir.decide.local import LocalDecider
+
+        return LocalDecider(router) if router is not None else NoDecider()
     if kind == "nimble":
         return NimbleDecider(
             str(getattr(config, "model_path", "")),

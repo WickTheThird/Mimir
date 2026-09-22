@@ -47,6 +47,9 @@ from mimir.verify.grounding import check as grounding_check
 from mimir.verify.patterns import claims_retries, demote_unsupported_retry
 from mimir.verify.patterns import from_text as retry_from_text
 from mimir.verify.grounding import demote_ungrounded
+from mimir.config import get_settings
+from mimir.decide import Choice, build_decider, decide_async
+from mimir.verify.sufficiency import Retrieval, classify_retrieval
 from mimir.verify.sufficiency import check as sufficiency_check
 from mimir.verify.sufficiency import (
     classify_currency,
@@ -153,6 +156,7 @@ class NodeDeps:
         tool_context: ToolContext | None = None,
         skill_registry: Any = None,
         knowledge: Any = None,
+        decider: Any = None,
     ) -> None:
         self.registry = registry or REGISTRY
         self.router = router or get_router()
@@ -161,6 +165,11 @@ class NodeDeps:
         self.knowledge = knowledge
         self.council: dict[SpecialistName, Specialist] = build_council(
             registry=self.registry, router=self.router
+        )
+        # The closed-set decision model (ADR-004 tier 2). NoDecider when not
+        # configured, and every caller falls back to what it did before.
+        self.decider: Any = decider if decider is not None else build_decider(
+            get_settings(), router=self.router
         )
 
     def specialist(self, name: SpecialistName) -> Specialist:
@@ -629,7 +638,7 @@ async def synthesise(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     # while carrying no relationship to the text. Support is now resolved
     # per claim instead.
     answer = await _enforce_claim_support(answer, session, synth, extra)
-    answer = _enforce_sufficiency(answer, session)
+    answer = await _enforce_sufficiency(answer, session, deps)
     answer = _enforce_grounding(answer, session)
     answer = _enforce_retry_signature(answer, session)
 
@@ -706,7 +715,96 @@ async def _enforce_claim_support(
     return answer
 
 
-def _enforce_sufficiency(answer: FinalAnswer, session: InvestigationState) -> FinalAnswer:
+RETRIEVAL_CHOICE = Choice(
+    name="retrieval",
+    options=("observed", "empty", "failed"),
+    description=(
+        "What happened when the system went to look. observed: a query ran "
+        "and returned data. empty: a query ran to completion and found "
+        "nothing. failed: the query could not run, timed out, was refused, "
+        "or produced no listing at all."
+    ),
+)
+"""ADR-004 step 1. The first decision moved out of the generative model.
+
+It was a regex before, and the regex read a runbook that discusses timeouts
+as a report of one. Whether a search failed is a judgement over text with
+three possible answers, which is the shape a decision model exists for.
+"""
+
+
+def _execution_counts(session: InvestigationState) -> tuple[int, int, int]:
+    """(failed, empty, observed) from the commands that actually ran.
+
+    An exit code is not prose and cannot be misread. When any of these is
+    non-zero the decision model is not consulted, because a computed fact
+    outranks a judged one (ADR-004 tier 1 before tier 2).
+    """
+    failed = empty = observed = 0
+    for record in session.commands_executed:
+        code = record.exit_code
+        if code is None:
+            continue
+        if code != 0:
+            failed += 1
+        elif record.stdout.strip():
+            observed += 1
+        else:
+            empty += 1
+    return failed, empty, observed
+
+
+async def _decide_retrieval(
+    session: InvestigationState, deps: Any
+) -> Retrieval | None:
+    """Ask the decision model, and log the decision whatever it says.
+
+    The log is the point as much as the verdict. Every decision with its
+    context is a calibration sample once the outcome is known, and it is the
+    experience the roadmap thesis says the system should accumulate.
+    """
+    decider = getattr(deps, "decider", None)
+    context = "\n".join(
+        [
+            f"Operator request: {session.user_request}",
+            *(f"Recorded failure: {r}" for r in session.risks[:8]),
+        ]
+    )
+    verdicts = await decide_async(
+        decider, context, [RETRIEVAL_CHOICE], session_id=session.session_id
+    )
+    verdict = verdicts.get("retrieval")
+    if verdict is None:
+        return None
+    config = get_settings().decisions
+    acted = (not verdict.calibrated) or (
+        verdict.probability >= config.min_probability
+        and verdict.margin >= config.min_margin
+    )
+    session.metadata.setdefault("decisions", []).append(
+        {
+            "field": verdict.field,
+            "options": list(RETRIEVAL_CHOICE.options),
+            "choice": verdict.choice,
+            "probability": verdict.probability,
+            "margin": verdict.margin,
+            "calibrated": verdict.calibrated,
+            "truncated": verdict.truncated,
+            "backend": getattr(decider, "name", "unknown"),
+            "node": "synthesise",
+            "acted": acted,
+        }
+    )
+    # A calibrated verdict below the floor is logged and not used: the
+    # model's own uncertainty is the reason to have a calibrated one. An
+    # uncalibrated verdict has no floor to fall below, so its choice stands
+    # on the closed-set guarantee alone.
+    return Retrieval(verdict.choice) if acted else None
+
+
+async def _enforce_sufficiency(
+    answer: FinalAnswer, session: InvestigationState, deps: Any = None
+) -> FinalAnswer:
     """Refuse definite existence claims that outrun the search behind them.
 
     The claim gate above asks whether each stated fact resolves to evidence.
@@ -716,33 +814,35 @@ def _enforce_sufficiency(answer: FinalAnswer, session: InvestigationState) -> Fi
     claim gate cleanly, which is how the failure survived every model size
     measured.
 
-    Deterministic and never consults a model. Under a failed search the answer
-    is demoted to unknown whatever the model concluded, because the operator
-    acting on it has no way to tell the two situations apart from the text.
+    Three sources for the retrieval verdict, in order of authority: the exit
+    codes of commands that ran; the decision model over the operator's own
+    statement and the recorded failures; and only then the text patterns,
+    which stay for a machine with no decision model configured.
     """
-    # The operator's own statement only. Evidence excerpts carry retrieved
-    # runbooks, and a runbook about investigating timeouts contains the word
-    # "timeout", which classified a healthy case as a failed search and made
-    # the gate corrupt a correct answer. Whether a search actually failed is a
-    # structural fact: it lives in the executions and the recorded tool
-    # errors, not in the prose of reference material.
+    failed, empty, observed = _execution_counts(session)
+    retrieval: Retrieval | None = None
+    source = "text"
+    if failed or empty or observed:
+        retrieval = classify_retrieval(failed=failed, empty=empty, observed=observed)
+        source = "executions"
+    else:
+        retrieval = await _decide_retrieval(session, deps)
+        if retrieval is not None:
+            source = "decider"
+
     observations = session.user_request
     result = sufficiency_check(
         " ".join(
-            filter(
-                None,
-                [
-                    answer.answer or "",
-                    *(answer.observed_facts or []),
-                ],
-            )
+            filter(None, [answer.answer or "", *(answer.observed_facts or [])])
         ),
         observations=observations,
         risks="\n".join(session.risks),
-        executions=len(session.commands_executed),
+        executions=0,
+        retrieval=retrieval,
     )
     session.metadata["sufficiency"] = {
         "retrieval": str(result.retrieval),
+        "retrieval_source": source,
         "overreaching": result.overreaching,
         "claims": len(result.absence_claims) + len(result.presence_claims),
     }

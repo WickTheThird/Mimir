@@ -52,7 +52,10 @@ class DecisionsConfig(BaseModel):
     """
 
     enabled: bool = False
-    backend: Literal["kev", "nimble"] = "kev"
+    backend: Literal["kev", "nimble", "local"] = "kev"
+    """kev: the served System One model, calibrated. nimble: in-process MLX.
+    local: the generative model already loaded, constrained to the option
+    set. The last gives the closed set and not the calibration."""
     base_url: str = "http://127.0.0.1:8009"
     model: str = "kev-latest"
     model_path: str = ""

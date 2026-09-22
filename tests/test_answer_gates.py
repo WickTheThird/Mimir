@@ -7,6 +7,8 @@ whether they interfere with one another when several could fire.
 
 import pytest
 
+from mimir.decide.base import Verdict
+
 from mimir.graph.nodes import (
     _enforce_grounding,
     _enforce_retry_signature,
@@ -34,32 +36,35 @@ def _session(request: str, excerpts=(), risks=(), freshness=Freshness.LIVE):
 
 
 class TestSufficiencyWiring:
-    def test_a_tool_failure_recorded_as_a_risk_reaches_the_gate(self):
+    @pytest.mark.asyncio
+    async def test_a_tool_failure_recorded_as_a_risk_reaches_the_gate(self):
         """In production the failure is a recorded tool error, not prose in
         the request. The gate must see the risks list."""
         session = _session(
             "is there a billing pod?",
             risks=["kubectl get pods: connection refused on all 3 contexts"],
         )
-        answer = _enforce_sufficiency(
+        answer = await _enforce_sufficiency(
             FinalAnswer(answer="There is no billing pod.", confidence=0.9), session
         )
         assert "Unknown" in answer.answer
         assert session.metadata["sufficiency"]["retrieval"] == "failed"
 
-    def test_the_gate_records_what_it_saw_even_when_it_does_not_fire(self):
+    @pytest.mark.asyncio
+    async def test_the_gate_records_what_it_saw_even_when_it_does_not_fire(self):
         """A gate that only writes metadata when it acts cannot be
         distinguished afterwards from one that never ran."""
         session = _session("is there a billing pod?")
-        _enforce_sufficiency(
+        await _enforce_sufficiency(
             FinalAnswer(answer="The pod is running.", confidence=0.9), session
         )
         assert session.metadata["sufficiency"]["retrieval"] == "unknown"
         assert session.metadata["sufficiency"]["overreaching"] is False
 
-    def test_an_executed_command_counts_as_having_looked(self):
+    @pytest.mark.asyncio
+    async def test_an_executed_command_counts_as_having_looked(self):
         session = _session("how many replicas?", excerpts=["replicas: 6"])
-        answer = _enforce_sufficiency(
+        answer = await _enforce_sufficiency(
             FinalAnswer(answer="There are 6 replicas running.", confidence=0.8),
             session,
         )
@@ -67,7 +72,8 @@ class TestSufficiencyWiring:
 
 
 class TestCurrencyWiring:
-    def test_stale_evidence_freshness_demotes_without_any_prose_marker(self):
+    @pytest.mark.asyncio
+    async def test_stale_evidence_freshness_demotes_without_any_prose_marker(self):
         """The structured verdict is the production signal. Nothing in the
         request says anything about age."""
         session = _session(
@@ -75,19 +81,20 @@ class TestCurrencyWiring:
             excerpts=["payments replicas: 6"],
             freshness=Freshness.STALE,
         )
-        answer = _enforce_sufficiency(
+        answer = await _enforce_sufficiency(
             FinalAnswer(answer="Payments runs 6 replicas.", confidence=0.9), session
         )
         assert "erify" in answer.answer
         assert session.metadata["sufficiency"]["currency"] == "stale"
 
-    def test_live_evidence_is_left_alone(self):
+    @pytest.mark.asyncio
+    async def test_live_evidence_is_left_alone(self):
         session = _session(
             "how many replicas?",
             excerpts=["payments replicas: 6"],
             freshness=Freshness.LIVE,
         )
-        answer = _enforce_sufficiency(
+        answer = await _enforce_sufficiency(
             FinalAnswer(answer="Payments runs 6 replicas.", confidence=0.9), session
         )
         assert answer.confidence == 0.9
@@ -95,7 +102,8 @@ class TestCurrencyWiring:
 
 
 class TestGroundingWiring:
-    def test_a_name_in_no_evidence_and_no_request_is_demoted(self):
+    @pytest.mark.asyncio
+    async def test_a_name_in_no_evidence_and_no_request_is_demoted(self):
         session = _session("which pods are running?", excerpts=["No resources found."])
         answer = _enforce_grounding(
             FinalAnswer(
@@ -108,7 +116,8 @@ class TestGroundingWiring:
         assert answer.observed_facts == []
         assert session.metadata["grounding"]["ungrounded"] >= 1
 
-    def test_a_name_present_in_evidence_survives(self):
+    @pytest.mark.asyncio
+    async def test_a_name_present_in_evidence_survives(self):
         session = _session(
             "which pods are running?",
             excerpts=["NAME  READY\nmessaging-router-6cf8  1/1  Running"],
@@ -124,7 +133,8 @@ class TestGroundingWiring:
         assert answer.observed_facts
         assert answer.confidence == 0.9
 
-    def test_a_name_the_operator_used_is_not_an_invention(self):
+    @pytest.mark.asyncio
+    async def test_a_name_the_operator_used_is_not_an_invention(self):
         session = _session("find messaging-whatsapp pods in messaging-squad")
         answer = _enforce_grounding(
             FinalAnswer(answer="No messaging-whatsapp pods found.", confidence=0.9),
@@ -134,7 +144,8 @@ class TestGroundingWiring:
 
 
 class TestRetryWiring:
-    def test_an_answer_not_blaming_retries_costs_nothing_to_check(self):
+    @pytest.mark.asyncio
+    async def test_an_answer_not_blaming_retries_costs_nothing_to_check(self):
         """The gate returns before assembling observations, so the common
         case does no work."""
         session = _session("why is the pool exhausted?")
@@ -144,7 +155,8 @@ class TestRetryWiring:
         )
         assert "retry_signature" not in session.metadata
 
-    def test_a_retry_claim_without_the_pattern_is_withdrawn(self):
+    @pytest.mark.asyncio
+    async def test_a_retry_claim_without_the_pattern_is_withdrawn(self):
         session = _session(
             "A service logs the same request id once, and a connection pool "
             "exhaustion message appears 20 seconds later."
@@ -156,7 +168,8 @@ class TestRetryWiring:
         assert "not supported by the timing" in answer.answer
         assert session.metadata["retry_signature"]["storm"] is False
 
-    def test_a_retry_claim_with_the_pattern_stands(self):
+    @pytest.mark.asyncio
+    async def test_a_retry_claim_with_the_pattern_stands(self):
         session = _session(
             "A service logs the same request id three times in 90 seconds "
             "with gaps of 1s, 2s and 4s."
@@ -170,7 +183,8 @@ class TestRetryWiring:
 
 
 class TestGatesTogether:
-    def test_a_sound_answer_passes_all_three_untouched(self):
+    @pytest.mark.asyncio
+    async def test_a_sound_answer_passes_all_three_untouched(self):
         """The gates must not tax the common case. If a correct answer loses
         confidence by passing through them, the sweep will read as a
         regression and the cause will not be obvious."""
@@ -185,12 +199,13 @@ class TestGatesTogether:
         )
         for gate in (_enforce_sufficiency, _enforce_grounding,
                      _enforce_retry_signature):
-            answer = gate(answer, session)
+            answer = await gate(answer, session) if gate is _enforce_sufficiency else gate(answer, session)
         assert answer.confidence == 0.85
         assert answer.observed_facts == ["messaging-router-6cf8 is running"]
         assert answer.answer == "messaging-router-6cf8 is running."
 
-    def test_two_gates_firing_do_not_erase_each_other(self):
+    @pytest.mark.asyncio
+    async def test_two_gates_firing_do_not_erase_each_other(self):
         session = _session(
             "is there a billing pod?",
             risks=["kubectl: connection refused"],
@@ -200,7 +215,7 @@ class TestGatesTogether:
             observed_facts=["messaging-router-6cf8 handles billing"],
             confidence=0.9,
         )
-        answer = _enforce_sufficiency(answer, session)
+        answer = await _enforce_sufficiency(answer, session)
         answer = _enforce_grounding(answer, session)
         # Sufficiency replaces the prose, so the invented name is gone from the
         # text before grounding reads it and there is nothing left to warn
@@ -212,3 +227,104 @@ class TestGatesTogether:
         assert "no billing pod" in unverified
         assert "names nothing that was read" in unverified
         assert answer.confidence <= 0.3
+
+
+class FakeDecider:
+    available = True
+    name = "fake"
+
+    def __init__(self, choice, probability=0.9):
+        self.choice, self.probability = choice, probability
+        self.contexts = []
+
+    def decide(self, context, fields):
+        self.contexts.append(context)
+        others = [o for o in fields[0].options if o != self.choice]
+        dist = {self.choice: self.probability, **{o: (1 - self.probability) / len(others) for o in others}}
+        return {fields[0].name: Verdict(field=fields[0].name, choice=self.choice,
+                                        probability=self.probability, distribution=dist)}
+
+
+class Deps:
+    def __init__(self, decider=None):
+        self.decider = decider
+
+
+class TestRetrievalDecision:
+    """ADR-004 step 1: the first decision out of the generative model."""
+
+    @pytest.mark.asyncio
+    async def test_exit_codes_settle_it_and_the_decider_is_not_asked(self):
+        from mimir.models.command import CommandOutcome, ExecutionRecord
+
+        session = _session("is there a billing pod?")
+        session.commands_executed = [
+            ExecutionRecord(command_id="c1", argv=["kubectl", "get", "pods"],
+                            outcome=list(CommandOutcome)[0], exit_code=1, stderr="refused")
+        ]
+        decider = FakeDecider("observed")
+        answer = await _enforce_sufficiency(
+            FinalAnswer(answer="There is no billing pod.", confidence=0.9), session, Deps(decider)
+        )
+        assert session.metadata["sufficiency"]["retrieval"] == "failed"
+        assert session.metadata["sufficiency"]["retrieval_source"] == "executions"
+        assert decider.contexts == []
+        assert "Unknown" in answer.answer
+
+    @pytest.mark.asyncio
+    async def test_the_decider_replaces_the_regex_when_nothing_ran(self):
+        session = _session("The clusters were slow today. Is there a billing pod?")
+        decider = FakeDecider("failed")
+        answer = await _enforce_sufficiency(
+            FinalAnswer(answer="There is no billing pod.", confidence=0.9), session, Deps(decider)
+        )
+        assert session.metadata["sufficiency"]["retrieval_source"] == "decider"
+        assert "Unknown" in answer.answer
+        assert "Operator request:" in decider.contexts[0]
+
+    @pytest.mark.asyncio
+    async def test_a_decider_verdict_of_empty_leaves_a_negative_answer_alone(self):
+        session = _session("Is there a billing pod?")
+        answer = await _enforce_sufficiency(
+            FinalAnswer(answer="There is no billing pod.", confidence=0.9), session,
+            Deps(FakeDecider("empty")),
+        )
+        assert answer.answer == "There is no billing pod."
+        assert answer.confidence == 0.9
+
+    @pytest.mark.asyncio
+    async def test_every_decision_is_logged_with_its_provenance(self):
+        session = _session("Is there a billing pod?")
+        await _enforce_sufficiency(
+            FinalAnswer(answer="There is no billing pod.", confidence=0.9), session,
+            Deps(FakeDecider("empty", 0.8)),
+        )
+        (entry,) = session.metadata["decisions"]
+        assert entry["field"] == "retrieval"
+        assert entry["choice"] == "empty"
+        assert entry["probability"] == 0.8
+        assert entry["backend"] == "fake"
+        assert entry["options"] == ["observed", "empty", "failed"]
+
+    @pytest.mark.asyncio
+    async def test_no_decider_falls_back_to_the_text_rule(self):
+        session = _session(
+            'All three clusters returned connection timeouts and no listing was produced. '
+            'Is there a billing pod?'
+        )
+        answer = await _enforce_sufficiency(
+            FinalAnswer(answer="There is no billing pod.", confidence=0.9), session, Deps(None)
+        )
+        assert session.metadata["sufficiency"]["retrieval_source"] == "text"
+        assert "Unknown" in answer.answer
+
+    @pytest.mark.asyncio
+    async def test_the_decider_is_shown_recorded_failures_not_runbooks(self):
+        """The regex regression came from feeding retrieved documents to the
+        classifier. The decision model gets the request and the risks only."""
+        session = _session("Is there a billing pod?", excerpts=["Runbook: timeouts happen when..."],
+                           risks=["kubectl: connection refused"])
+        decider = FakeDecider("failed")
+        await _enforce_sufficiency(FinalAnswer(answer="ok", confidence=0.5), session, Deps(decider))
+        assert "Runbook" not in decider.contexts[0]
+        assert "connection refused" in decider.contexts[0]

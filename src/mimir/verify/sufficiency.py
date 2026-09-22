@@ -175,7 +175,13 @@ class Sufficiency:
 
 
 def classify_retrieval(
-    *, observations: str = "", risks: str = "", executions: int = 0
+    *,
+    observations: str = "",
+    risks: str = "",
+    executions: int = 0,
+    failed: int = 0,
+    empty: int = 0,
+    observed: int = 0,
 ) -> Retrieval:
     """Whether the looking succeeded, failed, or ran and found nothing.
 
@@ -196,6 +202,18 @@ def classify_retrieval(
     treating a partial result as complete is precisely the error this exists
     to stop.
     """
+    # Structured signals first, and they settle it. A command that exited
+    # non-zero failed; one that exited zero with output observed; one that
+    # exited zero with nothing came back empty. No prose can override an exit
+    # code, and this is the production path: the text branches below exist
+    # for a situation that is stated rather than executed.
+    if failed:
+        return Retrieval.FAILED
+    if observed or executions:
+        return Retrieval.OBSERVED
+    if empty:
+        return Retrieval.EMPTY
+
     blob = f"{observations}\n{risks}"
     if _FAILED.search(blob):
         return Retrieval.FAILED
@@ -288,12 +306,24 @@ def _sentences(text: str) -> list[str]:
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+|\n+", text or "") if s.strip()]
 
 
-def check(answer_text: str, *, observations: str = "", risks: str = "",
-          executions: int = 0) -> Sufficiency:
-    """Does this answer claim more than the looking can support?"""
-    retrieval = classify_retrieval(
-        observations=observations, risks=risks, executions=executions
-    )
+def check(
+    answer_text: str,
+    *,
+    observations: str = "",
+    risks: str = "",
+    executions: int = 0,
+    retrieval: Retrieval | None = None,
+) -> Sufficiency:
+    """Does this answer claim more than the looking can support?
+
+    ``retrieval`` may be supplied already decided, by the structured signals
+    or by the decision model. The text classification is the fallback for a
+    stated situation, not the authority.
+    """
+    if retrieval is None:
+        retrieval = classify_retrieval(
+            observations=observations, risks=risks, executions=executions
+        )
     result = Sufficiency(retrieval=retrieval)
     for sentence in _sentences(answer_text):
         if _ABSENCE_CLAIM.search(sentence):
