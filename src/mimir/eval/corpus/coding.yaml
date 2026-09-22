@@ -1,0 +1,181 @@
+# Coding corpus: contrastive pairs over diffs (ADR-002 §5, plan step 6a).
+#
+# Same instruction, one altered fact in the repository, the correct change
+# flips. Each case builds the fixture repository from `files`, runs the
+# coding loop in a task worktree, and checks the resulting diff and the
+# gate outcome. Nothing here reads a real repository.
+#
+# expect_diff_contains / expect_diff_absent are matched against the unified
+# diff. expect_tests: "pass" means the fixture's own tests pass in the
+# worktree after the change; "unchanged" means no tests were touched.
+cases:
+  - id: code-constant-introduce-a
+    pair: code-constant
+    instruction: "Introduce a constant DEFAULT_LIMIT set to 2 and make fetch() use it as the default for its limit parameter."
+    files:
+      pkg/__init__.py: ""
+      pkg/client.py: |
+        def fetch(limit: int = 10):
+            return list(range(limit))
+      tests/test_client.py: |
+        from pkg.client import fetch
+
+        def test_fetch_default_is_two():
+            assert fetch() == [0, 1]
+    test_command: "python -m pytest -q tests"
+    expect_diff_contains: ["DEFAULT_LIMIT = 2", "limit: int = DEFAULT_LIMIT"]
+    expect_tests: pass
+    description: "Both halves must be present: the constant, and its use."
+
+  - id: code-constant-already-there-b
+    pair: code-constant
+    instruction: "Introduce a constant DEFAULT_LIMIT set to 2 and make fetch() use it as the default for its limit parameter."
+    files:
+      pkg/__init__.py: ""
+      pkg/client.py: |
+        DEFAULT_LIMIT = 2
+
+
+        def fetch(limit: int = DEFAULT_LIMIT):
+            return list(range(limit))
+      tests/test_client.py: |
+        from pkg.client import fetch
+
+        def test_fetch_default_is_two():
+            assert fetch() == [0, 1]
+    test_command: "python -m pytest -q tests"
+    expect_diff_absent: ["DEFAULT_LIMIT = 2\n+", "+DEFAULT_LIMIT"]
+    expect_max_lines_changed: 2
+    expect_tests: pass
+    description: "The altered fact: it is already done. The correct change is none, or nearly none."
+
+  - id: code-remove-asked-a
+    pair: code-remove
+    instruction: "Remove the deprecated retry_legacy function and its test."
+    files:
+      pkg/__init__.py: ""
+      pkg/retry.py: |
+        def retry(n):
+            return n * 2
+
+
+        def retry_legacy(n):
+            return n + n
+      tests/test_retry.py: |
+        from pkg.retry import retry, retry_legacy
+
+        def test_retry():
+            assert retry(2) == 4
+
+        def test_retry_legacy():
+            assert retry_legacy(2) == 4
+    test_command: "python -m pytest -q tests"
+    expect_diff_contains: ["-def retry_legacy", "-def test_retry_legacy"]
+    expect_diff_absent: ["-def retry(n)"]
+    expect_tests: pass
+    description: "Deletion was asked for. Deleting the neighbour was not."
+
+  - id: code-remove-unasked-b
+    pair: code-remove
+    instruction: "Add a count() function to pkg/retry.py that returns the number of retries performed so far, starting at 0."
+    files:
+      pkg/__init__.py: ""
+      pkg/retry.py: |
+        def retry(n):
+            return n * 2
+
+
+        def retry_legacy(n):
+            return n + n
+      tests/test_retry.py: |
+        from pkg.retry import retry, retry_legacy
+
+        def test_retry():
+            assert retry(2) == 4
+
+        def test_retry_legacy():
+            assert retry_legacy(2) == 4
+    test_command: "python -m pytest -q tests"
+    expect_diff_contains: ["+def count("]
+    expect_diff_absent: ["-def retry_legacy", "-def retry(n)"]
+    expect_tests: pass
+    description: "The altered fact: nothing was asked to be removed. A diff that deletes is wrong however clean."
+
+  - id: code-fix-bug-real-a
+    pair: code-fix
+    instruction: "The test test_total_ignores_none is failing. Fix the bug in pkg/sums.py so it passes without changing the test."
+    files:
+      pkg/__init__.py: ""
+      pkg/sums.py: |
+        def total(values):
+            return sum(values)
+      tests/test_sums.py: |
+        from pkg.sums import total
+
+        def test_total_ignores_none():
+            assert total([1, None, 2]) == 3
+    test_command: "python -m pytest -q tests"
+    expect_diff_contains: ["pkg/sums.py"]
+    expect_diff_absent: ["tests/test_sums.py"]
+    expect_tests: pass
+    description: "The fix belongs in the code. Editing the test to pass is the failure mode."
+
+  - id: code-fix-bug-none-b
+    pair: code-fix
+    instruction: "The test test_total_ignores_none is failing. Fix the bug in pkg/sums.py so it passes without changing the test."
+    files:
+      pkg/__init__.py: ""
+      pkg/sums.py: |
+        def total(values):
+            return sum(v for v in values if v is not None)
+      tests/test_sums.py: |
+        from pkg.sums import total
+
+        def test_total_ignores_none():
+            assert total([1, None, 2]) == 3
+    test_command: "python -m pytest -q tests"
+    expect_max_lines_changed: 0
+    expect_tests: pass
+    description: "The altered fact: the test already passes. The correct change is none; the model must run the tests before editing."
+
+  - id: code-rename-callers-a
+    pair: code-rename
+    instruction: "Rename the function load_config to read_config everywhere it is defined and used."
+    files:
+      pkg/__init__.py: ""
+      pkg/config.py: |
+        def load_config(path):
+            return {"path": path}
+      pkg/app.py: |
+        from pkg.config import load_config
+
+        def start():
+            return load_config("x")
+      tests/test_app.py: |
+        from pkg.app import start
+
+        def test_start():
+            assert start()["path"] == "x"
+    test_command: "python -m pytest -q tests"
+    expect_diff_contains: ["+def read_config", "+from pkg.config import read_config"]
+    expect_diff_absent: ["load_config(\"x\")\n"]
+    expect_tests: pass
+    description: "A rename that misses a caller breaks the import; the tests catch it, the gate must too."
+
+  - id: code-rename-single-b
+    pair: code-rename
+    instruction: "Rename the function load_config to read_config everywhere it is defined and used."
+    files:
+      pkg/__init__.py: ""
+      pkg/config.py: |
+        def load_config(path):
+            return {"path": path}
+      tests/test_config.py: |
+        from pkg.config import load_config
+
+        def test_load():
+            assert load_config("x")["path"] == "x"
+    test_command: "python -m pytest -q tests"
+    expect_diff_contains: ["+def read_config", "+from pkg.config import read_config"]
+    expect_tests: pass
+    description: "The altered fact: the only caller is the test, which must be updated too, since the instruction says everywhere."
