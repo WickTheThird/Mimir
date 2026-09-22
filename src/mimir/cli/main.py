@@ -310,6 +310,22 @@ async def _execute_interactive(runner: InvestigationRunner, state: Investigation
 
 
 @app.command()
+def mcp(
+    transport: str = typer.Option("stdio", "--transport", help="stdio or http"),
+    port: int = typer.Option(8010, "--port"),
+    host: str = typer.Option("127.0.0.1", "--host"),
+) -> None:
+    """Serve MIMIR's capabilities as MCP tools for an outer agent such as Warp.
+
+    Three tools, each running the full path with every gate: construct_command,
+    investigate, code_task. Nothing executes or applies without the operator.
+    """
+    from mimir.mcp import serve
+
+    serve(transport=transport, host=host, port=port)
+
+
+@app.command()
 def research(
     question: str = typer.Argument(..., help="A technical question for public sources."),
 ) -> None:
