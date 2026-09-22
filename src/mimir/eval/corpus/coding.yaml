@@ -158,7 +158,10 @@ cases:
             assert start()["path"] == "x"
     test_command: "python -m pytest -q tests"
     expect_diff_contains: ["+def read_config", "+from pkg.config import read_config"]
-    expect_diff_absent: ["load_config(\"x\")\n"]
+    # An added line still calling the old name. The removal line "-    return
+    # load_config(...)" is present in every correct rename, and the first
+    # version of this needle matched it, failing a diff that was right.
+    expect_diff_absent: ["+    return load_config("]
     expect_tests: pass
     description: "A rename that misses a caller breaks the import; the tests catch it, the gate must too."
 

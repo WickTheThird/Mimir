@@ -46,3 +46,15 @@ def test_pair_consistency_counts_both_sides():
     rs = [CodeResult("a-1", "p", True), CodeResult("a-2", "p", False),
           CodeResult("b-1", "q", True), CodeResult("b-2", "q", True), CodeResult("c", "", True)]
     assert pair_consistency(rs) == (0.5, 2)
+
+
+def test_an_absent_needle_must_not_match_the_removal_line_of_a_correct_rename():
+    """The first rename needle matched '-    return load_config(\"x\")', which every
+    correct rename contains, and failed a diff that was right."""
+    case = next(c for c in load_corpus() if c.id == "code-rename-callers-a")
+    correct = ('--- a/pkg/app.py\n+++ b/pkg/app.py\n-from pkg.config import load_config\n'
+               '+from pkg.config import read_config\n-    return load_config("x")\n+    return read_config("x")\n'
+               '--- a/pkg/config.py\n+++ b/pkg/config.py\n-def load_config(path):\n+def read_config(path):\n')
+    assert check(case, correct, True) == []
+    missed = correct.replace('+    return read_config("x")', '+    return load_config("x")')
+    assert check(case, missed, True)

@@ -281,7 +281,7 @@ the decision model is never asked to write.
 | 3 entities and targeting | yes | unit level; corpus targeting cases in the next sweep |
 | 4 verify as decisions | yes | in the re-run |
 | 5 calibration | tool built | insufficient samples until more runs |
-| 6a coding corpus | yes, 8 cases | running on the 30B after the ops re-run |
+| 6a coding corpus | yes, 8 cases | 30B: 8/8, pair consistency 1.0, 140s. First reported as 7/8; the one failure was a corpus needle that matched the removal line every correct rename contains, fixed and re-checked against the stored diff. One run: direction |
 | 6b repository map, test selection | yes | unit level |
 | 6c checkpointed tasks, repo lessons | yes | unit level |
 | 7 predictions, round records | yes | unit level |
