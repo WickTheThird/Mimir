@@ -53,6 +53,7 @@ from mimir.verify.sufficiency import Retrieval, classify_retrieval
 from mimir.verify.sufficiency import check as sufficiency_check
 from mimir.verify.sufficiency import (
     classify_currency,
+    demote_empty,
     demote_overreach,
     demote_stale,
 )
@@ -311,10 +312,7 @@ async def resolve_target(
     )
     verdict = verdicts.get("target")
     if verdict is not None:
-        config = get_settings().decisions
-        acted = (not verdict.calibrated) or (
-            verdict.probability >= config.min_probability and verdict.margin >= config.min_margin
-        )
+        acted = _acted_on(verdict)
         session.metadata.setdefault("decisions", []).append(
             {"field": "target", "options": list(options), "choice": verdict.choice,
              "probability": verdict.probability, "margin": verdict.margin,
@@ -698,11 +696,7 @@ async def assess(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
         if verdict is None:
             reason = "no decision model; single pass"
         else:
-            config = get_settings().decisions
-            acted = (not verdict.calibrated) or (
-                verdict.probability >= config.min_probability
-                and verdict.margin >= config.min_margin
-            )
+            acted = _acted_on(verdict)
             session.metadata.setdefault("decisions", []).append(
                 {
                     "field": "next", "options": list(NEXT_CHOICE.options),
@@ -1004,6 +998,28 @@ three possible answers, which is the shape a decision model exists for.
 """
 
 
+def _listing_noun(request: str) -> str:
+    text = request.lower()
+    for noun in ("pods", "deployments", "namespaces", "services", "nodes", "jobs", "files", "matches"):
+        if noun in text or noun[:-1] in text:
+            return noun
+    return "items"
+
+
+def _acted_on(verdict: Any) -> bool:
+    """Whether a verdict clears the floor to be acted on.
+
+    The margin floor applies to every verdict, calibrated or not: a win by a
+    nose is not a decision, and an uncalibrated argmax at 0.58 over three
+    options is close to noise. The probability floor applies only when the
+    number means something.
+    """
+    config = get_settings().decisions
+    if verdict.margin < config.min_margin:
+        return False
+    return (not verdict.calibrated) or verdict.probability >= config.min_probability
+
+
 def _execution_counts(session: InvestigationState) -> tuple[int, int, int]:
     """(failed, empty, observed) from the commands that actually ran.
 
@@ -1047,11 +1063,7 @@ async def _decide_retrieval(
     verdict = verdicts.get("retrieval")
     if verdict is None:
         return None
-    config = get_settings().decisions
-    acted = (not verdict.calibrated) or (
-        verdict.probability >= config.min_probability
-        and verdict.margin >= config.min_margin
-    )
+    acted = _acted_on(verdict)
     session.metadata.setdefault("decisions", []).append(
         {
             "field": verdict.field,
@@ -1097,9 +1109,20 @@ async def _enforce_sufficiency(
         retrieval = classify_retrieval(failed=failed, empty=empty, observed=observed)
         source = "executions"
     else:
-        retrieval = await _decide_retrieval(session, deps)
-        if retrieval is not None:
-            source = "decider"
+        # The operator's own explicit words outrank a judged verdict. "No
+        # listing was produced" is not a judgement call, and on the first
+        # measured run a 4B decider read it as "observed" at p=0.58. The
+        # decision model is for the residual: a statement that says nothing
+        # explicit about whether the looking succeeded.
+        stated = classify_retrieval(observations=session.user_request,
+                                    risks="\n".join(session.risks))
+        if stated is not Retrieval.UNKNOWN:
+            retrieval = stated
+            source = "statement"
+        else:
+            retrieval = await _decide_retrieval(session, deps)
+            if retrieval is not None:
+                source = "decider"
 
     observations = session.user_request
     result = sufficiency_check(
@@ -1120,6 +1143,10 @@ async def _enforce_sufficiency(
     demoted = 0
     if result.overreaching:
         answer, demoted = demote_overreach(answer, result)
+    answer, stated_none = demote_empty(
+        answer, result.retrieval, noun=_listing_noun(session.user_request)
+    )
+    demoted += stated_none
 
     # Staleness is the same question asked of time rather than of reach: is
     # what this rests on good enough to state as current? A note nobody has

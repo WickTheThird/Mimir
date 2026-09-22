@@ -289,3 +289,49 @@ def test_no_gate_fires_on_a_large_fraction_of_the_corpus():
     assert stale <= budget, f"currency fires on {stale}/{len(cases)}"
     assert echoed == 0, f"grounding flags the operator's own words on {echoed}"
     assert retry <= budget, f"retry is eligible on {retry}/{len(cases)}"
+
+
+class TestFromTheFirstMeasuredRun:
+    """Three failures that were ordering and wording, not mechanism."""
+
+    def test_the_operators_statement_outranks_unrelated_structured_freshness(self):
+        """A recent memory hit about something else does not make a
+        fourteen-month-old unverified note current."""
+        assert classify_currency(observations=NEVER, freshness=["recent"]) is Currency.STALE
+
+    def test_structured_freshness_still_decides_when_the_statement_is_silent(self):
+        assert classify_currency(observations="how many replicas?", freshness=["stale"]) is Currency.STALE
+        assert classify_currency(observations="how many replicas?", freshness=["live"]) is Currency.CURRENT
+
+    def test_describing_the_problem_is_not_telling_the_operator_what_to_do(self):
+        """'cannot be verified' satisfied a check for the imperative."""
+        answer = FinalAnswer(answer="The count cannot be verified; the note is 14 months old.", confidence=0.65)
+        answer, _ = demote_stale(answer, Currency.STALE)
+        assert "Verify it" in answer.answer
+        assert answer.confidence <= 0.35
+
+    def test_a_hedged_answer_still_loses_its_confidence(self):
+        answer = FinalAnswer(answer="Verify this before relying on it.", confidence=0.9)
+        answer, moved = demote_stale(answer, Currency.STALE)
+        assert moved == 0 and answer.confidence <= 0.35
+
+    def test_an_empty_listing_makes_the_answer_say_none(self):
+        """The model said it could not determine which pods were running for
+        lack of tools. The listing had answered: none."""
+        from mimir.verify.sufficiency import demote_empty
+
+        answer = FinalAnswer(answer="I cannot determine which pods are running.", confidence=0.4)
+        answer, n = demote_empty(answer, Retrieval.EMPTY, noun="pods")
+        assert n == 1 and answer.answer.startswith("None.")
+
+    def test_an_answer_that_already_says_none_is_left_alone(self):
+        from mimir.verify.sufficiency import demote_empty
+
+        answer = FinalAnswer(answer="No pods are running.", confidence=0.8)
+        assert demote_empty(answer, Retrieval.EMPTY, noun="pods")[1] == 0
+
+    def test_an_answer_that_names_things_is_groundings_business_not_this(self):
+        from mimir.verify.sufficiency import demote_empty
+
+        answer = FinalAnswer(answer="messaging-router-6cf8 is running.", confidence=0.8)
+        assert demote_empty(answer, Retrieval.EMPTY, noun="pods")[1] == 0

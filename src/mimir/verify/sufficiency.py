@@ -148,9 +148,17 @@ _NO_LIVE_CHECK = re.compile(
     re.IGNORECASE,
 )
 
+# The imperative only. "cannot be verified" describes the problem; it does not
+# tell the operator what to do, and a corpus case that expects the instruction
+# was satisfied by the description on the first measured run.
 _ALREADY_HEDGED = re.compile(
-    r"\b(verify|verif(?:y|ied|ication)|confirm|re-?check|check (?:it|this|first)"
-    r"|before relying)\b",
+    r"\b(verify|confirm|re-?check|check (?:it|this|first)|before relying)\b",
+    re.IGNORECASE,
+)
+
+_NONE_STATED = re.compile(
+    r"\b(none|no pods?|there (?:is|are) no\b|no such \w+|no \w+ (?:is|are|were) (?:running|listed|found)|nothing (?:is |was )?"
+    r"(?:running|listed|returned|found)|returned (?:nothing|no results))\b",
     re.IGNORECASE,
 )
 
@@ -247,22 +255,25 @@ def classify_currency(
     """
     if executions:
         return Currency.CURRENT
+
+    # The operator's own statement about the record comes first. On the first
+    # measured run a "recent" freshness on an unrelated memory hit outranked
+    # "never been verified and written 14 months ago", because structured
+    # signals were consulted before the statement. Structured freshness is
+    # authoritative about the evidence it is attached to, and says nothing
+    # about a note the operator is describing.
+    if _NEVER_VERIFIED.search(observations) or _AGE_MONTHS.search(observations):
+        return Currency.STALE
+    days = _AGE_DAYS.search(observations)
+    if days:
+        # An age was stated. Inside the window it is a positive statement of
+        # currency, not an absence of one.
+        return Currency.STALE if int(days.group(1)) > stale_after_days else Currency.CURRENT
+
     values = {str(f).lower() for f in (freshness or [])}
     if values and values <= {"stale", "unknown"}:
         return Currency.STALE
     if values & {"live", "recent"}:
-        return Currency.CURRENT
-
-    if _NEVER_VERIFIED.search(observations):
-        return Currency.STALE
-    if _AGE_MONTHS.search(observations):
-        return Currency.STALE
-    days = _AGE_DAYS.search(observations)
-    if days and int(days.group(1)) > stale_after_days:
-        return Currency.STALE
-    if days:
-        # An age was stated and it is inside the window. That is a positive
-        # statement of currency, not an absence of one.
         return Currency.CURRENT
     if _NO_LIVE_CHECK.search(observations):
         return Currency.STALE
@@ -285,6 +296,9 @@ def demote_stale(answer: Any, currency: Currency) -> tuple[Any, int]:
     prose = getattr(answer, "answer", "") or ""
     facts = list(getattr(answer, "observed_facts", None) or [])
     if not facts and _ALREADY_HEDGED.search(prose):
+        # Already says what to do. The number still comes down: a stale
+        # record does not become a confident answer by being described well.
+        answer.confidence = round(min(getattr(answer, "confidence", 0.5), 0.35), 3)
         return answer, 0
 
     answer.observed_facts = []
@@ -300,6 +314,34 @@ def demote_stale(answer: Any, currency: Currency) -> tuple[Any, int]:
         ).strip()
     answer.confidence = round(min(getattr(answer, "confidence", 0.5), 0.35), 3)
     return answer, len(facts) or 1
+
+
+def demote_empty(answer: Any, retrieval: Retrieval, *, noun: str = "items") -> tuple[Any, int]:
+    """Under an empty listing, say that nothing was listed.
+
+    On the first measured run the listing was empty, the model answered that
+    it could not determine which pods were running for lack of tools, and the
+    answer named nothing: grounding had nothing to demote and sufficiency had
+    no overreach to refuse. Both gates were right and the answer was still
+    wrong, because an empty result is a finding and the answer treated it as
+    an absence of information. This states the finding. Computed from the
+    retrieval verdict; no model.
+    """
+    if retrieval is not Retrieval.EMPTY:
+        return answer, 0
+    prose = getattr(answer, "answer", "") or ""
+    if _NONE_STATED.search(prose):
+        return answer, 0
+    from mimir.verify.grounding import identifiers
+
+    if identifiers(prose):
+        # It names things. Whether they were observed is grounding's call.
+        return answer, 0
+    answer.answer = (
+        f"None. The listing returned no {noun}, so there are none to name. "
+        + prose
+    ).strip()
+    return answer, 1
 
 
 def _sentences(text: str) -> list[str]:
@@ -390,6 +432,7 @@ __all__ = [
     "check",
     "classify_currency",
     "classify_retrieval",
+    "demote_empty",
     "demote_overreach",
     "demote_stale",
 ]

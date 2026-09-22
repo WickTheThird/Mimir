@@ -315,7 +315,7 @@ class TestRetrievalDecision:
         answer = await _enforce_sufficiency(
             FinalAnswer(answer="There is no billing pod.", confidence=0.9), session, Deps(None)
         )
-        assert session.metadata["sufficiency"]["retrieval_source"] == "text"
+        assert session.metadata["sufficiency"]["retrieval_source"] == "statement"
         assert "Unknown" in answer.answer
 
     @pytest.mark.asyncio
@@ -323,8 +323,46 @@ class TestRetrievalDecision:
         """The regex regression came from feeding retrieved documents to the
         classifier. The decision model gets the request and the risks only."""
         session = _session("Is there a billing pod?", excerpts=["Runbook: timeouts happen when..."],
-                           risks=["kubectl: connection refused"])
+                           risks=["kubernetes_investigator failed: iteration limit"])
         decider = FakeDecider("failed")
         await _enforce_sufficiency(FinalAnswer(answer="ok", confidence=0.5), session, Deps(decider))
         assert "Runbook" not in decider.contexts[0]
-        assert "connection refused" in decider.contexts[0]
+        assert "iteration limit" in decider.contexts[0]
+
+
+class TestOrderOfAuthority:
+    @pytest.mark.asyncio
+    async def test_an_explicit_statement_beats_a_wrong_decider(self):
+        """Kev read 'no listing was produced' as observed at p=0.58 on the
+        first measured run. The operator's explicit words are not a judgement
+        call and come first."""
+        session = _session(
+            "All three clusters returned connection timeouts and no listing was "
+            "produced. Is there a billing pod?"
+        )
+        decider = FakeDecider("observed", 0.58)
+        answer = await _enforce_sufficiency(
+            FinalAnswer(answer="There is no billing pod.", confidence=0.9), session, Deps(decider)
+        )
+        assert session.metadata["sufficiency"]["retrieval_source"] == "statement"
+        assert decider.contexts == []
+        assert "Unknown" in answer.answer
+
+    @pytest.mark.asyncio
+    async def test_a_verdict_by_a_nose_is_not_acted_on_even_uncalibrated(self):
+        session = _session("Is there a billing pod?")
+        decider = FakeDecider("failed", 0.4)  # margin 0.1 on three options
+        answer = await _enforce_sufficiency(
+            FinalAnswer(answer="There is no billing pod.", confidence=0.9), session, Deps(decider)
+        )
+        assert session.metadata["decisions"][0]["acted"] is False
+        assert answer.answer == "There is no billing pod."
+
+    @pytest.mark.asyncio
+    async def test_an_empty_listing_answer_says_none_in_the_graph(self):
+        session = _session("A listing returned no pods at all. Which pods are running?")
+        answer = await _enforce_sufficiency(
+            FinalAnswer(answer="I cannot determine which pods are running.", confidence=0.4),
+            session, Deps(None),
+        )
+        assert answer.answer.startswith("None.")
