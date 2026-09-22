@@ -164,6 +164,30 @@ written to the memory store under the repo's name. Today `curate_memory`
 runs for ops sessions only. The next task on that repo starts from what
 the last one found.
 
+**6d. Acceptance checks before generation, and generation as one option.**
+*Three days.* From a review of non-LLM program synthesis (AlphaDev, cvc5
+and Rosette, DreamCoder, STOKE, AlphaEvolve). Most of its recommendation
+is already the loop's shape: sandbox, gate, deterministic selector, the
+model never judging its own diff. Three things it names that are missing:
+
+- **Checks first.** Turn the instruction into executable acceptance checks
+  before any candidate exists: a test that must pass, an assertion, a
+  grep that must become true. The gate then decides mechanically, the
+  selector has a real objective instead of "smallest passing diff", and
+  every task yields a contrastive corpus case by construction.
+- **Iterate on the gate's findings.** Best-of-k is one round. The gate's
+  output becomes the next round's constraint. This is the cheap form of
+  generate-search-evaluate, built from parts that exist.
+- **Validated transformations as candidates.** A routine that solved a
+  task, kept with its validation evidence, offered as a candidate before
+  the model is asked. Step 8's memory applied to code; DreamCoder's idea
+  without DreamCoder.
+
+Declined, on the review's own evidence: symbolic synthesis as a generator
+(fits step 9 when a formal spec exists, never for feature work), algorithm
+superoptimizers (no overlap), diffusion models (a model choice, and the
+runtime already makes that boring).
+
 ### 7. Cognitive state, then predictions on it. *Three days, after 2.*
 
 ADR-003 Phase 2 and 5 together, because the second needs the first.
