@@ -458,6 +458,7 @@ def load_all_tools() -> ToolRegistry:
     for module in (
         "mimir.tools.repo",
         "mimir.tools.code",
+        "mimir.tools.repomap",
         "mimir.tools.kubernetes",
         "mimir.tools.sdm",
         "mimir.tools.database",

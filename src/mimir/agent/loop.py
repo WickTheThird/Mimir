@@ -36,7 +36,8 @@ from mimir.tools.base import ToolContext, ToolRegistry, ToolResult
 log = get_logger(__name__)
 
 CODING_TOOLS: tuple[str, ...] = (
-    # read
+    # read; the map first, because a lookup beats a search when the name is known
+    "repository_map",
     "search_repository",
     "read_file_range",
     "locate_tests",

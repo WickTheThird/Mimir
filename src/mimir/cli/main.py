@@ -326,6 +326,40 @@ def mcp(
 
 
 @app.command()
+def calibrate(
+    runs: int = typer.Option(10, "--runs", help="How many recent eval runs to pool."),
+) -> None:
+    """Check the decision log against outcomes, per decision type (ADR-004 step 5).
+
+    Held out and grouped by session. Prints expected calibration error before
+    and after temperature scaling; only an improvement earns a temperature.
+    """
+    import sqlite3
+
+    from mimir.eval.calibration import calibrate as _calibrate
+    from mimir.eval.calibration import load_sessions, render, samples_from
+
+    settings = get_settings()
+    db = settings.home / "mimir.db"
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    run_ids = [r[0] for r in conn.execute(
+        "select id from eval_runs order by created_at desc limit ?", (runs,))]
+    results = [
+        {"session_id": sid, "passed": bool(passed)}
+        for sid, passed in conn.execute(
+            f"select session_id, passed from eval_results where run_id in ({','.join('?'*len(run_ids))})",
+            run_ids,
+        )
+        if sid
+    ] if run_ids else []
+    conn.close()
+    sessions = load_sessions(db, [r["session_id"] for r in results])
+    report = _calibrate(samples_from(results, sessions))
+    console.print(f"[dim]{len(results)} scored cases across {len(run_ids)} run(s)[/dim]")
+    console.print(render(report))
+
+
+@app.command()
 def research(
     question: str = typer.Argument(..., help="A technical question for public sources."),
 ) -> None:

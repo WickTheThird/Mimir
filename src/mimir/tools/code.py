@@ -392,6 +392,14 @@ class WriteInput(BaseModel):
 
 class TestInput(BaseModel):
     task: str
+    select_affected: bool = Field(
+        default=False,
+        description=(
+            "Run only the tests the repository map links to the files this "
+            "worktree changed. Faster, and the failure is smaller to read. The "
+            "full suite is still the gate before a change is accepted."
+        ),
+    )
     command: str = Field(
         description="Test command, for example 'pytest tests/test_claims.py -q'."
     )
@@ -856,6 +864,12 @@ async def run_worktree_tests(args: TestInput, ctx: ToolContext) -> ToolResult:
         env["HOME"] = str(wt.root)
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         command = _resolve_interpreter(args.command, root)
+        if args.select_affected:
+            from mimir.tools.repomap import affected_tests
+
+            selected = affected_tests(ctx, root, wt.root)
+            if selected and "pytest" in command:
+                command = f"{command} {' '.join(selected)}"
         try:
             proc = subprocess.run(
                 command, shell=True, cwd=str(wt.root), env=env,
