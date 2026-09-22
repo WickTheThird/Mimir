@@ -270,6 +270,30 @@ constrained decoding at its measured 100%. The arithmetic gates stay. No
 rule that is always right is replaced by a model that is usually right, and
 the decision model is never asked to write.
 
+## Status, 22 September
+
+| step | built | measured |
+|---|---|---|
+| 0 decision backend (Kev-4B served) | yes | acceptance probe: distribution, margin, both twins decided |
+| 1 retrieval outcome | yes | 6 cases: 3/6 then re-run after three ordering fixes (result pending below) |
+| 2 recurrence (assess, replan) | yes | in the re-run |
+| 2b Warp MCP tools | yes | not yet, needs a Warp session |
+| 3 entities and targeting | yes | unit level; corpus targeting cases in the next sweep |
+| 4 verify as decisions | yes | in the re-run |
+| 5 calibration | tool built | insufficient samples until more runs |
+| 6a coding corpus | yes, 8 cases | running on the 30B after the ops re-run |
+| 6b repository map, test selection | yes | unit level |
+| 6c checkpointed tasks, repo lessons | yes | unit level |
+| 7 predictions, round records | yes | unit level |
+| 8 experience (routing, drafts) | yes | unit level |
+| 9 manifest drift | yes | unit level |
+| 10 mini deployment | files written | not installed |
+| 11 specialists table | yes | n/a |
+
+Everything above the line is code with tests (743). What is not yet true is
+the measured column, and the plan's own rule is that a step is done when
+its failure population moved, not when its tests pass.
+
 ## Targets, so the plan can be wrong
 
 | | now | after 0-4 | after 5 | after 6 | after 7-8 |
