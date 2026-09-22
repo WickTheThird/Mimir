@@ -283,14 +283,17 @@ class TestRetrievalDecision:
         assert "Operator request:" in decider.contexts[0]
 
     @pytest.mark.asyncio
-    async def test_a_decider_verdict_of_empty_leaves_a_negative_answer_alone(self):
+    async def test_a_decider_verdict_of_empty_keeps_a_negative_answer_and_leads_with_none(self):
+        """Nothing demoted, nothing removed; the computed verdict word leads."""
         session = _session("Is there a billing pod?")
         answer = await _enforce_sufficiency(
             FinalAnswer(answer="There is no billing pod.", confidence=0.9), session,
             Deps(FakeDecider("empty")),
         )
-        assert answer.answer == "There is no billing pod."
+        assert answer.answer.startswith("None:")
+        assert answer.answer.endswith("There is no billing pod.")
         assert answer.confidence == 0.9
+        assert answer.unverified == []
 
     @pytest.mark.asyncio
     async def test_every_decision_is_logged_with_its_provenance(self):
