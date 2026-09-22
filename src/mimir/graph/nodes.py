@@ -783,16 +783,97 @@ async def replan(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
             "notes": [f"replan: {len(steps)} new step(s), {len(plan.missing_context)} question(s)"]}
 
 
-async def verify(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
-    """Behaviour Verifier pass (ADR 7.2 step 5).
+SUFFICIENT_CHOICE = Choice(
+    name="sufficient",
+    options=("yes", "no"),
+    description=(
+        "Whether the findings and evidence gathered answer the question that was "
+        "asked. yes: an operator could act on this. no: a specific thing is still "
+        "unknown and the answer would have to guess it."
+    ),
+)
+CONFLICT_CHOICE = Choice(
+    name="conflict",
+    options=("consistent", "contradictory", "unrelated"),
+    description=(
+        "Whether the specialists' conclusions agree. consistent: they support one "
+        "account. contradictory: at least two cannot both be true. unrelated: they "
+        "answer different questions and neither confirms nor denies the other."
+    ),
+)
+"""ADR-004 step 4. The verify node's generative call, replaced.
 
-    Its job is to attack the conclusion, not to agree with it. Disagreement is
-    recorded, never smoothed away (ADR 7.2).
+The behaviour verifier was asked, in open prose, to attack the conclusions.
+Its output was a report whose contradictions field was read by a rule. Two
+closed-set questions carry the same information and cannot wander: is this
+enough, and do these agree. They are also where pair consistency is
+decided, because "does the answer change when the fact changes" is exactly
+"is this evidence sufficient for that claim".
+"""
+
+
+def _verify_context(session: InvestigationState, reports: list[SpecialistReport]) -> str:
+    lines = [f"Question: {session.user_request}", "", "Specialist conclusions:"]
+    for r in reports[:8]:
+        lines.append(f"- {r.specialist.value} (confidence {r.confidence:.2f}): "
+                     f"{(r.conclusion or r.detail or '').strip()[:400]}")
+        for q in r.open_questions[:3]:
+            lines.append(f"    open: {q[:160]}")
+    lines += ["", "Evidence (most trusted first):"]
+    for e in session.ranked_evidence(limit=12):
+        lines.append(f"- [{e.source_type}] {e.claim[:120]}: {e.excerpt[:200]}")
+    return "\n".join(lines)
+
+
+async def verify(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
+    """Behaviour verification (ADR 7.2 step 5), as two decisions.
+
+    With a decision model: sufficiency and conflict are decided over the
+    findings and evidence, logged, and applied mechanically. An insufficient
+    verdict records what is missing as an open question and lowers report
+    confidence; a contradiction is recorded as a disagreement, never
+    smoothed away (ADR 7.2). No generative call is made.
+
+    Without one: the previous behaviour, one generative verifier pass.
     """
     session = state["session"]
     reports = [r for r in state.get("reports", []) if not r.failed]
     if not reports:
         return {"route": "safety_review"}
+
+    decider = getattr(deps, "decider", None)
+    verdicts = await decide_async(
+        decider, _verify_context(session, reports),
+        [SUFFICIENT_CHOICE, CONFLICT_CHOICE], session_id=session.session_id,
+    )
+    if verdicts:
+        applied: dict[str, Any] = {}
+        for field, verdict in verdicts.items():
+            acted = _acted_on(verdict)
+            session.metadata.setdefault("decisions", []).append(
+                {"field": field, "options": list(
+                    SUFFICIENT_CHOICE.options if field == "sufficient" else CONFLICT_CHOICE.options),
+                 "choice": verdict.choice, "probability": verdict.probability,
+                 "margin": verdict.margin, "calibrated": verdict.calibrated,
+                 "truncated": verdict.truncated, "backend": getattr(decider, "name", "unknown"),
+                 "node": "verify", "acted": acted}
+            )
+            if acted:
+                applied[field] = verdict.choice
+        if applied.get("sufficient") == "no":
+            for report in reports:
+                report.confidence = round(max(0.2, report.confidence - 0.2), 3)
+            note = "the evidence gathered does not settle the question asked"
+            if note not in session.risks:
+                session.risks.append(note)
+        if applied.get("conflict") == "contradictory":
+            for report in reports:
+                report.contradictions.append(
+                    "another specialist's conclusion cannot be true at the same time"
+                )
+                report.confidence = round(max(0.2, report.confidence - 0.2), 3)
+        session.metadata["verify"] = {"mode": "decided", **applied}
+        return {"session": session, "reports": [], "route": "safety_review"}
 
     verifier = deps.specialist(SpecialistName.BEHAVIOUR_VERIFIER)
     context = "\n\n".join(r.render() for r in reports)
@@ -804,11 +885,10 @@ async def verify(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
         ctx=deps.tool_context,
         extra_context=f"Specialist findings to check:\n\n{context}",
     )
-
     for report in reports:
         if report.confidence > 0.5 and run.report.contradictions:
             report.confidence = max(0.2, report.confidence - 0.2)
-
+    session.metadata["verify"] = {"mode": "generative"}
     return {
         "session": session,
         "reports": [run.report],
