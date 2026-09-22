@@ -69,6 +69,9 @@ The first two are the gate being right and not saying the word. Fixed
 after the sweep by making the verdict word canonical under `failed` and
 `empty` ("Unknown: ..." / "None: ..."), and those four cases re-run alone.
 
+
+Re-run of the four absence and ground cases with the verdict word canonical: **4 of 4**.
+
 So the honest statement about pair consistency: the mechanism that was
 supposed to move it did fire on the cases it was built for, the answers
 were substantively correct, and the metric did not credit them because it
