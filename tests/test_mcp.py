@@ -116,3 +116,32 @@ async def test_search_code_tries_variants_until_one_matches(monkeypatch):
     out = await mcp_server.search_code_impl("whatsapp coexistence")
     assert out["matched_with"] == "whatsapp|coexistence" and out["files"] == ["pkg/wa.py"]
     assert search.seen[:3] == ["whatsapp coexistence", "whatsapp.*coexistence", "coexistence.*whatsapp"]
+
+
+def test_variants_include_a_crude_stem():
+    from mimir.mcp.server import _query_variants
+
+    assert "coexist" in _query_variants("whatsapp coexistence")
+
+
+@pytest.mark.asyncio
+async def test_search_code_keeps_widening_past_a_docs_only_hit(monkeypatch):
+    from mimir.tools.base import ToolResult
+
+    class Spec:
+        def __init__(self): self.seen = []
+        async def invoke(self, args, ctx):
+            q = args["query"]; self.seen.append(q)
+            rows = {"whatsapp coexistence": [{"path": "AGENTS.md", "line": 261, "text": "## WhatsApp Coexistence"}],
+                    "coexist": [{"path": "app/coexistence/service.py", "line": 12, "text": "class CoexistenceService"}]}.get(q, [])
+            return ToolResult(ok=True, tool="search_repository", summary="", data={"matches": rows})
+    search = Spec()
+    class Reg:
+        def get(self, name): return search if name == "search_repository" else None
+    class Runner:
+        registry = Reg(); settings = None
+        def tool_context(self, sid): return None
+    monkeypatch.setattr(mcp_server, "_runner", Runner())
+    out = await mcp_server.search_code_impl("whatsapp coexistence")
+    assert out["files"][0] == "app/coexistence/service.py"
+    assert "AGENTS.md" in out["files"] and "coexist" in search.seen

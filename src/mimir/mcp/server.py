@@ -237,6 +237,9 @@ def _query_variants(phrase: str) -> list[str]:
         out.append(".*".join(reversed(words)))
         out.append("|".join(words))
     out += [w for w in words if w.lower() not in out]
+    # A crude stem so "coexistence" also finds "coexist" and "coexisting".
+    out += [w[:-4] for w in words if w.lower().endswith(("ence", "ance", "tion", "sion")) and len(w) > 7]
+    out += [w[:-3] for w in words if w.lower().endswith("ing") and len(w) > 6]
     return list(dict.fromkeys(v for v in out if v))
 
 
@@ -254,15 +257,28 @@ async def search_code_impl(query: str, repo: str | None = None, limit: int = 40)
     except Exception as exc:  # noqa: BLE001 - the index is a bonus, not a requirement
         out["index_error"] = str(exc)[:200]
     spec = runner.registry.get("search_repository")
+    seen: set[tuple[str, int]] = set()
+    docs = (".md", ".rst", ".txt")
     for variant in _query_variants(query):
         out["tried"].append(variant)
         res = await spec.invoke({"query": variant, "repo": repo, "max_results": limit, "case_sensitive": False}, ctx)
         rows = (res.data or {}).get("matches") or [] if res.ok else []
-        if rows:
-            out["matches"] = rows[:limit]
-            out["matched_with"] = variant
+        for m in rows:
+            if not isinstance(m, dict):
+                continue
+            key = (str(m.get("path") or m.get("file")), int(m.get("line") or 0))
+            if key not in seen:
+                seen.add(key)
+                out["matches"].append({**m, "matched_with": variant})
+                out.setdefault("matched_with", variant)
+        # Stop widening once code files, not only docs, have matched.
+        if any(not str(m.get("path") or m.get("file")).endswith(docs) for m in out["matches"]):
             break
-    out["files"] = sorted({m.get("path") or m.get("file") for m in out["matches"] if isinstance(m, dict)})
+    out["matches"].sort(key=lambda m: (str(m.get("path") or m.get("file")).endswith(docs),
+                                       str(m.get("path") or m.get("file")), int(m.get("line") or 0)))
+    out["matches"] = out["matches"][:limit]
+    out["files"] = sorted({str(m.get("path") or m.get("file")) for m in out["matches"]},
+                          key=lambda f: (f.endswith(docs), f))
     out["note"] = ("No match for the phrase or any widening of it; the thing may be named "
                    "differently. Try a symbol, a config key, or an error string.") if not out["matches"] else ""
     return out

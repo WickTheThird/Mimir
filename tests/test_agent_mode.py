@@ -111,3 +111,9 @@ async def test_a_repository_question_searches_first_and_never_offers_cluster_too
     assert "find_workloads" not in seen["tools"] and "search_repository" in seen["tools"]
     assert "Repository search already ran" in seen["instruction"] and "coexistence = True" in seen["instruction"]
     assert seen["query"][0] == "whatsapp coexistence"
+
+
+def test_the_search_phrase_never_contains_the_repository_name():
+    from mimir.api.agent_mode import search_phrase
+
+    assert search_phrase("in what files is whatsapp coexistence setup? search the repo target", exclude=("target",)) == "whatsapp coexistence"

@@ -84,9 +84,11 @@ def pick_repo(text: str, runner: Any) -> str | None:
     return repos[0].name if len(repos) == 1 else None
 
 
-def search_phrase(text: str) -> str:
-    """The part of the request worth searching for: drop the asking words."""
-    words = [w for w in re.findall(r"[A-Za-z0-9_-]+", text) if len(w) > 2 and not _REPO_CUES.fullmatch(w) and not _CLUSTER_CUES.fullmatch(w)]
+def search_phrase(text: str, *, exclude: tuple[str, ...] = ()) -> str:
+    """The part of the request worth searching for: drop the asking words and repo names."""
+    drop = {e.lower() for e in exclude}
+    words = [w for w in re.findall(r"[A-Za-z0-9_-]+", text)
+             if len(w) > 2 and not _REPO_CUES.fullmatch(w) and not _CLUSTER_CUES.fullmatch(w) and w.lower() not in drop]
     stop = {"can", "you", "what", "which", "how", "the", "and", "for", "our", "check", "find", "look", "read", "readonly", "read-only", "search", "through", "this", "that", "please", "show", "where", "setup", "set", "about", "with", "are", "is"}
     kept = [w for w in words if w.lower() not in stop][:4]
     return " ".join(kept)
@@ -109,7 +111,7 @@ async def run_agent(messages: list[Any], runner: Any, settings: Any) -> AsyncIte
         from mimir.mcp.server import search_code_impl
 
         repo = pick_repo(instruction, runner)
-        phrase = search_phrase(instruction)
+        phrase = search_phrase(instruction, exclude=(repo,) if repo else ())
         found = await search_code_impl(phrase, repo) if phrase else {"files": [], "matches": [], "tried": []}
         yield f"> search_code({phrase!r}, repo={repo!r}) -> {len(found.get('files', []))} file(s)\n"
         for f in found.get("files", [])[:12]:
@@ -118,7 +120,9 @@ async def run_agent(messages: list[Any], runner: Any, settings: Any) -> AsyncIte
             f"- {m.get('path') or m.get('file')}:{m.get('line')}: {str(m.get('text') or m.get('line_text') or '')[:160]}"
             for m in found.get("matches", [])[:25] if isinstance(m, dict)
         ) or "(nothing matched: " + ", ".join(found.get("tried", [])) + ")"
-        instruction = f"{instruction}\n\nRepository search already ran (repo={repo or 'default'}):\n{evidence}"
+        tried = ", ".join(found.get("tried", [])[:6])
+        instruction = (f"{instruction}\n\nRepository search already ran (repo={repo or 'default'}; "
+                       f"patterns tried: {tried}). Do not repeat these searches; read the files instead.\n{evidence}")
         agent = AgentLoop(
             router=runner.router, registry=runner.registry, tool_context=runner.tool_context(None),
             settings=settings, tools=available(REPO_TOOLS), system=REPO_SYSTEM,
