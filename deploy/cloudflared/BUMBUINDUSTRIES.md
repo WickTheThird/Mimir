@@ -122,3 +122,23 @@ works on repositories cloned into the VM.
 Ollama and Kev as text APIs, and nothing else on the host. Put Cloudflare
 Access in front of the hostname for a second factor, and keep the VM's
 snapshot current.
+
+## Runbook, in order
+
+0. Push this repository (the VM installs from GitHub).
+1. **Host (macOS):** `zsh deploy/mini/host/install-host.sh`. Binds Ollama and
+   Kev-0.8B to the UTM gateway and nothing else. Check: both curls print.
+2. **VM (Debian, 3GB):** `bash deploy/mini/vm/install-vm.sh`. Installs MIMIR,
+   writes the config pointing at the host, starts the facade and the MCP
+   server under systemd.
+3. **Keys, on the VM:** `mimir keys create --label warp-cloud` and
+   `--label wick-local`; restart the two services. Keys are hashed on disk;
+   put the plaintext in Warp's secret store and your password manager only.
+4. **Tunnel:** in the dashboard, add the three `ai.bumbuindustries.com`
+   hostnames to the existing tunnel, all pointing at `localhost` in the VM:
+   `/v1*` to 8756, `/mcp*` to 8010, `/api/health` to 8756.
+5. **Check from your phone:** `/api/health` without a key, `/v1/models`
+   with one, `/mcp` returns 401 without one.
+6. **Warp:** the facade as a custom model (`https://ai.bumbuindustries.com/v1`,
+   model `mimir-local-ops`), and `https://ai.bumbuindustries.com/mcp` as an
+   MCP source, both with the `warp-cloud` key from Warp's secrets.

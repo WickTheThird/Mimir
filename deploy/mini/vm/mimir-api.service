@@ -1,0 +1,11 @@
+[Unit]
+Description=MIMIR OpenAI-compatible facade
+After=network-online.target
+[Service]
+WorkingDirectory=HOME_DIR/mimir
+EnvironmentFile=-HOME_DIR/.mimir/env
+ExecStart=HOME_DIR/mimir/.venv/bin/mimir serve
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target

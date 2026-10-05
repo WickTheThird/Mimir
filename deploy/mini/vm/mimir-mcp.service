@@ -1,0 +1,11 @@
+[Unit]
+Description=MIMIR MCP server (construct_command, investigate, code_task)
+After=network-online.target
+[Service]
+WorkingDirectory=HOME_DIR/mimir
+EnvironmentFile=-HOME_DIR/.mimir/env
+ExecStart=HOME_DIR/mimir/.venv/bin/mimir mcp --transport http --host 127.0.0.1 --port 8010
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
