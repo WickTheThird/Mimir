@@ -12,6 +12,7 @@ decisions:
   backend: kev
   base_url: http://192.168.64.1:8009
 api:
+  facade_agent_mode: true   # /v1 is answered by MIMIR's own tool loop, not a bare model
   host: 127.0.0.1      # cloudflared is in the same VM; nothing binds beyond loopback
   port: 8756
 graph:

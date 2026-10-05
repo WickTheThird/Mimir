@@ -138,7 +138,11 @@ async def chat_completions(
     messages = [m.to_llm() for m in payload.messages]
     messages = _apply_system_prompt(messages)
 
-    if payload.mimir_memory or settings.api.facade_agent_mode:
+    if settings.api.facade_agent_mode:
+        # MIMIR is the agent. Warp's tool schemas are ignored: the loop below
+        # uses MIMIR's tools and returns text, and Warp displays it.
+        return await _agent_completion(payload, settings, caller)
+    if payload.mimir_memory:
         messages = await _augment_with_memory(messages)
 
     options = GenerationOptions(
@@ -208,6 +212,42 @@ async def chat_completions(
                 "total_tokens": response.usage.total_tokens,
             },
         }
+
+
+async def _agent_completion(payload: Any, settings: Any, caller: Any) -> Any:
+    from mimir.api.agent_mode import run_agent
+    from mimir.mcp.server import _get_runner
+
+    runner = _get_runner()
+    messages = [m.to_llm() for m in payload.messages]
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    created = int(time.time())
+    model_name = settings.models.public_alias
+    log.info("facade_agent_request", origin=caller.origin, stream=payload.stream, messages=len(messages))
+
+    def frame(delta: dict[str, Any], finish: str | None = None) -> dict[str, str]:
+        return {"data": json.dumps({"id": completion_id, "object": "chat.completion.chunk",
+                                    "created": created, "model": model_name,
+                                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})}
+
+    if payload.stream:
+        async def events() -> AsyncIterator[dict[str, str]]:
+            yield frame({"role": "assistant", "content": ""})
+            async for text in run_agent(messages, runner, settings):
+                yield frame({"content": text})
+            yield frame({}, finish="stop")
+            yield {"data": "[DONE]"}
+        return EventSourceResponse(events(), ping=15)
+
+    parts: list[str] = []
+    async for text in run_agent(messages, runner, settings):
+        parts.append(text)
+    content = "".join(parts).strip()
+    return {
+        "id": completion_id, "object": "chat.completion", "created": created, "model": model_name,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
 
 
 async def _stream(

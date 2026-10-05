@@ -57,6 +57,19 @@ curl -s https://ai.bumbuindustries.com/v1/models -H "Authorization: Bearer <key>
 curl -s https://ai.bumbuindustries.com/mcp -H "Authorization: Bearer <key>"   # 401 without the key
 ```
 
+## Warp: the model endpoint is MIMIR
+
+With `facade_agent_mode: true` (the mini config), a chat to `/v1` is not a
+bare completion. MIMIR's own read-only tool loop answers it: constrained
+tool calls, repeat detection, the repository index and search, the cluster
+tools, the memory. Progress lines and the answer stream back as ordinary
+content, so Warp needs nothing but the endpoint and the key. Warp's own
+tool schemas are ignored because MIMIR is the agent.
+
+The MCP tools remain for a client that wants to call one capability
+deliberately (`search_code`, `construct_command`, `investigate`,
+`code_task`); they are the same machinery with a typed door.
+
 ## Warp, two things
 
 1. **Model**: Warp settings, custom OpenAI-compatible endpoint,

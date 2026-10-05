@@ -267,6 +267,9 @@ class ApiConfig(BaseModel):
     cors_origins: list[str] = Field(default_factory=lambda: ["http://127.0.0.1:5173"])
     # When true the OpenAI facade may run the full agent graph.
     facade_agent_mode: bool = False
+    """When true, /v1/chat/completions is answered by MIMIR's own read-only tool loop."""
+    facade_agent_timeout_s: float = 240.0
+    facade_agent_max_steps: int = 12
     facade_rate_limit_per_minute: int = 120
     expose_privileged_routes_publicly: bool = False
 
