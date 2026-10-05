@@ -1,12 +1,4 @@
-"""Deterministic risk classification (ADR 13.1, 13.2).
-
-"The model may propose actions. Deterministic policy code decides whether they
-can run automatically."
-
-Nothing in this module consults a model. Classification is driven by the argv,
-the resolved target context, and static rule tables. A model's opinion about how
-risky its own command is never enters here.
-"""
+"""Deterministic risk classification (ADR 13.1, 13.2)."""
 
 from __future__ import annotations
 
@@ -23,8 +15,6 @@ from mimir.models.command import (
     RiskClass,
 )
 
-# --------------------------------------------------------------------------
-# kubectl
 # --------------------------------------------------------------------------
 
 KUBECTL_READ_VERBS = {
@@ -89,14 +79,9 @@ KUBECTL_SUBCOMMAND_RISK: dict[tuple[str, str], RiskClass] = {
 }
 
 # --------------------------------------------------------------------------
-# Generic binaries
-# --------------------------------------------------------------------------
 
 READ_ONLY_BINARIES = {
-    # Shell and coreutils that only read or print. Omitting an obviously
-    # read-only binary is not a safe default in practice: it lands in the
-    # "unknown binary" R2 branch, which blocks on an approval prompt for
-    # something like `echo`, and trains the operator to approve reflexively.
+    # Shell and coreutils that only read or print.
     "echo",
     "printf",
     "true",
@@ -223,8 +208,6 @@ SDM_R2_SUBCOMMANDS = {"connect", "ssh", "port", "forward"}
 SDM_R3_SUBCOMMANDS = {"disconnect", "logout", "login"}
 
 # --------------------------------------------------------------------------
-# SQL
-# --------------------------------------------------------------------------
 
 SQL_READ_PREFIXES = ("select", "with", "explain", "show", "table", "values", "\\d", "\\l", "\\dt")
 SQL_R3_PREFIXES = ("update", "insert", "delete", "upsert", "merge", "copy")
@@ -243,8 +226,6 @@ SQL_R4_PREFIXES = (
 SQL_STATEMENT_SPLIT = re.compile(r";\s*(?=\S)")
 
 # Shell metacharacters that would let an argv escape into a shell if one were
-# ever spawned. We never spawn a shell, but a command carrying these is either a
-# mistake or an injection attempt (ADR 13.5).
 SHELL_OPERATORS = re.compile(r"(?<!\\)[;&|`$><]|\$\(|\|\||&&")
 
 DANGEROUS_ARG_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
@@ -279,9 +260,7 @@ def _norm(value: str) -> str:
     return value.strip().lower()
 
 
-#: Flags that consume the following token as their value. Without this table a
-#: parser would read the value of ``-n payments`` as a subcommand, which then
-#: falls through to the "unrecognised verb" branch and hides the real verb.
+# : Flags that consume the following token as their value.
 VALUE_FLAGS: frozenset[str] = frozenset(
     {
         # kubectl
@@ -309,12 +288,7 @@ VALUE_FLAGS: frozenset[str] = frozenset(
 
 
 def _positional_args(argv: list[str]) -> list[str]:
-    """argv entries after the binary that are neither flags nor flag values.
-
-    ``--flag=value`` needs no lookahead. ``--flag value`` does, hence
-    :data:`VALUE_FLAGS`. Everything after a bare ``--`` is an exec payload and is
-    classified separately, so it is excluded here.
-    """
+    """argv entries after the binary that are neither flags nor flag values."""
     out: list[str] = []
     skip_next = False
     for arg in argv[1:]:
@@ -349,8 +323,6 @@ def _flag_value(argv: list[str], *names: str) -> str | None:
     return None
 
 
-# --------------------------------------------------------------------------
-# Per-binary classifiers
 # --------------------------------------------------------------------------
 
 
@@ -550,7 +522,6 @@ BINARY_CLASSIFIERS: dict[str, Callable[[list[str]], tuple[RiskClass, list[str]]]
 
 
 #: Binaries that destroy or overwrite state wherever they run, including inside
-#: a container reached through ``kubectl exec`` or ``docker exec``.
 DESTRUCTIVE_BINARIES: dict[str, str] = {
     "rm": "removes files",
     "rmdir": "removes directories",
@@ -595,8 +566,7 @@ def classify_argv(argv: list[str]) -> tuple[RiskClass, list[str]]:
     if binary in DESTRUCTIVE_BINARIES:
         return RiskClass.R4, [f"{binary} {DESTRUCTIVE_BINARIES[binary]}"]
 
-    # A shell invocation hides its real payload in a string argument. Inspect it
-    # rather than trusting the wrapper.
+    # A shell invocation hides its real payload in a string argument.
     if binary in {"sh", "bash", "zsh", "ash", "dash"}:
         payload = _flag_value(argv, "-c") or ""
         reasons = [f"{binary} -c wraps another command"]
@@ -619,18 +589,10 @@ def classify_argv(argv: list[str]) -> tuple[RiskClass, list[str]]:
 
 
 # --------------------------------------------------------------------------
-# Top-level classifier
-# --------------------------------------------------------------------------
 
 
 def _sql_statement(command: ProposedCommand) -> str:
-    """The SQL a command will actually execute.
-
-    Joining the whole argv is wrong: `psql -d billing -c "drop table x"` would
-    become "-d billing -c drop table x", which matches no known statement prefix
-    and falls through to the conservative-but-too-low "unrecognised write" R3
-    branch. A DROP must reach R4.
-    """
+    """The SQL a command will actually execute."""
     if command.stdin:
         return command.stdin
     inline = _flag_value(command.argv, "-c", "--command")
@@ -679,9 +641,7 @@ class RiskClassifier:
                     matched.append("shell_operator")
                     break
 
-        # Denied binaries. The deny list applies to the outer binary and to any
-        # exec payload, otherwise `kubectl exec -- rm -rf /` would slip past a
-        # check that only ever looked at argv[0].
+        # Denied binaries.
         payload = _exec_payload(argv)
         for label, candidate in (
             ("outer command", argv[0]),
@@ -792,10 +752,7 @@ class RiskClassifier:
             return True, None
         if "rollout restart" in argv_text or ("rollout" in argv_text and "restart" in argv_text):
             target = command.context.targets[0] if command.context.targets else "<deployment>"
-            # The target may already be qualified ("deployment/api"). Emitting
-            # "deployment/deployment/api" produces a rollback command that does
-            # not run, which is worse than offering none: an operator pastes it
-            # mid-incident and loses time on a syntax error.
+            # The target may already be qualified ("deployment/api").
             deploy = target.split("/", 1)[1] if "/" in target else target
             kind = target.split("/", 1)[0] if "/" in target else "deployment"
             ns = command.context.namespace or "<namespace>"

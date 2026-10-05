@@ -1,21 +1,4 @@
-"""Typed repositories over the ORM (ADR 19.3, 20).
-
-Every repository takes a :class:`~mimir.persistence.db.Database` and opens a
-short-lived session per call, so a repository instance is safe to hold for the
-lifetime of a process or a request.
-
-Two rules are enforced here rather than by convention:
-
-* Nothing sensitive is persisted unredacted. Message content, command output,
-  and evidence excerpts go through :func:`mimir.redaction.redact` on the way in
-  (ADR 13.4).
-* :class:`ExecutionRepository` is append-only. It has no update or delete
-  method, because that table is the audit trail.
-
-:class:`PersistenceService` sits on top and provides the pair the CLI and API
-both need to resume a session (ADR 14.1): :meth:`~PersistenceService.save_state`
-and :meth:`~PersistenceService.load_state`.
-"""
+"""Typed repositories over the ORM (ADR 19.3, 20)."""
 
 from __future__ import annotations
 
@@ -64,8 +47,6 @@ from mimir.redaction import redact, redact_mapping
 log = get_logger(__name__)
 
 #: InvestigationState fields that have a column or a child table of their own.
-#: Everything else is written to ``sessions.state_json``. Keeping the list in one
-#: place is what stops a field from being stored twice or lost entirely.
 _STATE_OWNED_FIELDS: frozenset[str] = frozenset(
     {
         "session_id",
@@ -179,7 +160,6 @@ def command_to_row(
     row.forbidden = bool(assessment.forbidden) if assessment else False
     row.assessment_json = assessment.model_dump(mode="json") if assessment else None
     # stdin and env can carry credentials, so they go through the redactor even
-    # though they were authored by MIMIR rather than read from a system.
     row.payload_json = {
         "stdin": redact(command.stdin) if command.stdin else None,
         "cwd": command.cwd,
@@ -325,8 +305,6 @@ def evidence_to_row(
     row.source_type = str(evidence.source_type)
     row.source_id = evidence.source_id
     # Excerpts are slices of command output and fetched pages, which is exactly
-    # where a credential leaks in. The id was already computed upstream from the
-    # unredacted text, so redacting here does not change identity.
     row.excerpt = redact(evidence.excerpt, enabled=redact_enabled)
     row.confidence = evidence.confidence
     row.supports = evidence.supports
@@ -646,16 +624,7 @@ class CommandRepository(_Repository):
 
 
 class ExecutionRepository(_Repository):
-    """The audit trail of everything MIMIR actually ran (ADR 19.3).
-
-    APPEND-ONLY BY DESIGN. There is no ``update`` and no ``delete`` method, and
-    that omission is the enforcement mechanism: an audit trail that any caller
-    can rewrite proves nothing about what happened. If a record is wrong, append
-    a corrected one and an audit event explaining it. The only path that ever
-    removes an execution row is retention pruning
-    (:meth:`PersistenceService.prune`), which deletes whole sessions, reports
-    exactly what it removed, and is off by default.
-    """
+    """The audit trail of everything MIMIR actually ran (ADR 19.3)."""
 
     def record(self, execution: ExecutionRecord) -> ExecutionRecord:
         """Insert one execution. Re-recording an existing id is a no-op."""
@@ -1229,13 +1198,7 @@ class PruneReport:
 
 
 class PersistenceService:
-    """Whole-state save and load, plus retention (ADR 12, 14.1, 19.3).
-
-    ``save_state`` and ``load_state`` are the pair the CLI and the API both use
-    to resume a session. The split is deliberate: anything with a table of its
-    own is written through the repository that owns it, and the leftover state
-    fields ride in ``sessions.state_json``.
-    """
+    """Whole-state save and load, plus retention (ADR 12, 14.1, 19.3)."""
 
     def __init__(self, db: Database | None = None, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -1456,13 +1419,7 @@ class PersistenceService:
     def prune(
         self, older_than_days: float | None = None, *, dry_run: bool = False
     ) -> PruneReport:
-        """Delete sessions older than the cutoff, and report exactly what went.
-
-        ADR 19.3 leaves retention open, so the default is to keep everything:
-        with ``persistence.retention_days`` unset and no explicit argument this
-        is a no-op that says so. Nothing is ever deleted silently, and the
-        returned :class:`PruneReport` is meant to be shown to the operator.
-        """
+        """Delete sessions older than the cutoff, and report exactly what went."""
         days = older_than_days if older_than_days is not None else (
             self.settings.persistence.retention_days
         )
@@ -1484,7 +1441,6 @@ class PersistenceService:
                 return report
 
             # Children are removed explicitly rather than left to the FK cascade
-            # so every deletion is counted and reportable.
             for model in SESSION_CHILD_TABLES:
                 count = int(
                     db.execute(
@@ -1555,7 +1511,6 @@ class PersistenceService:
         self, db: OrmSession, session_id: str, executions: Sequence[ExecutionRecord]
     ) -> None:
         # Append-only: an execution already on disk is never rewritten, even if
-        # the in-memory copy differs.
         for execution in executions:
             if db.get(ExecutionRow, execution.id) is not None:
                 continue
@@ -1567,13 +1522,7 @@ class PersistenceService:
     def _save_model_calls(
         self, db: OrmSession, session_id: str, calls: Sequence[dict[str, Any]]
     ) -> None:
-        """Write model telemetry in the same transaction as the session row.
-
-        The table, the repository method and the router's call log all existed
-        independently for a long time and were never joined, so model_calls held
-        zero rows across a hundred sessions. Writing it here, beside executions,
-        keeps telemetry on the same footing as the audit trail.
-        """
+        """Write model telemetry in the same transaction as the session row."""
         existing = {
             row[0]
             for row in db.execute(
@@ -1586,9 +1535,7 @@ class PersistenceService:
             payload = dict(call)
             invocation_id = payload.get("invocation_id")
             if invocation_id and invocation_id in existing:
-                # save_state can run more than once for a session. Keying on the
-                # router-minted id makes re-persisting a no-op rather than a
-                # doubling of every latency and token figure.
+                # save_state can run more than once for a session.
                 continue
             if invocation_id:
                 existing.add(invocation_id)

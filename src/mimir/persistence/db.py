@@ -1,15 +1,4 @@
-"""Engine, session factory, and schema management (ADR 19.1, 19.2).
-
-SQLite is the default backend for development and single-user installs
-(ADR 19.1). PostgreSQL is supported for the mature deployment (ADR 19.2) and is
-selected purely by ``persistence.url``; the ORM layer above is identical either
-way. ``psycopg`` is an optional extra, so nothing in this module imports it at
-module scope.
-
-SQLite needs three pragmas to survive the concurrency ADR 19.2 asks for
-(web UI and CLI writing at the same time). They are set per connection in
-:func:`_configure_sqlite`.
-"""
+"""Engine, session factory, and schema management (ADR 19.1, 19.2)."""
 
 from __future__ import annotations
 
@@ -32,41 +21,25 @@ from mimir.persistence.models import Base
 
 log = get_logger(__name__)
 
-#: How long SQLite waits on a locked database before raising. Long enough that a
-#: CLI write does not fail while the web UI holds the write lock, short enough
-#: that a genuine deadlock still surfaces.
+# : How long SQLite waits on a locked database before raising.
 SQLITE_BUSY_TIMEOUT_MS = 10_000
 
 
 def _configure_sqlite(dbapi_connection: Any, _record: Any) -> None:
-    """Per-connection pragmas.
-
-    WAL is the important one: without it, readers block writers and the moment
-    the web UI and the CLI touch the database together SQLite raises
-    "database is locked" (ADR 19.2 wants concurrent web and CLI access).
-    ``foreign_keys=ON`` is off by default in SQLite and the retention cascade
-    depends on it. ``busy_timeout`` turns instant lock failures into a wait.
-    """
+    """Per-connection pragmas."""
     cursor = dbapi_connection.cursor()
     try:
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
         # NORMAL is the recommended durability level under WAL: a crash can lose
-        # the last transaction but never corrupts the file.
         cursor.execute("PRAGMA synchronous=NORMAL")
     finally:
         cursor.close()
 
 
 class Database:
-    """Owns one engine and hands out short-lived sessions.
-
-    The engine is created once and shared across threads (it holds the
-    connection pool); each unit of work takes its own ORM session from
-    :meth:`session`. Do not keep a session alive across a request or a graph
-    node.
-    """
+    """Owns one engine and hands out short-lived sessions."""
 
     def __init__(self, url: str | None = None, *, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
@@ -92,11 +65,9 @@ class Database:
             path = self._parsed.database or ""
             in_memory = path in ("", ":memory:")
             # check_same_thread=False because one shared pool serves the API
-            # threadpool, the CLI, and background jobs.
             kwargs["connect_args"] = {"check_same_thread": False}
             if in_memory:
                 # A memory database dies with its connection, so every session
-                # must reuse the same one.
                 kwargs["poolclass"] = StaticPool
             else:
                 Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
@@ -124,16 +95,7 @@ class Database:
         Base.metadata.create_all(self.engine)
 
     def migrate(self) -> list[str]:
-        """Add columns that exist in the ORM but not yet in the database.
-
-        Deliberately lightweight: MIMIR is a local-first single-binary tool and
-        a full Alembic setup is more machinery than a personal install needs.
-        This covers the only migration shape that has come up so far, which is a
-        new nullable column on an existing table. Anything destructive (dropped
-        or retyped columns) is reported and left alone for a human.
-
-        Returns the DDL statements applied.
-        """
+        """Add columns that exist in the ORM but not yet in the database."""
         applied: list[str] = []
         inspector = inspect(self.engine)
         existing_tables = set(inspector.get_table_names())
@@ -158,9 +120,7 @@ class Database:
                     log.info("persistence.migrate.column_added", table=table.name,
                              column=column.name)
 
-            # Indexes too, not just columns. A uniqueness constraint added to
-            # guarantee idempotency is worthless if it only exists on databases
-            # created after the change.
+            # Indexes too, not just columns.
             inspector = inspect(self.engine)
             for table in Base.metadata.sorted_tables:
                 if table.name not in existing_tables:

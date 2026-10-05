@@ -73,11 +73,7 @@ def test_retrieval_finds_relevant_notes(settings, seeded):
 
 
 def test_stale_documents_are_returned_but_marked(settings, seeded):
-    """ADR R2: the mitigation is visible freshness, not suppression.
-
-    Hiding a stale note means the operator never learns it exists and never
-    fixes it.
-    """
+    """ADR R2: the mitigation is visible freshness, not suppression."""
     result = MemoryRetriever(seeded, settings=settings).search("CrashLoopBackOff")
     titles = {c.title: c for c in result.chunks}
     assert "Ancient advice" in titles, "stale notes must still be retrievable"
@@ -204,8 +200,6 @@ def test_chatgpt_export_import_is_untrusted(settings, store, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Skills (ADR 10)
-# ---------------------------------------------------------------------------
 
 
 def test_seed_skills_validate():
@@ -247,7 +241,6 @@ def test_skill_cannot_widen_beyond_its_specialist():
         s.name for s in Specialist(SpecialistName.WEB_RESEARCHER).available_tools()
     }
     # Every seed skill, forced into a specialist it was not written for, must
-    # still be confined to that specialist's tools.
     for skill in skills:
         permitted = runner.permitted_tools(skill, SpecialistName.WEB_RESEARCHER)
     assert {spec.name for spec in permitted.allowed} <= allowed_by_specialist

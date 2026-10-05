@@ -1,24 +1,4 @@
-"""LangGraph checkpointer selection (ADR 12, 14.1, 19.2).
-
-LangGraph owns its own checkpoint tables and migrates them itself, so MIMIR does
-not model them. This module only decides which saver a graph gets:
-
-* SQLite at ``Settings.checkpoint_path`` by default (ADR 19.1).
-* PostgreSQL when ``persistence.url`` points at Postgres and the optional
-  ``langgraph-checkpoint-postgres`` package is installed (ADR 19.2).
-* An in-memory saver with a loud warning if neither is importable, so a missing
-  optional dependency degrades the durability of a resume rather than stopping
-  the run.
-
-Checkpoint files are kept beside, not inside, the main database. The two have
-different write patterns and LangGraph's schema is not ours to migrate.
-
-Verified against langgraph 1.2.x / langgraph-checkpoint-sqlite 3.x, where
-``SqliteSaver`` wraps a ``sqlite3.Connection`` and ``AsyncSqliteSaver`` wraps an
-``aiosqlite.Connection``. Both ``from_conn_string`` helpers are context managers
-that close the connection on exit, which is why the scoped accessors below are
-context managers too.
-"""
+"""LangGraph checkpointer selection (ADR 12, 14.1, 19.2)."""
 
 from __future__ import annotations
 
@@ -34,7 +14,6 @@ from mimir.logging import get_logger
 log = get_logger(__name__)
 
 #: Same reasoning as the main database: WAL plus a busy timeout is what lets the
-#: web UI and the CLI checkpoint the same graph without lock errors.
 _SQLITE_PRAGMAS = (
     "PRAGMA journal_mode=WAL",
     "PRAGMA busy_timeout=10000",
@@ -44,16 +23,8 @@ _SQLITE_PRAGMAS = (
 
 
 # LangGraph warns on deserialising unregistered types today and will refuse in a
-# future version, which would silently break `mimir session resume`. Declaring
-# them keeps resume working and is the safer posture besides: the allowlist is
-# what stops a tampered checkpoint from instantiating arbitrary classes.
 def _mimir_checkpoint_types() -> tuple[type, ...]:
-    """The domain types that appear inside a checkpointed investigation.
-
-    Passing the classes themselves rather than module strings keeps the list
-    honest: a renamed class fails at import here instead of silently dropping
-    out of the allowlist and breaking resume months later.
-    """
+    """The domain types that appear inside a checkpointed investigation."""
     from mimir.models.approval import ApprovalDecision, ApprovalRequest
     from mimir.models.command import (
         CommandKind,
@@ -112,7 +83,6 @@ def _serde() -> Any:
         return JsonPlusSerializer(allowed_msgpack_modules=_mimir_checkpoint_types())
     except TypeError:
         # Older builds do not accept the argument; the default is permissive,
-        # so checkpointing still works and only the warning remains.
         return JsonPlusSerializer()
 
 
@@ -141,8 +111,6 @@ def _postgres_saver(settings: Settings) -> Any | None:
     except ImportError:
         return None
     # from_conn_string is a context manager in every released version; entering
-    # it manually keeps the connection alive for the lifetime of the process,
-    # which is what a long-lived saver needs.
     manager = PostgresSaver.from_conn_string(settings.database_url)
     saver = manager.__enter__()
     saver.setup()
@@ -150,12 +118,7 @@ def _postgres_saver(settings: Settings) -> Any | None:
 
 
 def get_checkpointer(settings: Settings | None = None) -> Any:
-    """A synchronous checkpointer suitable for a long-lived process.
-
-    The returned saver owns its connection and stays usable until the process
-    exits. Use :func:`checkpointer_scope` instead when the lifetime is bounded
-    and the connection should be closed deterministically.
-    """
+    """A synchronous checkpointer suitable for a long-lived process."""
     settings = settings or get_settings()
 
     if _is_postgres(settings):
@@ -171,7 +134,6 @@ def get_checkpointer(settings: Settings | None = None) -> Any:
 
     path = _prepare_sqlite_path(settings)
     # check_same_thread=False because the API threadpool and the CLI both reach
-    # the same saver instance.
     conn = sqlite3.connect(str(path), check_same_thread=False)
     for pragma in _SQLITE_PRAGMAS:
         conn.execute(pragma)
@@ -183,10 +145,7 @@ def get_checkpointer(settings: Settings | None = None) -> Any:
 
 @contextmanager
 def checkpointer_scope(settings: Settings | None = None) -> Iterator[Any]:
-    """Synchronous checkpointer with a deterministic close.
-
-    Preferred for one-shot CLI runs and tests.
-    """
+    """Synchronous checkpointer with a deterministic close."""
     settings = settings or get_settings()
     saver = get_checkpointer(settings)
     try:
@@ -197,11 +156,7 @@ def checkpointer_scope(settings: Settings | None = None) -> Iterator[Any]:
 
 @asynccontextmanager
 async def async_checkpointer(settings: Settings | None = None) -> AsyncIterator[Any]:
-    """Async checkpointer for async graphs.
-
-    ``AsyncSqliteSaver`` needs an ``aiosqlite`` connection bound to the running
-    event loop, so this one is a context manager rather than a plain accessor.
-    """
+    """Async checkpointer for async graphs."""
     settings = settings or get_settings()
 
     if _is_postgres(settings):
@@ -223,12 +178,7 @@ async def async_checkpointer(settings: Settings | None = None) -> AsyncIterator[
 
     path = _prepare_sqlite_path(settings)
     serde = _serde()
-    # from_conn_string is itself an async context manager. Driving it manually
-    # rather than with `async with` means this generator owns exactly one
-    # __aexit__ call, and a caller that abandons the generator (or lets the loop
-    # finalise it during shutdown) cannot trigger a second concurrent athrow on
-    # the inner one. That double-close is what raises "asynchronous generator is
-    # already running" and prints a traceback over the operator's answer.
+    # from_conn_string is itself an async context manager.
     manager = AsyncSqliteSaver.from_conn_string(str(path))
     saver = await manager.__aenter__()
     closed = False
@@ -240,8 +190,7 @@ async def async_checkpointer(settings: Settings | None = None) -> AsyncIterator[
         await saver.setup()
         yield saver
     except GeneratorExit:
-        # Abandoned mid-yield. Close the saver and let the exit propagate; do
-        # not await anything else, since the loop may already be tearing down.
+        # Abandoned mid-yield.
         closed = True
         with suppress(Exception):
             await manager.__aexit__(None, None, None)

@@ -1,10 +1,4 @@
-"""Evidence model (ADR 11.4, 12).
-
-Every claim MIMIR makes should be traceable to an :class:`Evidence` item that
-records where it came from, when it was collected, and whether it was observed
-directly or inferred. The trust ordering in ADR 11.4 is encoded as
-:data:`TRUST_ORDER` and used for ranking during retrieval and synthesis.
-"""
+"""Evidence model (ADR 11.4, 12)."""
 
 from __future__ import annotations
 
@@ -27,7 +21,6 @@ class SourceType(StrEnum):
     IMPORTED_MEMORY = "imported_memory"
     MODEL_KNOWLEDGE = "model_knowledge"
     # Not part of the trust ladder; ranked explicitly at the bottom because it
-    # is untrusted third-party content (ADR 5.7, 13.5).
     WEB = "web"
     USER_PROVIDED = "user_provided"
 
@@ -45,7 +38,6 @@ TRUST_ORDER: dict[SourceType, int] = {
 }
 
 #: Source types whose content must be treated as untrusted data and never as
-#: instructions (ADR 13.5).
 UNTRUSTED_SOURCES: frozenset[SourceType] = frozenset(
     {
         SourceType.WEB,
@@ -123,8 +115,7 @@ class Evidence(BaseModel):
     freshness: Freshness = Freshness.LIVE
     confidence: float = Field(default=0.6, ge=0.0, le=1.0)
     supports: bool = True
-    """False when the evidence contradicts the claim. Contradictions are kept
-    visible rather than dropped (ADR 7.2)."""
+    """False when the evidence contradicts the claim."""
 
     collected_by: str = "mimir"
     """Specialist or helper that produced the item."""

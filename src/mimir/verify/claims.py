@@ -1,24 +1,4 @@
-"""Deterministic claim support checking.
-
-The synthesiser currently decides, in prose, whether its own claims are
-supported. That is a fuzzy judgement handed to the least reliable component in
-the system, and `missing_citation` is consistently the top failure category
-across every measured run.
-
-This module replaces that judgement with a mechanical one. It never asks a
-model anything. A claim is supported when a compatible evidence item can be
-resolved for it under rules that are written down and testable, and it is
-unsupported otherwise.
-
-The anti-decoration rule is the point of the design. It is not enough for a
-claim to be accompanied by *some* citation: the subject of the claim (a path, a
-symbol, a command, a URL) must actually appear in the evidence being cited.
-Without that, the cheapest way to satisfy a citation requirement is to attach
-whatever evidence happens to be nearest, which teaches citation as ornament
-rather than as evidence use. MIMIR already did exactly that: when the model
-returned no citations, the graph attached the top ten evidence citations
-wholesale, whatever the answer said.
-"""
+"""Deterministic claim support checking."""
 
 from __future__ import annotations
 
@@ -30,8 +10,6 @@ from typing import Any
 from mimir.models.evidence import Evidence, SourceType
 
 # Source types that can never support an assertion about the observed world.
-# Model knowledge is recall, not observation; treating it as evidence is the
-# specific move this project exists to prevent.
 NON_OBSERVATIONAL: frozenset[SourceType] = frozenset({SourceType.MODEL_KNOWLEDGE})
 
 _IDENTIFIER = re.compile(
@@ -84,8 +62,7 @@ class ClaimSupport:
     supported: bool = False
     reason: str = ""
     subjects: list[str] = field(default_factory=list)
-    """Identifier-like tokens the claim is about. Empty means the claim named
-    nothing concrete, which is itself a weak signal."""
+    """Identifier-like tokens the claim is about."""
 
     @property
     def factual(self) -> bool:
@@ -130,12 +107,7 @@ class AnswerSupport:
 
 
 def subjects_of(claim: str) -> list[str]:
-    """Identifier-like things the claim is about.
-
-    These are what must appear in the evidence. A claim naming
-    ``services/auth/handler.py`` is about that file, and evidence that never
-    mentions it does not support the claim however similar the prose.
-    """
+    """Identifier-like things the claim is about."""
     found = [m.group(0) for m in _IDENTIFIER.finditer(claim)]
     found.extend(m.group(0) for m in _COMMAND_HINT.finditer(claim))
     seen: list[str] = []
@@ -162,12 +134,7 @@ def _evidence_haystack(item: Evidence) -> str:
 
 
 def _subject_matches(subject: str, haystack: str) -> bool:
-    """A subject matches on its own terms, or on its last path segment.
-
-    ``services/auth/handler.py`` should match evidence that cites
-    ``handler.py``, but a bare token like ``auth`` should not stand in for the
-    whole path.
-    """
+    """A subject matches on its own terms, or on its last path segment."""
     lowered = subject.lower()
     if lowered in haystack:
         return True
@@ -178,16 +145,7 @@ def _subject_matches(subject: str, haystack: str) -> bool:
 def check_claim(
     claim: str, kind: ClaimKind, evidence: list[Evidence], *, min_overlap: int = 2
 ) -> ClaimSupport:
-    """Resolve one claim against the evidence gathered this session.
-
-    Two paths, deliberately different in strictness:
-
-    * A claim that names something concrete must have that thing appear in a
-      piece of evidence. This is the strong case and the common one.
-    * A claim that names nothing concrete falls back to token overlap against a
-      single evidence item, requiring several distinctive words rather than one.
-      Overlap alone is weak, so it needs more of it.
-    """
+    """Resolve one claim against the evidence gathered this session."""
     support = ClaimSupport(claim=claim, kind=kind, subjects=subjects_of(claim))
 
     usable = [
@@ -235,14 +193,7 @@ def check_claim(
 
 
 def check_answer(answer: Any, evidence: list[Evidence]) -> AnswerSupport:
-    """Check every claim in a final answer, and every citation it carries.
-
-    ``observed_facts`` are held to the observational standard because they
-    assert what is true of the system. ``inferences`` are checked and reported
-    but not required to resolve, since an inference that goes beyond the
-    evidence is doing its job as long as it is labelled as one. ``unverified``
-    is already an admission and is left alone.
-    """
+    """Check every claim in a final answer, and every citation it carries."""
     out = AnswerSupport()
     if answer is None:
         return out
@@ -282,22 +233,7 @@ def check_answer(answer: Any, evidence: list[Evidence]) -> AnswerSupport:
 
 
 def demote_unsupported(answer: Any, support: AnswerSupport) -> tuple[Any, int, int]:
-    """Move unsupported factual claims out of the observed set, mechanically.
-
-    Returns the answer, how many claims were demoted, and how many citations
-    were dropped.
-
-    Demotion rather than deletion is deliberate. The claim may well be true;
-    what is false is presenting it as observed. Relabelling it keeps the
-    information available to the operator while making its status honest, and
-    it keeps the failure visible in the record instead of hiding it by saying
-    less. A gate that improves its score by producing emptier answers has
-    optimised the metric, not the system.
-
-    Confidence is reduced in proportion to how much of the answer failed to
-    resolve, because a final confidence asserted over demoted claims would be
-    describing an answer that no longer exists.
-    """
+    """Move unsupported factual claims out of the observed set, mechanically."""
     unsupported = {c.claim for c in support.unsupported}
     if not unsupported and not support.dangling_citations:
         return answer, 0, 0
@@ -322,12 +258,7 @@ def demote_unsupported(answer: Any, support: AnswerSupport) -> tuple[Any, int, i
 
 
 def unsupported_brief(support: AnswerSupport, limit: int = 6) -> str:
-    """A repair instruction naming exactly what failed to resolve.
-
-    Given to the synthesiser for one repair attempt. It states the problem and
-    the permitted remedies, and does not suggest inventing a citation, because
-    the check that follows would reject it anyway.
-    """
+    """A repair instruction naming exactly what failed to resolve."""
     lines = [
         "These stated facts could not be resolved to any evidence gathered this "
         "session. For each one: either cite the specific evidence that supports "
@@ -346,21 +277,7 @@ def unsupported_brief(support: AnswerSupport, limit: int = 6) -> str:
 def attach_resolved_citations(
     answer: Any, support: AnswerSupport, evidence: list[Evidence], *, limit: int = 12
 ) -> int:
-    """Cite the evidence that actually resolved each surviving claim.
-
-    Returns how many citations were added.
-
-    This is the constructive half of the anti-decoration rule, and the
-    distinction matters. The old behaviour attached the ten highest-ranked
-    evidence citations to any answer that returned none, whatever it said -
-    citation by proximity. This attaches only citations belonging to evidence
-    items that were matched, claim by claim, by the checker. Every citation
-    produced here has a traceable reason for being there.
-
-    Removing the decoration without this would have made seven corpus cases
-    fail on a missing-citation check while the underlying support was fine,
-    which would have measured the removal rather than the grounding.
-    """
+    """Cite the evidence that actually resolved each surviving claim."""
     by_id = {item.id: item for item in evidence}
     wanted: list[str] = []
     for claim in support.claims:

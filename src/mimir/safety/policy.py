@@ -1,9 +1,4 @@
-"""Policy engine: the single gate between a proposal and execution (ADR 13).
-
-Every command passes through :meth:`PolicyEngine.evaluate`. The result says
-exactly one of: run it, ask a human first, or refuse. No caller may execute a
-command without a :class:`PolicyDecision` that permits it.
-"""
+"""Policy engine: the single gate between a proposal and execution (ADR 13)."""
 
 from __future__ import annotations
 
@@ -155,11 +150,7 @@ class PolicyEngine:
         return out
 
     def _check_capability_bindings(self, command: ProposedCommand) -> list[PolicyViolation]:
-        """ADR 16.5: privileged surfaces stay local.
-
-        A command that arrived through the public inference facade may never
-        reach a privileged binary, regardless of its risk class.
-        """
+        """ADR 16.5: privileged surfaces stay local."""
         origin = command.metadata.get("origin")
         if origin not in {"facade", "public"}:
             return []

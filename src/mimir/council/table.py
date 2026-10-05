@@ -1,15 +1,4 @@
-"""The specialists as a table (plan step 11).
-
-Twelve named specialists each with a prompt were twelve places for
-behaviour to drift. With the decisions moved out of them (ADR-004), a
-specialist is: a name, a prompt, the capabilities it may use, the risk it
-may reach, the task class it is billed to, and a budget. That is a row.
-
-The four dicts that already held these were the table in all but name.
-This module is the name, and one place to read it. ``build_council`` reads
-rows; the coordinator is told which rows have produced confident answers
-for the question shape before, from the experience store.
-"""
+"""The specialists as a table (plan step 11)."""
 
 from __future__ import annotations
 

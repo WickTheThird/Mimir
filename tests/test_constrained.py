@@ -1,11 +1,4 @@
-"""Constrained decoding.
-
-Measured on the native tool-call channel, this model produces a tool call for
-80% of prompts at a four tool surface and 33% at eighteen. The rest of the time
-it writes the call into its prose, and a turn with no tool calls looks exactly
-like a turn that finished. Constrained against a schema the same six sizes
-measure 100%.
-"""
+"""Constrained decoding."""
 
 from __future__ import annotations
 
@@ -27,8 +20,7 @@ class TestSchema:
         assert "get_logs" in names and "list_workloads" in names
 
     def test_each_branch_carries_that_tool_s_own_arguments(self):
-        """A generic object for arguments let the model invent field names:
-        pod_name and lines instead of target and tail."""
+        """A generic object for arguments let the model invent field names: pod_name and lines instead of target and tail."""
         schema = build_schema(_specs("get_logs"))
         branch = next(b for b in schema["anyOf"] if b["properties"]["tool"]["const"] == "get_logs")
         assert "target" in branch["properties"]["arguments"]["properties"]
@@ -39,8 +31,7 @@ class TestSchema:
         assert ANSWER in [b["properties"]["tool"]["const"] for b in schema["anyOf"]]
 
     def test_hidden_arguments_are_hidden_here_too(self):
-        """Or the two decoders offer different choices and a comparison between
-        them measures the surface rather than the decoder."""
+        """Or the two decoders offer different choices and a comparison between them measures the surface rather than the decoder."""
         schema = build_schema(_specs("find_workloads"), hidden=("limit",))
         branch = schema["anyOf"][0]
         assert "limit" not in branch["properties"]["arguments"]["properties"]
@@ -68,8 +59,7 @@ class TestParsing:
         assert parse_step("").finished
 
     def test_unconstrained_text_is_kept_rather_than_lost(self):
-        """The constraint should make this impossible. If a runtime returns it
-        anyway, losing the content would be worse than showing it."""
+        """The constraint should make this impossible."""
         step = parse_step("I could not do that.")
         assert step.finished
         assert "could not" in step.say
@@ -81,10 +71,7 @@ class TestParsing:
 
 class TestFinishing:
     def test_the_answer_branch_says_it_is_how_you_finish(self):
-        """Under a constrained decoder the model cannot wander into prose to
-        signal it is done, so the only way it learns to stop is the schema.
-        Without this it retrieved what was asked for and then repeated the same
-        successful call six times until the step budget ran out."""
+        """Under a constrained decoder the model cannot wander into prose to signal it is done, so the only way it learns to stop is the schema."""
         schema = build_schema(_specs("get_logs"))
         answer = next(
             b for b in schema["anyOf"] if b["properties"]["tool"]["const"] == ANSWER
@@ -101,13 +88,7 @@ class TestFinishing:
 
 
 class TestTruncationIsNotAnAnswer:
-    """Constrained decoding regressed the coding loop from 3/3 to 0/4, and the
-    cause was a token budget. A coding tool's arguments are whole blocks of
-    code; a 900 token cap cut them off mid-string, the JSON stopped parsing,
-    and the truncated fragment was treated as the model's final word. The turn
-    ended having changed nothing. Operations calls carry short strings and
-    never hit it, which is why only one loop was affected.
-    """
+    """Constrained decoding regressed the coding loop from 3/3 to 0/4, and the cause was a token budget."""
 
     def test_a_truncated_call_does_not_parse_as_a_tool_call(self):
         cut = '{"say": "editing", "tool": "edit_worktree_file", "arguments": {"old_'

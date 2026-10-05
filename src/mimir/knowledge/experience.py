@@ -1,26 +1,4 @@
-"""What the organisation accumulates from every completed task.
-
-The roadmap thesis: MIMIR improves because its organisation accumulates
-experience, not because a vendor retrains a model. Until now a completed
-session left a session. This module writes four things from it, none of
-which needs a person until the last.
-
-* **Routing statistics.** Per question shape: which specialists ran, which
-  tools produced the evidence the answer cited, how many decisions were
-  made and acted on, and what confidence came out. The plan and the
-  specialists table read this later.
-* **Corpus drafts.** A session that ended with a verified answer and
-  evidence becomes a candidate case, with its discriminating nouns, written
-  to ``$MIMIR_HOME/corpus-drafts`` for a person to accept or reject. The
-  corpus grows from use instead of by hand.
-* **Repository lessons.** What a coding task learned about a repository:
-  the files it touched, the test command that worked, the tools that found
-  things. A memory note under ``repos/<name>``, proposed and never promoted.
-* **Decision outcomes.** Already in the session's decision log; recorded
-  here beside the outcome so calibration has one table to read.
-
-All of it is derived from the session and none of it blocks the session.
-"""
+"""What the organisation accumulates from every completed task."""
 
 from __future__ import annotations
 
@@ -114,12 +92,7 @@ _NOUN = re.compile(r"\b[a-z][a-z0-9]+(?:-[a-z0-9]+)+\b|\b[A-Z][A-Za-z]{3,}\b|\b\
 
 
 def corpus_draft(session: Any, *, min_confidence: float = 0.7) -> dict[str, Any] | None:
-    """A candidate corpus case from a confident, evidenced session, or None.
-
-    The discriminating nouns are pulled from the answer: identifiers, capitalised
-    terms and quantities. A person still decides whether the case is real;
-    this only saves them the typing.
-    """
+    """A candidate corpus case from a confident, evidenced session, or None."""
     answer = session.final_answer
     if answer is None or session.final_confidence < min_confidence or not session.evidence:
         return None

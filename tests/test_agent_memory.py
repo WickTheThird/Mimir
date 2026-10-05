@@ -1,10 +1,4 @@
-"""Curated agent memory import.
-
-The conversation importer already handled transcripts and the knowledge store
-was still empty, so nothing had ever been imported. These cover the other
-artefact: the small curated files these tools keep, one fact each, which are the
-densest operational knowledge on the machine.
-"""
+"""Curated agent memory import."""
 
 from __future__ import annotations
 
@@ -57,14 +51,12 @@ class TestParsing:
         assert parse_memory_file(_memory(tmp_path, "c.md", "   ", frontmatter=False)) is None
 
     def test_something_too_large_to_be_one_fact_is_refused(self, tmp_path):
-        """A manual that happens to live in a memory directory would dominate
-        the layer meant for single facts."""
+        """A manual that happens to live in a memory directory would dominate the layer meant for single facts."""
         path = _memory(tmp_path, "d.md", "x" * 70_000, frontmatter=False)
         assert parse_memory_file(path) is None
 
     def test_the_project_keeps_the_half_that_identifies_it(self):
-        """Taking the last hyphenated word of the flattened path gives
-        "whatsapp", which is the half that does not identify anything."""
+        """Taking the last hyphenated word of the flattened path gives "whatsapp", which is the half that does not identify anything."""
         from pathlib import Path
 
         path = Path(
@@ -88,15 +80,13 @@ class TestImport:
         assert document.metadata.verification_status is VerificationStatus.UNVERIFIED
 
     def test_it_outranks_a_transcript_summary_and_nothing_else(self, tmp_path, store):
-        """A transcript summary is an extract a program made. A memory file is a
-        sentence a person decided to keep."""
+        """A transcript summary is an extract a program made."""
         importer = AgentMemoryImporter(store)
         doc_id = importer.write_note(parse_memory_file(_memory(tmp_path, "a.md", "A fact.")))
         assert store.get(doc_id).metadata.confidence is Confidence.MEDIUM
 
     def test_a_secret_in_a_title_is_redacted_like_one_in_a_body(self, tmp_path, store):
-        """A title is what search returns before anyone opens the note, so a
-        secret there is more exposed than one in a body, not less."""
+        """A title is what search returns before anyone opens the note, so a secret there is more exposed than one in a body, not less."""
         path = tmp_path / "creds.md"
         path.write_text(
             "---\ndescription: token is ghp_aBcD1234567890aBcD1234567890aBcDef\n---\n"
@@ -108,8 +98,7 @@ class TestImport:
         assert "ghp_aBcD1234567890aBcD1234567890aBcDef" not in document.body
 
     def test_an_index_file_is_not_imported(self, tmp_path):
-        """It lists the other notes, so importing it duplicates every fact as a
-        one-line stub that then competes with the real note in retrieval."""
+        """It lists the other notes, so importing it duplicates every fact as a one-line stub that then competes with the real note in retrieval."""
         (tmp_path / "memory").mkdir()
         for name in ("MEMORY.md", "real-note.md"):
             (tmp_path / "memory" / name).write_text("# x\n\nbody\n")

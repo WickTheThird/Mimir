@@ -90,8 +90,6 @@ async def test_invalid_arguments_are_reported_not_raised(registry, tool_context)
 
 
 # ---------------------------------------------------------------------------
-# Repository helpers (ADR 9.1)
-# ---------------------------------------------------------------------------
 
 
 async def test_search_repository_cites_exact_lines(registry, tool_context, repo_fixture):
@@ -132,8 +130,6 @@ async def test_flow_evidence_orders_hops_and_finds_timeout(
 
 
 # ---------------------------------------------------------------------------
-# Log helpers (ADR 9.5)
-# ---------------------------------------------------------------------------
 
 
 TIMEOUT_LOG = "\n".join(
@@ -171,12 +167,7 @@ async def test_variable_durations_collapse_into_one_template(registry, tool_cont
 
 
 async def test_timeout_cluster_is_detected(registry, tool_context):
-    """A tight cluster near a round number means a configured timeout.
-
-    Asserted on the structured findings rather than the summary line, because
-    which finding ranks first is a judgement call the detector is allowed to
-    make. Retry amplification outranking the cluster here is reasonable.
-    """
+    """A tight cluster near a round number means a configured timeout."""
     ingested = await registry.invoke("ingest_logs", {"text": TIMEOUT_LOG}, tool_context)
     result = await registry.invoke(
         "detect_timeout_patterns", {"input_ref": ingested.artifact_ref}, tool_context
@@ -190,8 +181,6 @@ async def test_timeout_cluster_is_detected(registry, tool_context):
     assert any("pool" in blob.lower() or "exhaust" in blob.lower() for _ in [0]), findings
 
 
-# ---------------------------------------------------------------------------
-# Sandbox (ADR 9.7)
 # ---------------------------------------------------------------------------
 
 

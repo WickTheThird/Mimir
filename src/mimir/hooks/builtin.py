@@ -1,9 +1,4 @@
-"""Built-in hooks that ship enabled (ADR 10.4, 13.4, 13.5).
-
-These implement the hook capabilities the ADR lists: reject prohibited commands,
-validate cluster/namespace, add audit metadata, redact secrets, and flag
-untrusted web content.
-"""
+"""Built-in hooks that ship enabled (ADR 10.4, 13.4, 13.5)."""
 
 from __future__ import annotations
 
@@ -29,12 +24,7 @@ async def audit_metadata(ctx: HookContext) -> HookVerdict:
 
 
 async def validate_kube_target(ctx: HookContext) -> HookVerdict:
-    """Refuse a mutation whose namespace or context was never resolved.
-
-    ADR 13.2 puts "commands with unclear targets" in R4. This hook stops the
-    ambiguous case from even reaching an approval prompt, where an operator
-    might rubber-stamp it.
-    """
+    """Refuse a mutation whose namespace or context was never resolved."""
     payload = ctx.payload
     command = str(payload.get("command", ""))
     if "kubectl" not in command:
@@ -64,11 +54,7 @@ async def block_protected_namespace(ctx: HookContext) -> HookVerdict:
 
 
 async def flag_secrets_in_output(ctx: HookContext) -> HookVerdict:
-    """Note when a tool result still looks like it carries credentials.
-
-    Redaction already ran in the executor. This is a second pass that records the
-    fact for the audit trail rather than silently trusting the first one.
-    """
+    """Note when a tool result still looks like it carries credentials."""
     summary = str(ctx.payload.get("summary", ""))
     hits = find_secrets(summary)
     if hits:

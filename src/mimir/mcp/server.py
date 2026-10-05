@@ -1,22 +1,4 @@
-"""The MCP surface: how Warp reaches the real MIMIR.
-
-The OpenAI facade is a model gateway. Warp keeps its own agent loop and calls
-MIMIR as if it were a model, so from Warp none of the graph, the gates, the
-decision layer or the safety engine runs. Every accuracy gain in this
-repository is behind the graph, and the facade never enters it.
-
-This is the fix ADR-001 §16.4 preferred and `docs/warp.md` said was unbuilt:
-three tools an outer agent invokes on purpose, each running the full path
-with every gate, with execution and approval staying local. One agent loop
-stays in charge, Warp's, and MIMIR is a set of things it can call that are
-right for the reasons the harness measured. Nesting the graph behind the
-model endpoint remains the thing to avoid.
-
-Nothing here executes a command or applies a change. `construct_command`
-returns an argument vector and its risk class. `code_task` returns a diff
-in a task worktree. Both stop where the policy engine says an operator has to
-say yes.
-"""
+"""The MCP surface: how Warp reaches the real MIMIR."""
 
 from __future__ import annotations
 
@@ -134,11 +116,7 @@ async def code_task_impl(
     test_command: str = "",
     multi_step: bool = False,
 ) -> dict[str, Any]:
-    """The coding loop in a task worktree. Returns the diff, never applies it.
-
-    Mirrors the CLI's start_coding_session without a console. Reopening an
-    existing task worktree is the common case and must not be destructive.
-    """
+    """The coding loop in a task worktree."""
     from mimir.agent.loop import AgentEventType, CodingAgent
     from mimir.tools.repo import get_repository_directory
     from mimir.worktree import WorktreeError, WorktreeManager
@@ -205,12 +183,7 @@ async def code_task_impl(
 
 
 async def _propose_repo_lesson(runner: Any, repo: str, outcome: Any, test_command: str) -> None:
-    """What this task learned about the repository, proposed as a note.
-
-    Plan step 8. Today ops sessions curate memory and coding tasks leave
-    nothing; the next task on the same repository starts from zero. This is
-    a proposal under repos/<name>, never a promotion.
-    """
+    """What this task learned about the repository, proposed as a note."""
     try:
         from mimir.knowledge.experience import repo_lesson
 
@@ -252,18 +225,14 @@ def build_server() -> Any:
     async def construct_command(
         request: str, context: str | None = None, namespace: str | None = None
     ) -> dict[str, Any]:
-        """Build the command for a natural-language request. Shows argv, the
-        cluster context and namespace it targets, and its risk class. Never
-        executes anything."""
+        """Build the command for a natural-language request."""
         return await construct_command_impl(request, context, namespace)
 
     @server.tool()
     async def investigate(
         question: str, context: str | None = None, namespace: str | None = None
     ) -> dict[str, Any]:
-        """Investigate an operational question with evidence. Returns the answer,
-        what was observed, what remains unverified, and the commands it would
-        run next, none of which have been run."""
+        """Investigate an operational question with evidence."""
         return await investigate_impl(question, context, namespace)
 
     @server.tool()
@@ -271,24 +240,14 @@ def build_server() -> Any:
         instruction: str, repo: str | None = None, task: str | None = None,
         test_command: str = "", multi_step: bool = False,
     ) -> dict[str, Any]:
-        """Carry out a coding instruction in an isolated task worktree and return
-        the diff and test outcome. multi_step splits it into checkpointed steps.
-        Nothing is applied to the working tree."""
+        """Carry out a coding instruction in an isolated task worktree and return the diff and test outcome."""
         return await code_task_impl(instruction, repo, task, test_command, multi_step)
 
     return server
 
 
 class KeyRequired:
-    """ASGI middleware: the same API keys the facade uses, on the MCP transport.
-
-    The MCP tools run investigations and coding tasks. Over stdio the caller
-    is the local process that started it; over HTTP, behind a tunnel, it is
-    the internet. The rule from mimir.api.auth applies unchanged: a loopback
-    caller may pass without a key, anyone else presents one, and a key buys
-    these three tools and nothing privileged. Constant-time comparison, same
-    as the facade.
-    """
+    """ASGI middleware: the same API keys the facade uses, on the MCP transport."""
 
     def __init__(self, app: Any, settings: Any) -> None:
         self.app = app

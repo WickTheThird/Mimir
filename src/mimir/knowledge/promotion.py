@@ -1,24 +1,4 @@
-"""Memory promotion workflow (ADR 11.6, NG4, G5).
-
-ADR 11.6 is a five step pipeline: a session produces a candidate finding, the
-Memory Curator extracts a proposed note, the note carries sources and a
-verification status, a human reviews or approves it, and only then is it stored
-in the appropriate layer.
-
-Two gates are enforced here and nowhere else:
-
-* **Approval gate.** Nothing is written into ``stable/``, ``runbooks/``, or
-  ``skills/`` without an explicit approval flag. A proposal that reaches
-  :meth:`MemoryPromoter.promote` without one is refused, not queued, not
-  written somewhere convenient.
-* **Verification gate (ADR NG4).** Raw conversation history and unverified
-  session output are not truth. An ``unverified`` note may only land in
-  ``history/investigations/`` or ``imports/``. Promoting it further requires a
-  verification status of ``user_confirmed`` or ``verified``.
-
-Both gates run before :meth:`~mimir.hooks.manager.HookManager.on_memory_promotion`
-fires, and a hook denial is itself a refusal.
-"""
+"""Memory promotion workflow (ADR 11.6, NG4, G5)."""
 
 from __future__ import annotations
 
@@ -188,8 +168,6 @@ class MemoryPromoter:
                 "flag (ADR 11.6 step 4); nothing was written"
             )
             # Landing the note in investigation history instead resolves this
-            # without writing anything curated, so it is a legitimate remedy the
-            # caller can opt into.
             review.downgrade_available = True
         if status is VerificationStatus.UNVERIFIED and layer not in UNVERIFIED_LAYERS:
             review.blocking_reasons.append(
@@ -227,11 +205,7 @@ class MemoryPromoter:
         expires_after: str | None = None,
         today: date | None = None,
     ) -> PromotionOutcome:
-        """Review, then store, then fire the promotion hook. Refusals are values.
-
-        Returns an outcome rather than raising so a specialist can report the
-        refusal to the user without an exception unwinding the graph.
-        """
+        """Review, then store, then fire the promotion hook."""
         review = self.review(proposal, approved=approved)
         downgraded = False
         category = review.category
@@ -240,10 +214,6 @@ class MemoryPromoter:
 
         if not review.allowed:
             # The downgrade target is history/investigations, which is neither
-            # curated nor approval-gated and explicitly accepts unverified notes
-            # (ADR NG4). So the original target requiring approval is not a
-            # reason to refuse the downgrade; it is the reason to offer it.
-            # `downgraded` is reported in the outcome, so this is never silent.
             downgradeable = allow_downgrade and review.downgrade_available
             if not downgradeable:
                 log.info(

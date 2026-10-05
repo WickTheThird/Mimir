@@ -1,14 +1,4 @@
-"""LangGraph state channels (ADR 6.2 C2, 12).
-
-:class:`~mimir.models.state.InvestigationState` is the durable record of an
-investigation. This module wraps it in the channel shape LangGraph needs so that
-specialists can run in parallel without clobbering each other.
-
-The split matters: ``session`` has a single writer at any point in the graph,
-while ``reports``, ``evidence``, and ``proposed_commands`` are append-only
-channels that several concurrent specialists write to. Merging happens in one
-place, in :func:`merge_into_session`, rather than being smeared across nodes.
-"""
+"""LangGraph state channels (ADR 6.2 C2, 12)."""
 
 from __future__ import annotations
 
@@ -85,14 +75,7 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 def _coerce(items: Any, model: type[ModelT]) -> list[ModelT]:
-    """Accept either model instances or the dicts a checkpoint may return.
-
-    Resuming a run deserialises through LangGraph's serialiser, which can hand
-    back plain dicts for a type it was not told about, or for a checkpoint
-    written by an older build. Crashing on that would make a resumable session
-    unresumable, so entries are coerced and unparseable ones are dropped with a
-    warning rather than taking the whole resume down.
-    """
+    """Accept either model instances or the dicts a checkpoint may return."""
     out: list[ModelT] = []
     for item in items or []:
         if isinstance(item, model):
@@ -108,11 +91,7 @@ def _coerce(items: Any, model: type[ModelT]) -> list[ModelT]:
 
 
 def merge_into_session(state: GraphState) -> InvestigationState:
-    """Fold the append-only channels back into the durable record.
-
-    Called once at the end of a round so the InvestigationState stays the single
-    thing worth persisting, exporting, and showing in the UI.
-    """
+    """Fold the append-only channels back into the durable record."""
     session = state["session"]
     if isinstance(session, dict):
         session = InvestigationState.model_validate(session)

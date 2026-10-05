@@ -1,12 +1,4 @@
-"""Investigation runner (ADR 6.1, 14, 15).
-
-One entry point that the CLI, the HTTP API, and the evaluation harness all use,
-so the three interfaces cannot drift apart in behaviour. It owns wiring
-(registry, router, executor, hooks, checkpointer) and exposes two shapes:
-
-* :meth:`InvestigationRunner.run` for a complete result,
-* :meth:`InvestigationRunner.stream` for incremental events.
-"""
+"""Investigation runner (ADR 6.1, 14, 15)."""
 
 from __future__ import annotations
 
@@ -81,7 +73,6 @@ class InvestigationRunner:
         self.hooks = hooks or get_hook_manager(self.settings)
         self.executor = executor or get_executor(self.settings)
         # The executor needs the hook manager for the mutation lifecycle hooks,
-        # and it is constructed before hooks exist in the default path.
         if self.executor.hooks is None:
             self.executor.hooks = self.hooks
         self.skill_registry = skill_registry if skill_registry is not None else _load_skills()
@@ -196,7 +187,6 @@ class InvestigationRunner:
             )
 
             # Buffered per stream, not per runner: two concurrent investigations
-            # must not see each other's approval prompts.
             approval_events: list[RunEvent] = []
             unsubscribe = self.approvals.add_listener(
                 _approval_relay(approval_events, session.session_id)
@@ -258,12 +248,7 @@ class InvestigationRunner:
             )
 
     def _persist(self, session: InvestigationState) -> None:
-        """Write the finished investigation to the audit store.
-
-        Persistence failures are logged and swallowed: losing the ability to
-        resume later is bad, but discarding an answer the operator is waiting on
-        because a database write failed is worse.
-        """
+        """Write the finished investigation to the audit store."""
         try:
             from mimir.persistence.repositories import save_state
 
@@ -293,11 +278,7 @@ class InvestigationRunner:
 
 
 def _apply(state: GraphState, update: dict[str, Any]) -> GraphState:
-    """Mirror LangGraph's channel updates onto our local copy for streaming.
-
-    LangGraph owns the authoritative merge; this local copy exists purely so the
-    stream can emit meaningful events without another round trip for state.
-    """
+    """Mirror LangGraph's channel updates onto our local copy for streaming."""
     merged: GraphState = dict(state)  # type: ignore[assignment]
     for key, value in update.items():
         if key in ("reports", "evidence", "proposed_commands", "memory_proposals", "notes"):

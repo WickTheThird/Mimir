@@ -1,22 +1,4 @@
-"""Compare deployment tiers on one corpus.
-
-The laptop and the always-on box run different models, so they get different
-numbers. Treating the smaller one as close enough is the assumption this
-project has watched fail repeatedly, and the only way to know what an operator
-gives up by being away from the workstation is to measure it.
-
-Two things this reports that a single pass count does not.
-
-The deterministic cases are separated out. Thirty-one of the eighty-four are
-policy checks a rule answers perfectly every run, so they enter every headline
-figure as guaranteed marks and flatten the difference between tiers. The model
-case rate is where a tier difference actually lives.
-
-And pair consistency is reported beside the rate rather than folded into it. A
-tier can pass most cases while answering both twins of every contrastive pair
-the same way, which is the difference between reading the evidence and
-recognising the question.
-"""
+"""Compare deployment tiers on one corpus."""
 
 from __future__ import annotations
 
@@ -38,8 +20,7 @@ class Tier:
     pending: int = 0
     """Cases decided but not yet built. Excluded from every figure above."""
     verdicts: dict[str, bool] = field(default_factory=dict)
-    """case_id -> passed, for the cases that ran. Needed to ask whether two
-    tiers failed the *same* cases, which a pass count cannot answer."""
+    """case_id -> passed, for the cases that ran."""
     case_pairs: dict[str, str] = field(default_factory=dict)
     """case_id -> pair name, for the contrastive cases."""
 
@@ -71,11 +52,7 @@ def load(path: Path, name: str, deterministic_ids: set[str]) -> Tier:
         model=str(payload.get("model") or payload.get("model_alias") or "unrecorded"),
     )
     for result in results:
-        # A pending case is decided but unbuilt. The harness excludes it from
-        # its own totals, and counting it here reported a larger corpus than
-        # was run and scored the unbuilt cases as passes, because a case that
-        # never executed leaves ``passed`` at its default. Two tiers compared
-        # this way both got the same free marks and the table looked fine.
+        # A pending case is decided but unbuilt.
         if result.get("pending"):
             tier.pending += 1
             continue
@@ -137,12 +114,7 @@ __all__ = ["Tier", "load", "render"]
 
 
 def pair_table(tiers: list[Tier]) -> str:
-    """Which pairs each tier answers on both sides, side by side.
-
-    The headline rate cannot tell a tier that is weaker from a tier that is
-    wrong about different things. Two tiers scoring 63 and 64 might disagree
-    on thirty cases or on one. Only the per-case verdicts say which.
-    """
+    """Which pairs each tier answers on both sides, side by side."""
     names = sorted({p for t in tiers for p in t.case_pairs.values()})
     if not names:
         return "no contrastive pairs in these runs."
@@ -169,25 +141,7 @@ def pair_table(tiers: list[Tier]) -> str:
 
 
 def shared_failures(runs: list[Tier]) -> tuple[int, int, list[str]]:
-    """Cases every run attempted, and whether they all reached the same verdict.
-
-    Read the warning before using the agreement figure for anything.
-
-    Agreement between two single runs of different models is not evidence
-    about the models. Measured on this corpus, one run of qwen3-coder:30b
-    agreed with qwen2.5:7b on 84% of model cases and another run of the *same*
-    30B agreed with the same 7B on 64%, while the two 30B runs agreed with
-    each other on 72%. The cross-model figure moved 20 points depending on
-    which run was picked, which is more than the gap the statistic was being
-    used to detect.
-
-    So the pair (agreeing, compared) is descriptive only. The third element -
-    cases that failed in every run supplied - is the part that supports an
-    argument, and only in proportion to how many runs were supplied. Pass
-    replicates, not one run per model, and see :func:`stable_failures`.
-
-    Returns (agreeing, compared, case_ids that failed in every run).
-    """
+    """Cases every run attempted, and whether they all reached the same verdict."""
     if len(runs) < 2:
         return (0, 0, [])
     common = set(runs[0].verdicts)
@@ -203,20 +157,7 @@ def shared_failures(runs: list[Tier]) -> tuple[int, int, list[str]]:
 def stable_failures(
     runs: list[Tier], minimum_runs: int = 3
 ) -> tuple[list[str], str | None]:
-    """Cases that failed in every run, with a caveat when there are too few.
-
-    A case that fails once is a case that failed once. Per-case churn on this
-    corpus is roughly a fifth, so at two runs a quarter of the cases that look
-    permanently broken are not: three of the nine contrastive failures that a
-    two-run comparison called structural passed in a third run that was
-    already on disk.
-
-    Returning the caveat alongside the list is the point. The previous version
-    of this comparison returned the list alone, it read as a finding, and it
-    was written into a document as one.
-
-    Returns (case_ids failing in every run, caveat or None when satisfied).
-    """
+    """Cases that failed in every run, with a caveat when there are too few."""
     if not runs:
         return ([], "no runs supplied")
     common = set(runs[0].verdicts)

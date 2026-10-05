@@ -1,14 +1,4 @@
-"""Does the repository agree with what is running? Computed, not judged.
-
-ADR-001 G4's last question and plan step 9's first exact engine. A
-Kubernetes manifest in the repository states a name, a namespace, a replica
-count and images. The entity store holds what a listing last showed for the
-same workload. The comparison is a set of equalities. A model reading both
-and forming an opinion was the previous mechanism and is strictly worse.
-
-Drift is reported with both sides and when the live side was seen, because
-a stale observation is not a current disagreement.
-"""
+"""Does the repository agree with what is running?"""
 
 from __future__ import annotations
 

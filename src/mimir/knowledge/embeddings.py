@@ -1,21 +1,4 @@
-"""Pluggable embedding backends for memory retrieval (ADR 11.4, 18.4).
-
-``mimir.llm`` does not exist yet and the whole point of ADR 18 is that MIMIR
-runs on whatever local runtime is present, so this module keeps the contract
-tiny: an :class:`Embedder` is anything with ``dimensions``, ``name``, and an
-``embed(texts) -> list[list[float]]`` method.
-
-Two implementations ship here:
-
-* :class:`OpenAICompatEmbedder` talks to any ``/v1/embeddings`` endpoint, which
-  covers Ollama, llama.cpp, LM Studio, LiteLLM, and vLLM.
-* :class:`HashingEmbedder` is a deterministic hashed bag-of-ngrams projection.
-  It needs no model, no network, and no download, so semantic retrieval still
-  degrades to something useful rather than to nothing when no runtime is up.
-
-The retrieval path never requires an embedder: keyword search alone is a valid
-mode, and :func:`get_embedder` may return ``None``.
-"""
+"""Pluggable embedding backends for memory retrieval (ADR 11.4, 18.4)."""
 
 from __future__ import annotations
 
@@ -87,14 +70,7 @@ def tokenise(text: str) -> list[str]:
 
 @dataclass(slots=True)
 class HashingEmbedder:
-    """Deterministic hashed projection. No model required.
-
-    Unigrams plus adjacent bigrams are hashed into a fixed number of buckets
-    with a signed hash, sublinear term frequency, and L2 normalisation. This is
-    a lexical-overlap embedding rather than a semantic one, so it will not match
-    paraphrases; it exists so hybrid retrieval has a working second signal on a
-    machine with no embedding model installed.
-    """
+    """Deterministic hashed projection."""
 
     dimensions: int = 768
     name: str = "hashing-fallback"
@@ -194,11 +170,7 @@ def get_embedder(
     allow_remote: bool = True,
     probe: bool = True,
 ) -> Embedder | None:
-    """Resolve the configured embedder, falling back to hashing.
-
-    Returns ``None`` when ``knowledge.embeddings_enabled`` is false, which the
-    index and retriever treat as keyword-only mode.
-    """
+    """Resolve the configured embedder, falling back to hashing."""
     if override is not None:
         return override
     cfg = settings or get_settings()

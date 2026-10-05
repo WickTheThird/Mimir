@@ -13,8 +13,7 @@ def test_the_corpus_loads_and_every_pair_has_two_sides():
 
 
 def test_pairs_share_an_instruction_or_differ_by_the_stated_fact():
-    """Contrastive means the repository differs, not the ask, except where the
-    ask itself is the altered fact and the description says so."""
+    """Contrastive means the repository differs, not the ask, except where the ask itself is the altered fact and the description says so."""
     cases = {c.id: c for c in load_corpus()}
     assert cases["code-constant-introduce-a"].instruction == cases["code-constant-already-there-b"].instruction
     assert cases["code-constant-introduce-a"].files != cases["code-constant-already-there-b"].files
@@ -49,8 +48,7 @@ def test_pair_consistency_counts_both_sides():
 
 
 def test_an_absent_needle_must_not_match_the_removal_line_of_a_correct_rename():
-    """The first rename needle matched '-    return load_config(\"x\")', which every
-    correct rename contains, and failed a diff that was right."""
+    """The first rename needle matched '-    return load_config("x")', which every correct rename contains, and failed a diff that was right."""
     case = next(c for c in load_corpus() if c.id == "code-rename-callers-a")
     correct = ('--- a/pkg/app.py\n+++ b/pkg/app.py\n-from pkg.config import load_config\n'
                '+from pkg.config import read_config\n-    return load_config("x")\n+    return read_config("x")\n'

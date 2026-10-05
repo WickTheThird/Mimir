@@ -1,13 +1,4 @@
-"""Model runtime abstraction (ADR 6.2 C3, 18).
-
-The ADR deliberately leaves the model and the runtime unresolved (section 25),
-so nothing above this layer may assume Ollama, MLX, llama.cpp, vLLM, or LiteLLM.
-Everything talks to :class:`ChatModel`.
-
-The interface is intentionally small: chat, stream, and structured output. Tool
-calling is expressed in the OpenAI shape because every candidate runtime in ADR
-6.2 C3 either speaks it natively or can be adapted to it.
-"""
+"""Model runtime abstraction (ADR 6.2 C3, 18)."""
 
 from __future__ import annotations
 
@@ -74,7 +65,6 @@ class LLMMessage(BaseModel):
     def to_openai(self) -> dict[str, Any]:
         payload: dict[str, Any] = {"role": self.role.value}
         # An assistant turn that only calls tools must send content: null, not "",
-        # or several runtimes reject the follow-up request.
         payload["content"] = self.content if self.content or not self.tool_calls else None
         if self.name:
             payload["name"] = self.name
@@ -208,13 +198,7 @@ class ChatModel(ABC):
 
 
 def schema_stub(schema: dict[str, Any], depth: int = 0) -> Any:
-    """Build a minimal instance that satisfies a JSON Schema.
-
-    Used by :class:`EchoModel` so the structured-output path can be exercised
-    without a model runtime. It emits required fields only, with type-appropriate
-    empty values, which is exactly the shape a validator accepts and a caller
-    must still cope with.
-    """
+    """Build a minimal instance that satisfies a JSON Schema."""
     if depth > 6:
         return None
     for key in ("anyOf", "oneOf", "allOf"):
@@ -272,13 +256,7 @@ def _resolve_refs(schema: dict[str, Any]) -> dict[str, Any]:
 
 
 class EchoModel(ChatModel):
-    """Deterministic stand-in used by tests and by ``--no-model`` runs.
-
-    It never fabricates an investigative answer; it echoes what it was asked so a
-    graph or CLI path can be exercised without a runtime attached. When a JSON
-    schema is requested it returns a minimal valid instance rather than prose, so
-    structured-output call sites are exercised rather than always falling back.
-    """
+    """Deterministic stand-in used by tests and by ``--no-model`` runs."""
 
     def __init__(self, alias: str = "echo", scripted: list[ChatResponse] | None = None) -> None:
         self.alias = alias
@@ -328,11 +306,7 @@ class EchoModel(ChatModel):
 
 
 def estimate_tokens(text: str) -> int:
-    """Rough token estimate used for context budgeting (ADR 20, R7).
-
-    Deliberately crude. Runtimes disagree on tokenisers, and the ADR only needs
-    this for budgeting decisions and telemetry, not for billing.
-    """
+    """Rough token estimate used for context budgeting (ADR 20, R7)."""
     return max(1, len(text) // 4)
 
 
@@ -348,12 +322,7 @@ def messages_token_estimate(messages: Sequence[LLMMessage]) -> int:
 def trim_to_context(
     messages: list[LLMMessage], budget_tokens: int, *, keep_first: int = 1, keep_last: int = 6
 ) -> list[LLMMessage]:
-    """Drop middle turns when the conversation outgrows the window (ADR R7).
-
-    The system prompt and the most recent exchanges are preserved; a marker
-    replaces what was dropped so the model is not silently misled about what it
-    has seen.
-    """
+    """Drop middle turns when the conversation outgrows the window (ADR R7)."""
     if messages_token_estimate(messages) <= budget_tokens:
         return messages
     head = messages[:keep_first]
@@ -374,18 +343,7 @@ def trim_to_context(
 
 @dataclass(slots=True)
 class ModelCallRecord:
-    """One model invocation (ADR 20).
-
-    One record per *attempt*, not per successful call. A retried call is two
-    invocations of the runtime and costs two invocations of compute, and a
-    telemetry table that hides the first one understates both latency and load
-    while making the retry rate unmeasurable.
-
-    The identity fields matter for the same reason they matter in
-    :mod:`mimir.eval.provenance`: a model tag is not an identity. Recording the
-    digest alongside the tag is what lets a later reader tell whether two runs
-    of "qwen2.5:7b" were the same weights.
-    """
+    """One model invocation (ADR 20)."""
 
     alias: str
     model: str
@@ -401,13 +359,7 @@ class ModelCallRecord:
 
     # -- identity ---------------------------------------------------------
     invocation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    """Stable id for this invocation, minted at the call site.
-
-    Persistence keys on (session_id, invocation_id) so re-persisting a session
-    is a no-op. Identity must not be inferred from a timestamp: two calls can
-    start within the same float tick, and time-based keys produce duplicate
-    telemetry that looks exactly like a genuine retry.
-    """
+    """Stable id for this invocation, minted at the call site."""
 
     runtime: str = ""
     digest: str = ""
@@ -419,12 +371,7 @@ class ModelCallRecord:
     # -- context ----------------------------------------------------------
     context_window: int = 0
     context_estimate: int = 0
-    """Estimated prompt tokens *before* trimming.
-
-    Recorded separately from prompt_tokens so that context pressure is visible:
-    a large gap means the prompt was trimmed and the model did not see
-    everything the specialist assembled.
-    """
+    """Estimated prompt tokens *before* trimming."""
     trimmed: bool = False
 
     # -- attempt ----------------------------------------------------------
@@ -462,11 +409,7 @@ class ModelCallRecord:
 
     @property
     def error_type(self) -> str:
-        """A coarse class, so failures can be counted without grouping by prose.
-
-        Error strings carry ids and hostnames and never group. The category is
-        what a telemetry query actually needs.
-        """
+        """A coarse class, so failures can be counted without grouping by prose."""
         if self.error is None:
             return ""
         lowered = self.error.lower()

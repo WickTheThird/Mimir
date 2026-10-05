@@ -1,20 +1,4 @@
-"""Import curated agent memory files.
-
-The conversation importer handles transcripts: whole sessions, summarised
-extractively, written as low confidence candidates. That is the right treatment
-for a transcript, which is mostly process and very little conclusion.
-
-A memory file is a different artefact. Claude Code and similar tools keep small
-curated markdown files, one fact each, written or approved by the operator
-after the work was done. Per token they are the densest operational knowledge
-on the machine, and MIMIR was ignoring them entirely while its own knowledge
-store sat empty.
-
-They stay in the imports layer, so they carry IMPORTED_MEMORY as their source
-type and rank below a runbook exactly as before. What differs is confidence:
-a transcript summary is an extract a program made, and a memory file is a
-sentence a person decided to keep. Promotion is still explicit.
-"""
+"""Import curated agent memory files."""
 
 from __future__ import annotations
 
@@ -39,15 +23,11 @@ log = get_logger(__name__)
 MEMORY_ROOT = "imports/agent-memory"
 
 MAX_BYTES = 60_000
-"""A curated memory is a paragraph. Anything this size is a document that
-happens to live in a memory directory, and importing it whole would put a
-manual into the layer meant for single facts."""
+"""A curated memory is a paragraph."""
 
 _FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
-# An index file lists the others. Importing it duplicates every fact as a
-# one-line stub with no context, which then competes with the real note in
-# retrieval.
+# An index file lists the others.
 _INDEX_NAMES = frozenset({"memory.md", "index.md", "readme.md"})
 
 
@@ -90,13 +70,7 @@ class MemoryImportResult:
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
-    """Read the small flat frontmatter these files use.
-
-    Deliberately not a YAML parse. The frontmatter here is a handful of scalar
-    keys plus one nested block, and taking a YAML dependency to read it would
-    also accept anything else a YAML document can express, from a file whose
-    contents MIMIR did not write.
-    """
+    """Read the small flat frontmatter these files use."""
     match = _FRONTMATTER.match(text)
     if not match:
         return {}, text
@@ -113,13 +87,7 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
 
 
 def _project_of(path: Path) -> str:
-    """Recover the working directory from the mangled project folder name.
-
-    These tools name a project directory by flattening its absolute path, so
-    "-Users-filipb-Documents-messaging-whatsapp" is one path segment. Taking
-    the last hyphenated word gives "whatsapp", which loses the half that
-    identifies it; the home prefix is what should go instead.
-    """
+    """Recover the working directory from the mangled project folder name."""
     for part in path.parts:
         if not (part.startswith("-Users-") or part.startswith("-home-")):
             continue
@@ -165,10 +133,7 @@ def parse_memory_file(path: Path) -> MemoryFile | None:
 
     return MemoryFile(
         path=path,
-        # Redacted like the body. A title is not incidental text: it is what
-        # search returns and what a retrieval result shows before anyone opens
-        # the note, so a secret in a title is more exposed than one in a body,
-        # not less.
+        # Redacted like the body.
         title=redact(title)[:160],
         body=body,
         kind=fields.get("type", "note"),
@@ -223,8 +188,6 @@ class AgentMemoryImporter:
             last_verified=None,
             source=f"{memory.source_tool} memory: {memory.path.name}",
             # Higher than a transcript summary and lower than anything MIMIR
-            # observed itself. A person decided to keep this sentence; nobody
-            # has checked it since.
             confidence=Confidence.MEDIUM,
             tags=sorted({"import", "agent-memory", memory.source_tool, memory.kind}),
             verification_status=VerificationStatus.UNVERIFIED,

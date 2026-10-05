@@ -1,10 +1,4 @@
-"""Persistence layer (ADR 19).
-
-SQLite by default, PostgreSQL when configured. The ORM rows live in
-:mod:`~mimir.persistence.models`, the engine in :mod:`~mimir.persistence.db`,
-the typed access layer in :mod:`~mimir.persistence.repositories`, and LangGraph
-checkpointer selection in :mod:`~mimir.persistence.checkpoint`.
-"""
+"""Persistence layer (ADR 19)."""
 
 from mimir.persistence.checkpoint import (
     async_checkpointer,

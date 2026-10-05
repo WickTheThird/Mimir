@@ -1,19 +1,4 @@
-"""Role-to-model assignment benchmarking (ADR 18.4, ADR-002 section 5).
-
-Benchmarking models in isolation answers the wrong question. MIMIR does not use
-one model; it assigns models to roles. A planner that produces clean structured
-output paired with a weak synthesiser can lose to two mediocre models that agree
-on format, and no published benchmark will tell you that because it depends on
-the prompts and schemas of this system specifically.
-
-So the unit of measurement here is an assignment: a mapping of task class to
-model alias, scored against the same corpus.
-
-Cost is the constraint. Combinations grow as ``len(models) ** len(roles)``, and
-every combination replays the corpus. This module reports what it dropped rather
-than silently truncating, because a sweep that quietly skipped the interesting
-pairing is worse than one that admits it.
-"""
+"""Role-to-model assignment benchmarking (ADR 18.4, ADR-002 section 5)."""
 
 from __future__ import annotations
 
@@ -32,13 +17,7 @@ log = get_logger(__name__)
 def enumerate_assignments(
     roles: list[str], models: list[str], limit: int | None = None
 ) -> list[dict[str, str]]:
-    """Every mapping of role to model, optionally capped.
-
-    Uniform assignments (every role on the same model) are ordered first, so a
-    capped sweep still produces the single-model baselines that every mixed
-    assignment needs to be compared against. Without that ordering a truncated
-    sweep can return only exotic mixtures and no baseline to judge them by.
-    """
+    """Every mapping of role to model, optionally capped."""
     uniform = [dict.fromkeys(roles, model) for model in models]
     mixed = [
         dict(zip(roles, combo, strict=True))
@@ -93,7 +72,6 @@ async def run_matrix(
         started = time.perf_counter()
         try:
             # A fresh runner per combination, so no model client or router cache
-            # from the previous assignment leaks into this one.
             from mimir.graph.runner import InvestigationRunner
             from mimir.llm.router import ModelRouter
 
@@ -126,9 +104,7 @@ async def run_matrix(
             }
         )
 
-    # Rank by correctness first, then by honesty, then by speed. Unsupported
-    # claims break ties ahead of latency: a fast confident fabrication is worse
-    # than a slow careful answer.
+    # Rank by correctness first, then by honesty, then by speed.
     rows.sort(
         key=lambda r: (
             -r["passed"],

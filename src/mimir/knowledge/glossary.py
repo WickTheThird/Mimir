@@ -1,22 +1,4 @@
-"""What the operator's words turn out to mean.
-
-Operators do not name things the way the estate does. They say "whatapp" for
-messaging-whatsapp, "the retry thing" for a file they touched last week, "ch1"
-for two contexts out of thirty one. A model given none of that spends its first
-three steps guessing, and a local model spends most of a turn's wall clock
-there, because those steps are prefill.
-
-This is a deterministic store of resolutions that already happened. No model
-reads or writes it. A term is associated with a name when that name was
-observed in the same turn and is close enough to the term to be what it meant,
-and the association is offered back on a later turn as a hint, never as a
-substitution. Getting it wrong therefore costs a line of prompt, not a wrong
-answer.
-
-Seeded from what is already known - repositories, kubeconfig contexts, the
-projects of imported memory - so it is useful on the first turn rather than
-the tenth.
-"""
+"""What the operator's words turn out to mean."""
 
 from __future__ import annotations
 
@@ -67,24 +49,11 @@ _STOP = frozenset({
 })
 
 MAX_NAMES = 3
-"""Above this, a term does not resolve anything.
-
-"messaging" is a segment of six projects and forty workloads here. Offering all
-of them is not a hint, it is the list the model would have got anyway, and it
-crowds out the terms that do discriminate."""
+"""Above this, a term does not resolve anything."""
 
 MIN_RATIO = 0.8
 MAX_LENGTH_GAP = 2
-"""How close a term has to be to a name to be treated as meaning it.
-
-A similarity ratio alone cannot do this. "whatapp" and "whatsapp" score 0.93,
-but "retry" and "registry" score 0.77 and "backoff" and "backoffice" 0.82, so
-any cutoff that accepts the typo accepts both coincidences, and the hint then
-tells the model that "retry" means the campaign registry.
-
-Length is what separates them. A typo adds or drops a character or two; it does
-not turn a five letter word into an eight letter one. Both conditions are
-required."""
+"""How close a term has to be to a name to be treated as meaning it."""
 
 
 @dataclass(frozen=True)
@@ -153,15 +122,8 @@ class Glossary:
         self._db.commit()
 
     def learn(self, instruction: str, observed_names: list[str], *, scope: str = "") -> int:
-        """Associate the operator's words with names seen in the same turn.
-
-        Only close matches are kept. A turn mentions many names and the
-        operator's word meant at most one of them, so requiring closeness is
-        what keeps this from degenerating into "everything means everything".
-        """
-        # A composite is not a name. "backend-ch1-dev/messaging-squad" is a
-        # scope printed in a tool summary, and recording it taught the glossary
-        # that "squad" means a context and a namespace joined by a slash.
+        """Associate the operator's words with names seen in the same turn."""
+        # A composite is not a name.
         names = sorted({
             n.strip() for n in observed_names
             if n and len(n) > 3 and "/" not in n and "." not in n
@@ -169,10 +131,7 @@ class Glossary:
         if not names:
             return 0
 
-        # Nothing is learned from a name the operator already typed. "squad"
-        # meaning messaging-squad, in a turn whose instruction says
-        # messaging-squad, is a fact about the sentence rather than about the
-        # estate, and it crowds out the association that would have helped.
+        # Nothing is learned from a name the operator already typed.
         said = (instruction or "").lower()
         learned = 0
         for term in terms_of(instruction):
@@ -191,14 +150,7 @@ class Glossary:
         return dict(rows)
 
     def lookup(self, text: str, *, limit: int = 6) -> list[Association]:
-        """Exact resolutions first, then near misses against known names.
-
-        The near miss is the point. A term that has been resolved before is the
-        easy case and it is not the one that costs three steps: "whatapp" has
-        never been seen, and messaging-whatsapp has, and the distance between
-        them is one character. Looking the term up only by equality answers the
-        question nobody was stuck on.
-        """
+        """Exact resolutions first, then near misses against known names."""
         terms = terms_of(text)
         if not terms:
             return []
@@ -235,18 +187,7 @@ class Glossary:
         return [Association(*row) for row in rows]
 
     def hint(self, text: str, *, limit: int = 2) -> str:
-        """One short line, or nothing.
-
-        Terse on purpose, and capped. A 296 character version of this stopped
-        qwen3-coder emitting tool calls at all; a one line version does not.
-        Prompt text added to a turn is not free even when it is correct, and
-        the way it fails is silent, so the budget is spent on the two words
-        most likely to be the ones the operator got wrong.
-
-        Offered as what the words have meant before, not as what they mean. The
-        estate changes, and a hint stated as a fact is a stale fact the model
-        will defend.
-        """
+        """One short line, or nothing."""
         said = (text or "").lower()
         found = [
             a for a in self.lookup(text, limit=limit * 3)
@@ -258,12 +199,7 @@ class Glossary:
         return f"(earlier in this estate: {pairs}. A lead, not a fact.)"
 
     def prune(self) -> int:
-        """Remove associations that should never have been recorded.
-
-        Learning rules that are tightened later do not reach what was already
-        written, and a store that keeps its early mistakes is one nobody
-        trusts. Composites came from tool summaries printing a scope rather
-        than a name."""
+        """Remove associations that should never have been recorded."""
         cursor = self._db.execute(
             "DELETE FROM associations WHERE name LIKE '%/%' OR name LIKE '%.%'"
         )
@@ -334,22 +270,13 @@ class Glossary:
 
 def _segments(name: str) -> list[str]:
     """The parts of a name an operator might say on their own."""
-    # Three characters, not four. "ch1" is how this operator names a pair of
-    # clusters, and a rule that cannot represent it is a rule that misses the
-    # term they actually use.
+    # Three characters, not four.
     parts = [p.lower() for p in re.split(r"[-_./]", name) if len(p) >= 3]
     return [p for p in parts if p not in _STOP]
 
 
 def _close_to(term: str, names: list[str]) -> list[str]:
-    """Names the term plausibly meant.
-
-    A whole segment first, because "whatsapp" inside "messaging-whatsapp" is
-    exact and needs no ratio. Plain substring is not enough: "backoff" is
-    inside "backoffice", and telling the model that an operator asking about
-    retry backoff means the back office is worse than telling it nothing. The
-    same length rule applies to a partial segment as to a typo.
-    """
+    """Names the term plausibly meant."""
     exact = [n for n in names if term in _segments(n)]
     if not exact:
         exact = [

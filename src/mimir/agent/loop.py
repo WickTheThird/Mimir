@@ -1,19 +1,4 @@
-"""The coding loop.
-
-MIMIR's investigation graph is single pass by design (ADR-003): plan, fan out
-to a council, verify, synthesise, stop. That shape is right for answering a
-question and wrong for changing code, because changing code is iterative. You
-read, you edit, you run the tests, and what the tests say determines the next
-edit. There is no way to know the third step at planning time.
-
-So this is a second mode rather than a back edge in the graph. The graph keeps
-its property that safety is decided before any model runs; this loop keeps that
-property too, by dispatching every call through the same registry, the same
-risk classifier and the same approval broker. What it does not keep is the
-council, the verification pass and the synthesis node, because paying for a
-ten specialist fan-out to add a null check is exactly the waste the triage
-module was written to stop.
-"""
+"""The coding loop."""
 
 from __future__ import annotations
 
@@ -55,48 +40,13 @@ CODING_TOOLS: tuple[str, ...] = (
     # what was already learned about this code
     "search_memory",
 )
-"""The coding surface, named rather than derived from a capability.
-
-Twelve tools, against the seventy six registered.
-
-insert_worktree_lines was added and two lookup tools removed to pay for it,
-because adherence falls with schema volume and the surface must not grow. Both
-edit failures in the first real coding runs were about reproducing existing
-text, first its line-number gutter and then its indentation; inserting at a
-line number needs neither. inspect_git_history and lsp_symbols went, being the
-two whose questions read_file_range and search_repository already answer. The council was offered
-thirty five at one point and its prompts more than doubled.
-
-The cost argument for keeping this small turned out to be wrong and is worth
-recording as wrong: the runtime caches the prefix, so the schema is paid once
-per conversation rather than on every step. Measured at eighteen times cheaper
-after the first step.
-
-The reason that survives measurement is adherence, not cost. Past a schema
-volume this model stops emitting tool calls at all and writes them into its
-prose instead, and unneeded tools still invite a worse choice.
-"""
+"""The coding surface, named rather than derived from a capability."""
 
 _BOUND = ("task", "repo")
-"""Arguments the loop supplies and the model never sees.
-
-Every coding tool takes the worktree it operates on. Leaving that to the model
-means it is wrong occasionally, and a wrong task name is not a harmless error:
-it is an edit to a different worktree. Binding it removes the class."""
+"""Arguments the loop supplies and the model never sees."""
 
 def _is_worktree_tool(fields: set[str]) -> bool:
-    """Whether ``repo`` means the source checkout rather than the worktree.
-
-    Derived from the tool's own arguments rather than from a list. A tool that
-    takes both a task and a repo derives the worktree path from the pair, so it
-    needs the original checkout; anything else reads a tree, and the tree it
-    must read is the worktree.
-
-    This was a hand-maintained frozenset until a new worktree tool was added
-    and not put in it. Every call it made resolved against the worktree as if
-    that were the source repo, so it reported that the worktree did not exist
-    while every other tool was working on it happily.
-    """
+    """Whether ``repo`` means the source checkout rather than the worktree."""
     return {"task", "repo"} <= fields
 
 _TOOL_TEXT = re.compile(
@@ -104,17 +54,10 @@ _TOOL_TEXT = re.compile(
     r'"(?:name|tool_name)"\s*:\s*"[a-z_]+"\s*,\s*"(?:arguments|parameters)")',
     re.IGNORECASE,
 )
-"""Text that is an attempted tool call rather than an answer.
-
-Local models drop out of the tool-call channel and write the call into their
-prose instead, complete with closing tags. The loop used to see a turn with no
-tool calls and conclude the work was finished, so the run ended after one step
-having done nothing, and reported success. Detecting the shape is deterministic
-and the correction costs one extra step."""
+"""Text that is an attempted tool call rather than an answer."""
 
 MAX_RESULT_CHARS = 6000
-"""How much of a tool result goes back into context. A repository search can
-return more than the context window."""
+"""How much of a tool result goes back into context."""
 
 
 @dataclass
@@ -137,13 +80,7 @@ class TurnOutcome:
 
 
 class AgentLoop:
-    """Call the model, run what it asks for, feed the result back, repeat.
-
-    The surface and the argument binding are parameters, because the loop is
-    the same whether the work is editing a repository or reading a cluster.
-    What differs is which tools exist and which of their arguments the operator
-    already decided.
-    """
+    """Call the model, run what it asks for, feed the result back, repeat."""
 
     label = "agent"
 
@@ -171,8 +108,7 @@ class AgentLoop:
         """Decode against a schema instead of trusting the tool-call channel."""
 
         self.temperature = temperature
-        """Zero for a single run. Sampling k of them needs it above zero, or
-        the k trajectories are one trajectory reported k times."""
+        """Zero for a single run."""
 
         self.specs = [s for s in (registry.get(n) for n in tools) if s is not None]
         self.system = system
@@ -204,13 +140,7 @@ class AgentLoop:
         """A tool succeeded. Subclasses use this to learn from what it found."""
 
     def specs_now(self) -> list[Any]:
-        """Which tools are offered at this point in the turn.
-
-        Usually all of them. A subclass narrows it when the turn has already
-        done what was asked, which under a constrained decoder is the only
-        reliable way to end one: the answer branch is always available and the
-        model does not reliably take it.
-        """
+        """Which tools are offered at this point in the turn."""
         return self.specs
 
     def note_instruction(self, instruction: str) -> None:
@@ -227,12 +157,7 @@ class AgentLoop:
     # -- tool surface ----------------------------------------------------
 
     def schemas(self) -> list[dict[str, Any]]:
-        """Tool schemas with the bound arguments removed.
-
-        Removed from ``required`` as well. A schema that demands a field the
-        model is told never to send produces a model that sends it anyway, or
-        one that refuses to call the tool at all.
-        """
+        """Tool schemas with the bound arguments removed."""
         hidden = self.hidden()
         out = []
         for spec in self.specs:
@@ -250,30 +175,8 @@ class AgentLoop:
     # -- the loop --------------------------------------------------------
 
     async def run(self, instruction: str) -> AsyncIterator[AgentEvent]:
-        """Work on ``instruction`` until the model stops calling tools.
-
-        The conversation persists on the instance, so a follow-up turn keeps
-        every file already read. That is the whole reason this is a session and
-        not a command: re-reading the same four files for a two line follow-up
-        is most of what makes a local model feel unusable.
-        """
+        """Work on ``instruction`` until the model stops calling tools."""
         # The hint goes in the system message, which is rebuilt rather than
-        # appended to, so it never grows across turns.
-        #
-        # It took three attempts to land here and the reason is worth keeping.
-        # Put before the instruction, 162 characters of preamble made
-        # qwen3-coder:30b stop emitting tool calls entirely and write them into
-        # its prose instead, at temperature zero, reproducibly. Moved after the
-        # instruction it worked in a six-way probe, and then failed in the real
-        # loop with a 75 character hint that differed only in wording. Length
-        # was never the whole story and neither was position: the user turn is
-        # simply not a stable place to put anything but the request. Every
-        # system-prompt variant in that probe worked, long and short alike.
-        #
-        # The general lesson, which cost most of an afternoon: with a local
-        # model, added prompt text can cost protocol adherence rather than just
-        # tokens, and it fails silently, because a turn with no tool calls
-        # looks exactly like a turn that finished.
         hint = self._hint(instruction)
         base = self.system_for(instruction)
         self.messages[0] = LLMMessage.system(f"{base}\n\n{hint}" if hint else base)
@@ -351,9 +254,6 @@ class AgentLoop:
                         repeated += 1
 
             # A model that runs the same call again has stopped making
-            # progress, and under a constrained decoder it cannot wander into
-            # prose to signal that. Three identical calls end the turn rather
-            # than burning the step budget on the same answer.
             if repeated and repeated == len(calls):
                 self.outcome.repeats += 1
                 if self.outcome.repeats >= 3:
@@ -409,9 +309,6 @@ class AgentLoop:
                 "Do something different, or finish.]"
             )
         # The model sees the trimmed render; the grounding check sees
-        # everything the tool returned. Checking an answer against a truncated
-        # copy of its own evidence flags what was quoted from the part that got
-        # cut, and a check that cries wolf is one people switch off.
         self.observed.append(f"{rendered}\n{_all_text(result)}")
         self.messages.append(
             LLMMessage.tool_result(call.id, rendered, name=call.name)
@@ -428,12 +325,7 @@ class AgentLoop:
         yield event
 
     async def _constrained_step(self, step: int) -> tuple[list[str], list[ToolCall], str]:
-        """One decoded step whose shape the runtime guarantees.
-
-        Nothing is recorded here because ModelRouter.constrained records its own
-        invocation, which keeps every path through this loop counted the same
-        way.
-        """
+        """One decoded step whose shape the runtime guarantees."""
         from mimir.agent.constrained import build_schema, parse_step
         from mimir.llm.base import ModelError
 
@@ -454,10 +346,7 @@ class AgentLoop:
             except ModelError as exc:
                 return [], [], exc.message
 
-            # A call cut off mid-argument is not an answer. Treating truncated
-            # JSON as the model's final word ended coding turns silently,
-            # having changed nothing, because a coding tool's arguments are
-            # whole blocks of code and the first budget was too small for them.
+            # A call cut off mid-argument is not an answer.
             if reason == "length" and attempt == 0:
                 budget = 16_384
                 log.info("constrained_output_truncated", step=step, retry_budget=budget)
@@ -482,12 +371,7 @@ class AgentLoop:
             return ""
 
     def _learn(self) -> None:
-        """Associate the operator's words with names this turn actually saw.
-
-        Only names that were observed, so a turn that resolved nothing teaches
-        nothing. Learning from the model's own text instead would record the
-        invented names alongside the real ones.
-        """
+        """Associate the operator's words with names this turn actually saw."""
         if self.glossary is None:
             return
         from mimir.verify.grounding import identifiers
@@ -499,13 +383,7 @@ class AgentLoop:
             log.debug("glossary_learn_failed")
 
     def _grounding(self, answer: str) -> Any:
-        """Check the answer's identifiers against what was actually read.
-
-        Runs on every turn rather than on request. A check you have to ask for
-        is a check that is not running when it matters, and the failure it
-        catches - a plausible list of names that were never observed - is
-        invisible to the person reading the answer.
-        """
+        """Check the answer's identifiers against what was actually read."""
         from mimir.verify.grounding import check
 
         return check(answer, "\n".join(self.observed), asked=self.instruction)
@@ -524,14 +402,7 @@ class AgentLoop:
         failed: str,
         step: int,
     ) -> None:
-        """Log the invocation the way ``ModelRouter.chat`` does.
-
-        Streaming bypasses the router's own call site, and a mode that invokes
-        the model without recording it breaks the invariant that model
-        invocations observed equals model call records persisted. That
-        invariant is the only reason the empty ``model_calls`` table was ever
-        found, so a new caller does not get to opt out of it.
-        """
+        """Log the invocation the way ``ModelRouter.chat`` does."""
         from mimir.llm.base import ModelCallRecord
 
         self.router.invocations_attempted += 1
@@ -592,20 +463,7 @@ class CodingAgent(AgentLoop):
         return _BOUND
 
     def specs_now(self) -> list[Any]:
-        """Withdraw a tool that has failed the same way twice.
-
-        edit_worktree_file needs the existing text reproduced exactly. Asked to
-        add a method, the model repeatedly chose it with thirty, then
-        thirty-seven, then forty lines of old_string, and reproducing forty
-        lines byte-exactly inside a JSON string does not happen. It never fell
-        back to insert_worktree_lines, which needs no existing text at all and
-        is the right tool for adding something.
-
-        Telling it so in the description did not work. Removing the branch
-        does, and it is a rule rather than a request: after two failures the
-        tool is gone for the rest of the turn and the alternatives are what is
-        left.
-        """
+        """Withdraw a tool that has failed the same way twice."""
         if self.failures.get("edit_worktree_file", 0) < 2:
             return self.specs
         return [s for s in self.specs if s.name != "edit_worktree_file"]
@@ -641,12 +499,7 @@ def _all_text(result: ToolResult) -> str:
 
 
 def format_arguments(tool: str, arguments: dict[str, Any]) -> str:
-    """A one-line argument display for the terminal.
-
-    Long values (a file's new contents, a replacement span) are summarised
-    rather than printed: the diff is shown separately and printing it twice
-    pushes everything else off the screen.
-    """
+    """A one-line argument display for the terminal."""
     bits = []
     for key, value in arguments.items():
         if key in _BOUND or value in (None, "", [], {}):

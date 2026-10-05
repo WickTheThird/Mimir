@@ -1,17 +1,4 @@
-"""The one place where a subprocess is spawned (ADR 9, 13).
-
-Every helper routes through :class:`CommandExecutor`. It:
-
-* runs the policy engine and refuses or gates accordingly,
-* never spawns a shell (``argv`` only, no ``shell=True``),
-* enforces timeouts and output caps,
-* redacts secrets before anything is stored or returned,
-* writes full output to the artifact store,
-* emits an :class:`ExecutionRecord` for the audit trail.
-
-There is no bypass. A helper that wants to run something builds a
-:class:`ProposedCommand` and hands it over.
-"""
+"""The one place where a subprocess is spawned (ADR 9, 13)."""
 
 from __future__ import annotations
 
@@ -39,8 +26,7 @@ from mimir.tools.artifacts import ArtifactStore, get_artifact_store
 
 log = get_logger(__name__)
 
-#: Environment variables always preserved for child processes. Everything else
-#: is inherited as-is except when the caller asks for a scrubbed environment.
+# : Environment variables always preserved for child processes.
 _ESSENTIAL_ENV = ("PATH", "HOME", "USER", "SHELL", "LANG", "LC_ALL", "TERM", "TMPDIR")
 
 
@@ -49,8 +35,7 @@ class ExecutionOptions:
     timeout_s: float | None = None
     max_output_bytes: int | None = None
     require_approval: bool | None = None
-    """Override policy. ``True`` always asks, ``False`` never asks (only honoured
-    when the policy verdict is ALLOW; it can tighten, never loosen)."""
+    """Override policy."""
 
     approval_timeout_s: float | None = None
     scrub_env: bool = False
@@ -154,7 +139,6 @@ class CommandExecutor:
             approved_by = outcome.decided_by
             if outcome.status == ApprovalStatus.EDITED and outcome.edited_argv:
                 # An edited command is a new proposal and is re-classified from
-                # scratch. An operator edit must not smuggle in a higher risk.
                 command = command.model_copy(update={"argv": outcome.edited_argv})
                 recheck = self.policy.evaluate(command)
                 if recheck.denied:
@@ -212,11 +196,7 @@ class CommandExecutor:
         options: ExecutionOptions | None = None,
         concurrency: int = 4,
     ) -> list[ExecutionRecord]:
-        """Run read-only commands in parallel (K1 parallel search helper, ADR 8).
-
-        Anything above the auto-execute ceiling is serialised so approval
-        prompts never interleave.
-        """
+        """Run read-only commands in parallel (K1 parallel search helper, ADR 8)."""
         ceiling = self.policy.auto_execute_ceiling()
         parallel, serial = [], []
         for command in commands:
@@ -481,14 +461,7 @@ class CommandExecutor:
         return list(self._history)
 
     def history_for(self, session_id: str | None) -> list[ExecutionRecord]:
-        """Execution records belonging to one session.
-
-        Tools run commands through the executor but have no reference to the
-        investigation state, so records accumulate here and nowhere else. The
-        graph harvests them at the end of a run; without that, the executions
-        table stays empty and the audit trail (ADR-001 secondary goals, ADR
-        19.3) records nothing that actually ran.
-        """
+        """Execution records belonging to one session."""
         if session_id is None:
             return []
         return [record for record in self._history if record.session_id == session_id]

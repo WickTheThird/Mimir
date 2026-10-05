@@ -1,14 +1,4 @@
-"""Multi-step coding tasks with checkpoints.
-
-Plan step 6c. The loop is one instruction, one worktree, N turns. A task
-that needs "the model, then the migration, then the endpoint" had no
-representation, so the model either did it all in one diff or lost the
-thread. Here the instruction becomes an ordered list of steps (open prose,
-tier 3, one structured call), each step runs through the same loop, and a
-step that passed the gate is committed in the worktree as a checkpoint. A
-failed step is rolled back to the last checkpoint rather than left half
-done, and the task reports which steps landed.
-"""
+"""Multi-step coding tasks with checkpoints."""
 
 from __future__ import annotations
 
@@ -72,11 +62,7 @@ class TaskPlan:
 
 
 async def plan_steps(router: Any, instruction: str, *, session_id: str = "") -> TaskPlan:
-    """Split one instruction into ordered steps. One call, closed shape.
-
-    A single-step instruction comes back as one step; the plan machinery is
-    then a no-op with a checkpoint, which costs nothing.
-    """
+    """Split one instruction into ordered steps."""
     from mimir.llm.base import GenerationOptions, LLMMessage, ModelError
 
     prompt = (
@@ -127,12 +113,7 @@ def rollback(root: Path) -> None:
 
 async def run_plan(agent: Any, plan: TaskPlan, *, worktree_root: Path,
                    gate_ok: Any = None) -> TaskPlan:
-    """Run each step through the agent; checkpoint what lands, roll back what fails.
-
-    ``gate_ok(agent)`` decides whether a step's result may be kept. Default:
-    the loop stopped normally and made a change. The caller can pass the
-    change gate or the test result instead, which is what the corpus does.
-    """
+    """Run each step through the agent; checkpoint what lands, roll back what fails."""
     from mimir.agent.loop import AgentEventType
 
     ok = gate_ok or (lambda a: a.outcome.stopped == "done" and bool(a.outcome.files_changed))

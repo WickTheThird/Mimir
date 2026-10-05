@@ -1,9 +1,4 @@
-"""Executor and approval-gate tests (ADR 13).
-
-The property under test throughout: nothing above the auto-execute ceiling runs
-without an explicit decision, and an operator edit cannot raise the risk of what
-was approved.
-"""
+"""Executor and approval-gate tests (ADR 13)."""
 
 from __future__ import annotations
 
@@ -85,11 +80,7 @@ async def test_approved_command_executes(executor):
 
 
 async def test_edit_cannot_escalate_risk(executor):
-    """An operator approving `echo x` must not end up running `kubectl delete`.
-
-    The edited argv is re-classified from scratch, and a higher class than the
-    one reviewed is refused rather than silently executed.
-    """
+    """An operator approving `echo x` must not end up running `kubectl delete`."""
     command = ProposedCommand(argv=["echo", "safe"], context=TargetContext(host="localhost"))
 
     async def approve_with_escalation(request):

@@ -37,8 +37,7 @@ OUTCOME = Choice(
 
 
 def test_the_schema_closes_the_option_set():
-    """The guarantee the call sites need: nothing can come back that was not
-    offered. Constrained decoding measured 100% adherence at every size."""
+    """The guarantee the call sites need: nothing can come back that was not offered."""
     schema = _schema([OUTCOME])
     assert schema["properties"]["outcome"]["enum"] == ["observed", "empty", "failed"]
     assert schema["additionalProperties"] is False
@@ -46,8 +45,7 @@ def test_the_schema_closes_the_option_set():
 
 
 def test_every_field_is_decided_in_one_call():
-    """Splitting them multiplies the prompt cost by the number of questions
-    and lets the answers drift, since each call sees the context fresh."""
+    """Splitting them multiplies the prompt cost by the number of questions and lets the answers drift, since each call sees the context fresh."""
     fields = [OUTCOME, Choice(name="sufficient", options=("yes", "no"))]
     schema = _schema(fields)
     assert set(schema["required"]) == {"outcome", "sufficient"}
@@ -64,8 +62,7 @@ async def test_a_verdict_is_returned_uncalibrated():
 
 @pytest.mark.asyncio
 async def test_a_threshold_gate_must_not_read_the_uncalibrated_zero():
-    """A caller comparing 0.0 against a 0.7 floor would discard every correct
-    decision while looking like it was being careful."""
+    """A caller comparing 0.0 against a 0.7 floor would discard every correct decision while looking like it was being careful."""
     router = FakeRouter()
     verdict = (await LocalDecider(router).decide_async("c", [OUTCOME]))["outcome"]
     assert verdict.probability == 0.0
@@ -76,8 +73,7 @@ async def test_a_threshold_gate_must_not_read_the_uncalibrated_zero():
 
 @pytest.mark.asyncio
 async def test_an_off_menu_answer_is_dropped_not_defaulted():
-    """The schema should make this impossible. If it happens the constraint
-    was not applied, and a silent default would look like a real decision."""
+    """The schema should make this impossible."""
     verdicts = await LocalDecider(FakeRouter('{"outcome": "maybe"}')).decide_async(
         "c", [OUTCOME]
     )
@@ -91,8 +87,7 @@ async def test_unparseable_output_yields_no_verdict():
 
 @pytest.mark.asyncio
 async def test_a_model_failure_is_silence_not_a_negative_verdict():
-    """Every caller falls back to what it did before. An absent decider must
-    never read as a decision against."""
+    """Every caller falls back to what it did before."""
     from mimir.llm.base import ModelError
 
     class Broken:

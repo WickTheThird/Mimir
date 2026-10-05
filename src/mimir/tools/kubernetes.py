@@ -1,19 +1,4 @@
-"""Kubernetes helpers (ADR 9.2, 5.5, 13).
-
-The model never gets a shell into a cluster. It gets the typed helpers listed in
-ADR 9.2, each of which builds a :class:`ProposedCommand` with a fully resolved
-:class:`TargetContext` and hands it to :class:`CommandExecutor`. Three rules run
-through every helper in this module:
-
-* ``--context`` and ``-n`` are always written onto the argv. Ambient kubeconfig
-  state is never trusted, so the operator always sees which cluster and
-  namespace an action touches (ADR 13.3, 5.5).
-* Output is fetched as JSON and parsed into structured data. Raw text bodies go
-  to the artifact store and only a compact summary reaches the model context.
-* Mutations are prepared and classified here, but approval and execution belong
-  to the policy engine and the executor. Nothing in this module decides that a
-  command is safe.
-"""
+"""Kubernetes helpers (ADR 9.2, 5.5, 13)."""
 
 from __future__ import annotations
 
@@ -45,11 +30,9 @@ from mimir.tools.exec import CommandExecutor, ExecutionOptions, get_executor
 log = get_logger(__name__)
 
 #: ADR 5.1 asks for "pods that restarted in the last hour" as a first-class
-#: question, so every pod view carries a precomputed flag for that window.
 RESTART_WINDOW_S = 3600.0
 
-#: Container waiting/terminated reasons that mean the pod is not healthy. Used
-#: by the ADR G4 pod-restart diagnosis path.
+# : Container waiting/terminated reasons that mean the pod is not healthy.
 UNHEALTHY_WAITING = frozenset(
     {
         "CrashLoopBackOff",
@@ -67,7 +50,6 @@ UNHEALTHY_TERMINATED = frozenset(
 )
 
 #: Percent-of-limit thresholds above which ADR G4 wants throttling and memory
-#: pressure called out explicitly.
 CPU_PRESSURE_PCT = 80.0
 MEMORY_PRESSURE_PCT = 85.0
 
@@ -75,18 +57,12 @@ DEFAULT_WORKLOAD_KINDS = ("deployment", "statefulset", "daemonset")
 
 
 # ---------------------------------------------------------------------------
-# argument hygiene
-# ---------------------------------------------------------------------------
 
 _UNSAFE_TOKEN = re.compile(r"\s|^-")
 
 
 def _safe_token(value: str, field_name: str) -> str:
-    """Reject values that would be read as a flag or split into extra argv items.
-
-    No shell is spawned, so this is not about quoting. It stops a name like
-    ``--all`` from silently becoming a flag on an otherwise narrow command.
-    """
+    """Reject values that would be read as a flag or split into extra argv items."""
     token = value.strip()
     if not token or _UNSAFE_TOKEN.search(token):
         raise ToolError(
@@ -96,8 +72,6 @@ def _safe_token(value: str, field_name: str) -> str:
     return token
 
 
-# ---------------------------------------------------------------------------
-# ambient services
 # ---------------------------------------------------------------------------
 
 
@@ -126,8 +100,6 @@ def _exec_options(ctx: ToolContext, timeout_s: float | None = None) -> Execution
 
 
 # ---------------------------------------------------------------------------
-# command construction
-# ---------------------------------------------------------------------------
 
 
 def _build(
@@ -144,12 +116,7 @@ def _build(
     tool_name: str = "kubernetes",
     timeout_s: float | None = None,
 ) -> ProposedCommand:
-    """Build a kubectl proposal with the target context fully resolved.
-
-    ``--context`` and ``-n`` go onto the argv rather than being left to the
-    kubeconfig, and the same values are mirrored into :class:`TargetContext` so
-    the risk classifier and the ``validate_kube_target`` hook can see them.
-    """
+    """Build a kubectl proposal with the target context fully resolved."""
     argv = [_kubectl(ctx)]
     if context:
         argv += ["--context", context]
@@ -174,8 +141,6 @@ def _build(
     )
 
 
-# ---------------------------------------------------------------------------
-# failure translation
 # ---------------------------------------------------------------------------
 
 _FAILURE_RULES: tuple[tuple[re.Pattern[str], str, str, bool], ...] = (
@@ -296,11 +261,8 @@ def _evidence(
 
 
 # ---------------------------------------------------------------------------
-# context and namespace resolution (ADR 13.3)
-# ---------------------------------------------------------------------------
 
 #: kubeconfig-derived answers change rarely and every helper needs them, so a
-#: short TTL cache keeps one kubectl probe from turning into a dozen.
 _PROBE_TTL_S = 60.0
 _probe_cache: dict[str, tuple[float, str]] = {}
 
@@ -318,12 +280,7 @@ def _cache_get(key: str) -> str | None:
 
 
 async def _probe_current_context(ctx: ToolContext) -> tuple[str, ExecutionRecord | None]:
-    """Ask kubectl which context is active.
-
-    This is the only command in the module that cannot carry ``--context``: it
-    exists precisely to discover the value everything else then states
-    explicitly.
-    """
+    """Ask kubectl which context is active."""
     key = _cache_key(ctx, "current-context")
     cached = _cache_get(key)
     if cached:
@@ -351,8 +308,7 @@ async def _probe_current_context(ctx: ToolContext) -> tuple[str, ExecutionRecord
 
 
 async def _resolve_context(ctx: ToolContext, requested: str | None) -> str:
-    """Explicit argument, then configured default, then session environment,
-    then the kubeconfig's current context."""
+    """Explicit argument, then configured default, then session environment, then the kubeconfig's current context."""
     if requested:
         return _safe_token(requested, "context")
     if ctx.settings.kubernetes.default_context:
@@ -410,8 +366,6 @@ async def _scope(ctx: ToolContext, args: _KubeArgs) -> tuple[str, str]:
     return context, namespace
 
 
-# ---------------------------------------------------------------------------
-# parsing helpers
 # ---------------------------------------------------------------------------
 
 
@@ -523,8 +477,6 @@ def _container_resources(container: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# pod and workload views
 # ---------------------------------------------------------------------------
 
 
@@ -669,8 +621,6 @@ def _workload_view(
 
 
 # ---------------------------------------------------------------------------
-# log summarisation (ADR 9.5 style grouping, applied to kubectl logs)
-# ---------------------------------------------------------------------------
 
 _LOG_TS = re.compile(r"^(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2}))\s+(.*)$")
 _ERROR_LINE = re.compile(
@@ -699,11 +649,7 @@ def _normalise_line(line: str) -> str:
 
 
 def _summarise_log_lines(lines: list[str], top_n: int = 5) -> dict[str, Any]:
-    """Line count, time span, and the most repeated error shapes.
-
-    The full body stays in the artifact store; this is the only part that is
-    allowed into the model context (ADR R7 context explosion).
-    """
+    """Line count, time span, and the most repeated error shapes."""
     first_ts: float | None = None
     last_ts: float | None = None
     groups: Counter[str] = Counter()
@@ -745,8 +691,6 @@ def _summarise_log_lines(lines: list[str], top_n: int = 5) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# typed inputs
 # ---------------------------------------------------------------------------
 
 
@@ -885,11 +829,7 @@ async def _run_one(
 async def _run_batch(
     ctx: ToolContext, commands: list[ProposedCommand]
 ) -> dict[str, ExecutionRecord]:
-    """Run read-only commands in parallel and key the results by command id.
-
-    ``run_many`` reorders anything that needs approval, so results are never
-    matched positionally.
-    """
+    """Run read-only commands in parallel and key the results by command id."""
     records = await _executor(ctx).run_many(
         commands, session_id=ctx.session_id, options=_exec_options(ctx)
     )
@@ -922,8 +862,6 @@ async def _fetch_pods(
     return pods, record
 
 
-# ---------------------------------------------------------------------------
-# read-only helpers (ADR 9.2, all R1)
 # ---------------------------------------------------------------------------
 
 
@@ -1308,23 +1246,7 @@ class FindWorkloadsArgs(BaseModel):
     tags=("kubernetes", "search"),
 )
 async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResult:
-    """Search by substring, deterministically.
-
-    This tool exists because it was missing. Asked for "any messaging outbound
-    pod inside dev in a cluster with ch1", MIMIR had no way to look across
-    namespaces at all: list_workloads takes one namespace, and when none is
-    given the kubeconfig supplies one. So the search ran in whatever namespace
-    the kubeconfig happened to bind, found nothing, and reported that no such
-    pod existed. Two of them were running.
-
-    The model's workaround was worse than the gap: it proposed
-    ``kubectl exec test-pod -- kubectl get pods --all-namespaces``, inventing a
-    pod name to exec into so it could run kubectl from inside the cluster.
-
-    Nothing here is decided by a model. The contexts come from the kubeconfig,
-    the match is a substring, and the ordering is stable, so the same question
-    returns the same answer.
-    """
+    """Search by substring, deterministically."""
     wanted = _safe_token(_as_fragment(args.name_contains), "name_contains").lower()
     contexts = await _matching_contexts(ctx, args.context_contains)
     if not contexts:
@@ -1333,10 +1255,7 @@ async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResul
             code="not_found",
         )
 
-    # Three columns, not the pod objects. A full -o json listing of every pod
-    # in a real cluster is four megabytes, the executor truncates it, the JSON
-    # no longer parses, and the tool reported every context as unreachable
-    # while answering "not found". Finding something does not need its spec.
+    # Three columns, not the pod objects.
     columns = (
         "NS:.metadata.namespace,NAME:.metadata.name,PHASE:.status.phase"
     )
@@ -1378,9 +1297,7 @@ async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResul
                 "phase": phase,
             })
 
-    # Absence and failure are different answers. Reporting "not found" when
-    # every query failed is the fail-open shape this project exists to remove:
-    # it reads as a fact about the estate and is a fact about the connection.
+    # Absence and failure are different answers.
     if unreachable and not rows and len(unreachable) == len(contexts):
         raise ToolError(
             f"every context searched was unreachable: {', '.join(unreachable)}. "
@@ -1389,7 +1306,6 @@ async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResul
         )
 
     # Stable ordering: the same question returns the same answer, and the first
-    # row is a defensible default for a follow-up.
     rows.sort(key=lambda r: (r["context"], r["namespace"], r["pod"]))
     shown = rows[: args.limit]
 
@@ -1429,27 +1345,14 @@ async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResul
 
 
 def _as_fragment(value: str | None) -> str:
-    """Normalise a name fragment the way names are actually written.
-
-    Operators and models both write "messaging outbound" for a workload called
-    messaging-outbound, and a substring search for a string with a space in it
-    can never match a pod name. Rejecting it was correct and useless: the run
-    that found this failed on the argument rather than on the question.
-    """
+    """Normalise a name fragment the way names are actually written."""
     if not value:
         return ""
     return "-".join(str(value).strip().lower().split())
 
 
 async def _matching_contexts(ctx: ToolContext, fragment: str | None) -> list[str]:
-    """Contexts containing every whitespace-separated fragment, sorted.
-
-    Every fragment, not any, because an operator naming two constraints has
-    narrowed twice. "ch1 dev" is a cluster family and an environment, and
-    matching either returned the production clusters for a request that said
-    dev. A read against the wrong environment is not harmless once someone
-    reads the logs it returns as if they came from the one they asked for.
-    """
+    """Contexts containing every whitespace-separated fragment, sorted."""
     fragments = [f for f in (fragment or "").lower().replace(",", " ").split() if f]
     if not fragments:
         return [await _resolve_context(ctx, None)]
@@ -1495,12 +1398,6 @@ async def get_logs(args: GetLogsArgs, ctx: ToolContext) -> ToolResult:
     target = _safe_token(args.target, "target")
 
     # "messaging-squad/messaging-router-abc" is how both operators and models
-    # write a pod, and it is not what kubectl means by a slash: it read the
-    # first segment as a resource kind, reported that no such kind exists, and
-    # ran against whatever namespace the kubeconfig had bound to the context.
-    # The namespace was never passed at all, and nothing said so. Refusing with
-    # the correction is deterministic; guessing which segment is a namespace is
-    # not.
     if "/" in target:
         kind = target.split("/", 1)[0].lower()
         if kind not in _LOG_KINDS:
@@ -1513,7 +1410,6 @@ async def get_logs(args: GetLogsArgs, ctx: ToolContext) -> ToolResult:
     tail = args.tail if args.tail is not None else ctx.settings.kubernetes.log_tail_lines
 
     # --timestamps is not optional here: the time span in the summary is derived
-    # from the line prefixes.
     log_args = ["logs", target, "--timestamps=true", f"--tail={int(tail)}"]
     if args.container:
         log_args += ["-c", _safe_token(args.container, "container")]
@@ -1539,10 +1435,7 @@ async def get_logs(args: GetLogsArgs, ctx: ToolContext) -> ToolResult:
         container=args.container,
         tool_name="get_logs",
     )
-    # The scope belongs in the failure text. This tool defaults the namespace
-    # from the kubeconfig when none is given, which is right, but a failure
-    # that does not name the namespace it actually used sends the reader
-    # looking in the namespace they meant instead of the one that was read.
+    # The scope belongs in the failure text.
     record = _require_ok(
         await _run_one(ctx, command),
         f"reading logs for {target} in {context}/{namespace}",
@@ -1659,8 +1552,7 @@ async def get_events(args: GetEventsArgs, ctx: ToolContext) -> ToolResult:
 
 
 def _event_last_seen(event: dict[str, Any]) -> float | None:
-    """Events changed shape between the core and events.k8s.io APIs, so several
-    fields have to be tried before an event is treated as undated."""
+    """Events changed shape between the core and events.k8s.io APIs, so several fields have to be tried before an event is treated as undated."""
     series = event.get("series") or {}
     for candidate in (
         event.get("lastTimestamp"),
@@ -1926,7 +1818,6 @@ async def get_rollout_status(args: RolloutStatusArgs, ctx: ToolContext) -> ToolR
     ref = f"{kind}/{name}"
 
     # --watch=false keeps this a bounded read instead of blocking until the
-    # rollout finishes.
     status_cmd = _build(
         ctx,
         args=["rollout", "status", ref, "--watch=false", f"--timeout={args.timeout_s}s"],
@@ -2130,8 +2021,6 @@ async def summarise_pod_health(args: PodHealthArgs, ctx: ToolContext) -> ToolRes
 
 
 # ---------------------------------------------------------------------------
-# elevated inspection (ADR 13.2 R2)
-# ---------------------------------------------------------------------------
 
 
 @tool(
@@ -2169,8 +2058,7 @@ async def exec_readonly(args: ExecReadonlyArgs, ctx: ToolContext) -> ToolResult:
         container=args.container,
         tool_name="exec_readonly",
     )
-    # No local allow list here. The classifier inspects the exec payload and the
-    # executor owns the approval gate.
+    # No local allow list here.
     record = await _run_one(ctx, command)
     _require_ok(record, f"exec into {pod}")
 
@@ -2210,8 +2098,6 @@ async def exec_readonly(args: ExecReadonlyArgs, ctx: ToolContext) -> ToolResult:
 
 
 # ---------------------------------------------------------------------------
-# mutations: prepare, then execute after approval (ADR 13.3)
-# ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True)
@@ -2226,14 +2112,11 @@ class _PreparedMutation:
 
 
 #: Prepared mutations awaiting execution, keyed by command id and scoped by
-#: session. Nothing here is approved; approval still happens in the executor.
 _PREPARED: dict[str, _PreparedMutation] = {}
 _PREPARED_TTL_S = 3600.0
 _MAX_PREPARED = 128
 
 #: Scope flags are re-injected from the resolved context, so any copy the model
-#: pasted into the command body is removed first to avoid a duplicate or a
-#: silent disagreement between the displayed target and the argv.
 _SCOPE_FLAGS = {"--context": "context", "-n": "namespace", "--namespace": "namespace"}
 
 
@@ -2404,7 +2287,6 @@ async def execute_approved_mutation(
         )
 
     # The executor evaluates policy, raises the approval, waits for a human, and
-    # re-classifies any edited argv. No approval logic belongs here.
     record = await _run_one(ctx, command, timeout_s=command.timeout_s)
     if entry is not None:
         entry.executed_at = time.time()

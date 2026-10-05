@@ -1,26 +1,4 @@
-"""Repository helpers (ADR 9.1), powering the workflows in ADR 5.2 and 5.3.
-
-Every helper here is read-only (RiskClass.R1) and answers a repository question
-with precise file and line-range citations, which is what ADR G2 demands of a
-repository investigation.
-
-Layout of this module:
-
-* :class:`RepositoryDirectory` - resolves a repository *name* to a path from
-  ``settings.repos.entries`` first, then from git checkouts discovered under
-  ``settings.repos.roots``. It is also the path-traversal guard: no helper is
-  allowed to touch a path outside the resolved repository root.
-* Search engine - ripgrep through :class:`~mimir.tools.exec.CommandExecutor`
-  when it is on PATH, with a pure-Python walk as the fallback. Both honour
-  ``settings.repos.ignore_globs`` and ``max_search_results``.
-* Language tables - definition and test-naming patterns applied on the Python
-  side, so the argv handed to ripgrep stays a plain word-boundary match.
-* The registered tools themselves.
-
-Repository content is untrusted data (ADR 13.5): file bodies are returned
-through :func:`~mimir.safety.injection.wrap_untrusted`, and bulk output goes to
-the artifact store so only a compact summary reaches the model (ADR R7).
-"""
+"""Repository helpers (ADR 9.1), powering the workflows in ADR 5.2 and 5.3."""
 
 from __future__ import annotations
 
@@ -53,8 +31,7 @@ log = get_logger(__name__)
 #: How deep to descend under ``repos.roots`` looking for git checkouts.
 _SCAN_MAX_DEPTH = 3
 
-#: Longest single matched line kept verbatim. Minified assets and generated
-#: fixtures otherwise dominate the context budget.
+# : Longest single matched line kept verbatim.
 _LINE_CHAR_LIMIT = 400
 
 #: Matches returned inline before the rest is left to the artifact.
@@ -63,24 +40,18 @@ _EVIDENCE_FILE_LIMIT = 12
 _EXCERPT_CHAR_LIMIT = 1200
 
 #: A definition or reference scan has to look at every occurrence of the symbol
-#: before it can tell definitions from usages, so its internal cap is a multiple
-#: of the caller's result cap.
 _SCAN_FACTOR = 12
 _SCAN_CEILING = 6000
 
 #: Repositories searched when the caller does not name one.
 _MULTI_REPO_LIMIT = 8
 
-#: Characters the deterministic policy treats as shell operators (ADR 13). An
-#: argv element containing one is refused outright, so any command carrying one
-#: is never sent to the executor: search falls back to Python, git reports it.
+# : Characters the deterministic policy treats as shell operators (ADR 13).
 _SHELL_OPERATOR = re.compile(r"(?<!\\)[;&|`$><]")
 
 _GIT_READ_SUBCOMMANDS = frozenset({"log", "blame", "show", "diff", "rev-parse", "ls-files"})
 
 
-# ---------------------------------------------------------------------------
-# Repository directory and the path-traversal guard
 # ---------------------------------------------------------------------------
 
 
@@ -175,17 +146,7 @@ class RepositoryDirectory:
         self._scanned = None
 
     def register_session(self, name: str, root: Path, description: str = "") -> None:
-        """Make a directory addressable by the repository tools for this process.
-
-        A task worktree is a real checkout but not a configured repository, so
-        ``resolve()`` refuses it - correctly, since the alternative is letting a
-        caller point a helper at arbitrary disk. Registering it explicitly keeps
-        that refusal intact while letting search, read and the language server
-        tools work on the tree the agent is actually editing.
-
-        Session entries lose to a configured entry of the same name, so this can
-        never quietly redirect a repository the operator named in config.
-        """
+        """Make a directory addressable by the repository tools for this process."""
         self._session[name.lower()] = ResolvedRepository(
             name=name,
             root=Path(root).resolve(),
@@ -227,7 +188,6 @@ class RepositoryDirectory:
             return exact
 
         # An absolute path is accepted only when it is a repository we already
-        # know about, so a caller cannot point a helper at arbitrary disk.
         candidate = Path(os.path.expanduser(wanted))
         if candidate.is_absolute():
             try:
@@ -251,12 +211,7 @@ class RepositoryDirectory:
     def safe_path(
         self, repo: ResolvedRepository, relative: str, *, must_exist: bool = True
     ) -> Path:
-        """Resolve a repo-relative path and refuse anything outside the root.
-
-        ``resolve()`` collapses ``..`` and follows symlinks before the check, so
-        neither a traversal string nor a symlink pointing out of the tree can
-        escape.
-        """
+        """Resolve a repo-relative path and refuse anything outside the root."""
         cleaned = (relative or "").strip().lstrip("/")
         if not cleaned:
             raise ToolError("path must not be empty", code="invalid_path")
@@ -292,15 +247,12 @@ def reset_repository_directory() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Glob and file helpers
-# ---------------------------------------------------------------------------
 
 
 def _glob_match(rel: str, pattern: str) -> bool:
     if fnmatch.fnmatch(rel, pattern):
         return True
     # fnmatch needs a literal separator for the leading "**/", so a pattern such
-    # as "**/*.lock" would otherwise miss a file sitting at the repository root.
     return pattern.startswith("**/") and fnmatch.fnmatch(rel, pattern[3:])
 
 
@@ -341,7 +293,6 @@ def _walk_files(
         for name in dirnames:
             rel_child = f"{rel_dir}/{name}" if rel_dir else name
             # "**/node_modules/**" only matches something *inside* the directory,
-            # so probe with a synthetic child to decide whether to descend.
             if name == ".git" or _matches_any(f"{rel_child}/_", ignore_globs):
                 continue
             if (base / name).is_symlink():
@@ -368,8 +319,6 @@ def _looks_like_path(value: str) -> bool:
     return "/" in value or value.endswith(tuple(_EXTENSION_LANGUAGE))
 
 
-# ---------------------------------------------------------------------------
-# Search engine: ripgrep first, pure Python fallback
 # ---------------------------------------------------------------------------
 
 
@@ -582,13 +531,6 @@ async def _search_repo(
 
 
 # ---------------------------------------------------------------------------
-# Language tables
-#
-# Definition patterns are applied on the Python side to lines ripgrep already
-# found with a plain word-boundary match. Keeping them out of argv means they
-# can use alternation freely without tripping the shell-operator check, and it
-# keeps the ripgrep and fallback paths behaviourally identical.
-# ---------------------------------------------------------------------------
 
 
 LANGUAGE_EXTENSIONS: dict[str, tuple[str, ...]] = {
@@ -748,8 +690,6 @@ def _language_globs(languages: Sequence[str]) -> tuple[str, ...]:
 
 
 # ---------------------------------------------------------------------------
-# Evidence and artifact helpers
-# ---------------------------------------------------------------------------
 
 
 def _store_artifact(
@@ -845,8 +785,6 @@ async def _target_repos(
 
 
 # ---------------------------------------------------------------------------
-# list_repositories
-# ---------------------------------------------------------------------------
 
 
 class ListRepositoriesInput(BaseModel):
@@ -897,8 +835,6 @@ async def list_repositories(args: ListRepositoriesInput, ctx: ToolContext) -> To
     )
 
 
-# ---------------------------------------------------------------------------
-# search_repository
 # ---------------------------------------------------------------------------
 
 
@@ -1014,8 +950,6 @@ async def search_repository(args: SearchRepositoryInput, ctx: ToolContext) -> To
     )
 
 
-# ---------------------------------------------------------------------------
-# find_symbol and find_references
 # ---------------------------------------------------------------------------
 
 
@@ -1256,8 +1190,6 @@ async def find_references(args: FindReferencesInput, ctx: ToolContext) -> ToolRe
 
 
 # ---------------------------------------------------------------------------
-# read_file_range
-# ---------------------------------------------------------------------------
 
 
 class ReadFileRangeInput(BaseModel):
@@ -1350,8 +1282,6 @@ async def read_file_range(args: ReadFileRangeInput, ctx: ToolContext) -> ToolRes
     )
 
 
-# ---------------------------------------------------------------------------
-# inspect_git_history
 # ---------------------------------------------------------------------------
 
 
@@ -1576,8 +1506,6 @@ async def inspect_git_history(args: InspectGitHistoryInput, ctx: ToolContext) ->
 
 
 # ---------------------------------------------------------------------------
-# locate_tests
-# ---------------------------------------------------------------------------
 
 
 def _test_globs(languages: Sequence[str]) -> tuple[str, ...]:
@@ -1727,8 +1655,6 @@ async def locate_tests(args: LocateTestsInput, ctx: ToolContext) -> ToolResult:
 
 
 # ---------------------------------------------------------------------------
-# build_import_graph
-# ---------------------------------------------------------------------------
 
 
 _PY_IMPORT = re.compile(r"^\s*import\s+([\w\.]+)")
@@ -1835,7 +1761,6 @@ def _resolve_python(root: Path, from_path: Path, spec: str) -> Path | None:
                 base.joinpath(*parts, "__init__.py"),
             ]
             # "from pkg.mod import Symbol" gives a module path ending in a symbol
-            # only when the trailing element is not itself a module.
             if len(parts) > 1:
                 candidates.append(base.joinpath(*parts[:-1]).with_suffix(".py"))
     return _first_existing(root, [c for c in candidates if c.suffix or c.name])
@@ -2095,13 +2020,8 @@ async def build_import_graph(args: BuildImportGraphInput, ctx: ToolContext) -> T
 
 
 # ---------------------------------------------------------------------------
-# Flow evidence (ADR 9.1, 5.3)
-# ---------------------------------------------------------------------------
 
-#: Ordered stages of a typical request flow. Each entry is (stage label, regexes
-#: that suggest a file or symbol belongs to that stage). The ordering is what
-#: turns a pile of matches into the ordered flow ADR 5.3 asks for: where an event
-#: enters, which handler receives it, what is called next, and where state lands.
+# : Ordered stages of a typical request flow.
 _FLOW_STAGES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "entrypoint",
@@ -2136,9 +2056,7 @@ _FLOW_STAGES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
 )
 
-#: Patterns that reveal failure handling on a path. ADR 5.3 asks "what happens on
-#: timeout" and "which branch is selected by this flag", so those are searched
-#: for explicitly rather than left to the model to notice.
+# : Patterns that reveal failure handling on a path.
 _FLOW_BEHAVIOUR_PATTERNS: tuple[tuple[str, str], ...] = (
     ("timeout", r"(?i)\btimeout|deadline|context\.WithTimeout|SetTimeout|read_timeout"),
     ("retry", r"(?i)\bretry|retries|backoff|maxattempts|max_attempts"),
@@ -2201,8 +2119,7 @@ async def build_flow_evidence(args: BuildFlowEvidenceInput, ctx: ToolContext) ->
     entry_rel = args.entrypoint.strip()
     resolution_note = ""
     if not (repo.root / entry_rel).is_file():
-        # The caller gave a symbol rather than a path. Locate its definition and
-        # start the walk from the file that defines it.
+        # The caller gave a symbol rather than a path.
         matches, _truncated, _langs = await _symbol_occurrences(
             ctx, [repo], entry_rel, globs=(), scan_limit=_SCAN_CEILING, context_lines=0
         )
@@ -2241,9 +2158,6 @@ async def build_flow_evidence(args: BuildFlowEvidenceInput, ctx: ToolContext) ->
     behaviours: dict[str, list[dict[str, Any]]] = {}
     if args.behaviours and graph.nodes:
         # A graph node can be a directory rather than a file: Go and Java
-        # imports name a package, which resolves to a directory. Searching the
-        # bare directory path as a glob matches nothing, so directories are
-        # expanded to cover the files inside them.
         scoped: list[str] = []
         for node in list(graph.nodes)[: args.max_nodes]:
             scoped.append(f"{node}/**" if (repo.root / node).is_dir() else node)

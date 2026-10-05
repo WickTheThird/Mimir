@@ -1,17 +1,4 @@
-"""Lifecycle hooks (ADR 10.4).
-
-Hook points mirror the ADR list: before/after tool execution, before/after
-mutation, on approval request, on session completion, on memory promotion, and
-on web content ingestion.
-
-A hook may reject a call, annotate audit metadata, redact output, or demand an
-extra approval. Hooks are ordinary Python callables registered in process, plus
-optional external commands configured in ``hooks.yaml`` under ``$MIMIR_HOME``.
-
-Ordering guarantee: hooks run in registration order, and a rejection short
-circuits the rest. External command hooks are awaited, never fire-and-forget,
-because a hook that has not finished has not enforced anything.
-"""
+"""Lifecycle hooks (ADR 10.4)."""
 
 from __future__ import annotations
 
@@ -152,16 +139,7 @@ class HookManager:
         self._external[hook.event].append(hook)
 
     def load_config(self, path: Path | None = None) -> int:
-        """Load external hooks from ``$MIMIR_HOME/hooks.yaml``.
-
-        Shape::
-
-            hooks:
-              before_mutation:
-                - name: notify
-                  command: /usr/local/bin/notify-oncall
-                  blocking: false
-        """
+        """Load external hooks from ``$MIMIR_HOME/hooks.yaml``."""
         config_path = path or (self.settings.home / "hooks.yaml")
         if not config_path.is_file():
             return 0

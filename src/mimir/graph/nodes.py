@@ -1,15 +1,4 @@
-"""Graph nodes (ADR 6.2 C2, 7.2).
-
-The council decision pattern from ADR 7.2 maps onto these nodes:
-
-    resolve_context -> recall_memory -> coordinate -> select_skills
-        -> [fan out: specialists in parallel] -> gather
-        -> verify -> safety_review -> synthesise -> curate_memory
-
-Every node takes and returns a :class:`~mimir.graph.state.GraphState` slice.
-Nodes never execute commands directly; specialists do that through typed tools,
-which route through the policy engine.
-"""
+"""Graph nodes (ADR 6.2 C2, 7.2)."""
 
 from __future__ import annotations
 
@@ -62,9 +51,7 @@ from mimir.verify.sufficiency import (
 log = get_logger(__name__)
 
 
-#: Task types that can be answered without a full council pass. Routing them
-#: straight to one specialist is the ADR 7.2 note that two well-scoped steps beat
-#: six vague ones, and it keeps command completion fast (ADR R6).
+# : Task types that can be answered without a full council pass.
 DIRECT_ROUTES: dict[TaskType, SpecialistName] = {
     TaskType.COMMAND_CONSTRUCTION: SpecialistName.KUBERNETES_INVESTIGATOR,
     TaskType.MEMORY_LOOKUP: SpecialistName.MEMORY_CURATOR,
@@ -73,12 +60,7 @@ DIRECT_ROUTES: dict[TaskType, SpecialistName] = {
 
 
 class SkillAccess:
-    """Thin, failure-tolerant adapter over the skills subsystem.
-
-    Nodes should not be littered with try/except around skill lookups, and a
-    malformed skill on disk must never take an investigation down. Every method
-    here degrades to an empty result and logs instead of raising.
-    """
+    """Thin, failure-tolerant adapter over the skills subsystem."""
 
     def __init__(self, registry: Any) -> None:
         self.registry = registry
@@ -98,13 +80,7 @@ class SkillAccess:
             return ""
 
     def select(self, request: str, specialist: SpecialistName | None = None) -> list[str]:
-        """Skill names for a request.
-
-        registry.select returns SkillSelection wrappers (skill, score, matched,
-        explicit), not Skill objects. Unwrapping here keeps the wrapper shape
-        out of the graph: reaching for .name on a selection is what silently
-        disabled automatic skill selection.
-        """
+        """Skill names for a request."""
         try:
             selections = self.registry.select(request, specialist=specialist)
         except Exception as exc:  # noqa: BLE001
@@ -136,11 +112,7 @@ class SkillAccess:
             skill = self.registry.get(name)
             if skill is None:
                 return None
-            # The names, not the specs. available_tools() narrows by name and
-            # puts what it is given into a set, so handing it ToolSpec objects
-            # raised "unhashable type: ToolSpec" on every specialist step that
-            # a skill narrowed. ToolPermissions carries a names property for
-            # exactly this and the call site reached past it.
+            # The names, not the specs.
             return self.runner.permitted_tools(skill, specialist).names
         except Exception as exc:  # noqa: BLE001
             log.warning("skill_tool_filter_failed", skill=name, error=str(exc))
@@ -168,8 +140,7 @@ class NodeDeps:
         self.council: dict[SpecialistName, Specialist] = build_council(
             registry=self.registry, router=self.router
         )
-        # The closed-set decision model (ADR-004 tier 2). NoDecider when not
-        # configured, and every caller falls back to what it did before.
+        # The closed-set decision model (ADR-004 tier 2).
         self.decider: Any = decider if decider is not None else build_decider(
             get_settings(), router=self.router
         )
@@ -179,18 +150,10 @@ class NodeDeps:
 
 
 # ---------------------------------------------------------------------------
-# 1. Context resolution
-# ---------------------------------------------------------------------------
 
 
 async def resolve_context(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
-    """Fill in the operating context from the shell and config (ADR 5.1 step 1).
-
-    Anything the user stated explicitly wins. This only supplies defaults, and it
-    never guesses a namespace: an unresolved namespace must surface as a question
-    rather than as a silent default, because the wrong namespace is how the wrong
-    cluster gets touched.
-    """
+    """Fill in the operating context from the shell and config (ADR 5.1 step 1)."""
     session = state["session"]
     settings = deps.tool_context.settings
     discovered = EnvironmentContext(
@@ -226,17 +189,10 @@ async def resolve_context(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 2. Memory recall
-# ---------------------------------------------------------------------------
 
 
 async def recall_memory(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
-    """Retrieve curated knowledge before planning (ADR G5, 11.4).
-
-    Memory informs the plan but never outranks live evidence. Retrieved notes
-    enter as evidence with their real source type and freshness, so the trust
-    ladder in ADR 11.4 does the ranking rather than recency of retrieval.
-    """
+    """Retrieve curated knowledge before planning (ADR G5, 11.4)."""
     session = state["session"]
     spec = deps.registry.get("search_memory")
     if spec is None:
@@ -258,21 +214,12 @@ async def recall_memory(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 3. Coordination
-# ---------------------------------------------------------------------------
 
 
 async def resolve_target(
     session: InvestigationState, store: Any, decider: Any
 ) -> dict[str, Any]:
-    """Bind the workload the operator named to where it actually lives.
-
-    ADR-004 step 3. Order of authority: nothing named, nothing to do; the
-    operator already scoped it, respect that; the store has seen exactly one
-    thing by that name, bind it (a computed fact); the store has seen several,
-    the candidate set is closed and small, ask the decision model to pick or
-    to say the operator must; the store has seen none, leave it to the plan.
-    """
+    """Bind the workload the operator named to where it actually lives."""
     from mimir.agent.request import parse_request
 
     parsed = parse_request(session.user_request)
@@ -350,8 +297,6 @@ async def coordinate(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
         + ", ".join(s.value for s in SpecialistName if s != SpecialistName.COORDINATOR)
     )
     # Rows that produced confident answers for this shape before (plan step
-    # 8 feeding step 11). Advice to the planner, not a rule: the table has
-    # data behind it now, and the coordinator should see it.
     from mimir.council.table import preferred_for
 
     preferred = preferred_for(str(session.task_type or ""), deps.tool_context.settings)
@@ -359,9 +304,7 @@ async def coordinate(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
         extra.append("Specialists that answered this kind of question confidently before: "
                      + ", ".join(preferred[:4]))
 
-    # Cheapest possible path first. A greeting needs no context resolution, no
-    # classification, no specialists and no synthesis; running them cost over a
-    # minute and routed "hello" to the Kubernetes investigator.
+    # Cheapest possible path first.
     verdict = triage(session.user_request)
     if verdict.cheap:
         session.task_type = TaskType.GENERAL_QUESTION
@@ -385,8 +328,7 @@ async def coordinate(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     )
     session.metadata["target"] = target
     if target.get("status") == "ambiguous":
-        # A computed ambiguity is a question, not a plan. Asking now costs one
-        # round trip; guessing costs a command on the wrong namespace.
+        # A computed ambiguity is a question, not a plan.
         return {
             "session": session,
             "pending_steps": [],
@@ -434,12 +376,7 @@ async def coordinate(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
 
 
 def _fallback_plan(session: InvestigationState) -> CoordinatorPlan:
-    """Used when the model cannot produce a valid plan.
-
-    Failing to plan must not fail the investigation. A single broad repository
-    or log step still produces something the operator can use, and the failure
-    is reported rather than hidden.
-    """
+    """Used when the model cannot produce a valid plan."""
     request = session.user_request.lower()
     if any(word in request for word in ("timeout", "timing out", "latency", "slow", "restart")):
         specialist = SpecialistName.LOG_ANALYST
@@ -497,18 +434,10 @@ async def ask_user(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 4. Skills
-# ---------------------------------------------------------------------------
 
 
 async def select_skills(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
-    """Load the bodies of the selected skills only (ADR 10.2 progressive disclosure).
-
-    Level 1 (name plus description) was already in the coordinator's context as a
-    catalogue. This node performs the level-2 load, and only for the skills the
-    plan actually chose. References and scripts stay unloaded until a skill body
-    asks for them by name.
-    """
+    """Load the bodies of the selected skills only (ADR 10.2 progressive disclosure)."""
     session = state["session"]
     if deps.skills is None:
         return {"route": "dispatch"}
@@ -532,8 +461,6 @@ async def select_skills(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# 5. Specialist fan-out
 # ---------------------------------------------------------------------------
 
 
@@ -585,8 +512,6 @@ async def run_specialist_step(payload: StepPayload, deps: NodeDeps) -> dict[str,
 
 
 # ---------------------------------------------------------------------------
-# 6. Gather, verify, review
-# ---------------------------------------------------------------------------
 
 
 async def gather(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
@@ -630,28 +555,12 @@ NEXT_CHOICE = Choice(
         "without which no check can proceed."
     ),
 )
-"""ADR-004 step 2, ADR-003 phase 3. The recurrence the graph never had.
-
-An investigation that cannot act on what it just found is a checklist. This
-is the one decision that turns the checklist into a loop, and it is a
-closed-set choice with no prose in it, which is why it goes to the decision
-model and not to a prompt.
-"""
+"""ADR-004 step 2, ADR-003 phase 3."""
 
 
 def _progress(session: InvestigationState, round_number: int) -> tuple[int, int]:
-    """(new evidence this round, total). The no-progress measure of phase 1.
-
-    Computed, not judged. A round that added nothing is a round the loop must
-    not repeat, whatever the model would have chosen, because the next round
-    would see the same evidence and choose the same thing.
-    """
-    # Observed evidence only. On the first measured run every "new" item
-    # across three rounds was a memory-note retrieval: the offline specialists
-    # can only recall, each round recalled more, the count never reached zero
-    # and the decision model, shown "28 new items", said continue at p=0.92.
-    # A recall is not the world changing. Progress is a tool observing
-    # something it had not observed before.
+    """(new evidence this round, total)."""
+    # Observed evidence only.
     seen_key = "evidence_seen_by_round"
     history: dict[str, int] = session.metadata.setdefault(seen_key, {})
     total = sum(1 for e in session.evidence if e.kind == EvidenceKind.OBSERVED)
@@ -689,12 +598,7 @@ PREDICTION_CHOICE = Choice(
         "this round speaks to it."
     ),
 )
-"""ADR-003 phase 5, plan step 7. A hypothesis states what the next check
-should show (its next_check). After a round, each open one is scored
-against the new evidence, and its likelihood moves. A contradicted
-hypothesis loses rank without a model being asked to notice, which is the
-mechanism by which an investigation knows it is wrong before the harness
-says so."""
+"""ADR-003 phase 5, plan step 7."""
 
 
 async def _score_predictions(
@@ -744,12 +648,7 @@ async def _score_predictions(
 
 
 def _record_round(session: InvestigationState, round_number: int, new: int) -> None:
-    """State without the transcript (ADR-003 phase 2, smallest form).
-
-    One record per round: which observations arrived, which claims the
-    specialists made and on what evidence, which hypotheses are open at what
-    likelihood. The next round reads this, not the messages.
-    """
+    """State without the transcript (ADR-003 phase 2, smallest form)."""
     rounds: list[dict[str, Any]] = session.metadata.setdefault("rounds", [])
     recent = session.evidence[-new:] if new else []
     rounds.append({
@@ -765,14 +664,7 @@ def _record_round(session: InvestigationState, round_number: int, new: int) -> N
 
 
 async def assess(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
-    """Decide conclude / continue / ask after a round, by policy first.
-
-    Order of authority, as everywhere in ADR-004: computed facts stop the loop
-    before any model is asked. The round cap and the no-progress measure are
-    the stop policy. Only inside those bounds is the decision model asked, and
-    with no decision model configured the graph behaves exactly as before:
-    one round, then conclude.
-    """
+    """Decide conclude / continue / ask after a round, by policy first."""
     session = state["session"]
     round_number = int(state.get("round", 0))
     max_rounds = deps.tool_context.settings.graph.max_specialist_rounds
@@ -832,13 +724,7 @@ async def assess(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
 
 
 async def replan(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
-    """Ask the coordinator for the next steps given what was found.
-
-    The plan is a tier-3 artefact: which specialist, with what objective, is
-    open prose. The decision to plan again was tier 2 and has already been
-    made. Steps that repeat a completed objective are dropped, so a
-    coordinator that proposes the same check twice cannot make the loop spin.
-    """
+    """Ask the coordinator for the next steps given what was found."""
     session = state["session"]
     asking = state.get("route") == "replan_ask"
     done = {(r.specialist, r.objective.strip().lower()) for r in session.reports}
@@ -865,10 +751,7 @@ async def replan(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
         return {"session": session, "pending_steps": [], "route": "safety_review",
                 "notes": ["replan failed; concluding on what was gathered"]}
 
-    # No fallback step on a replan. The first plan gets one because failing
-    # to plan must not fail the investigation; here an empty plan means the
-    # coordinator found nothing more to check, and inventing a broad step in
-    # its place is how a loop spins on its own first question.
+    # No fallback step on a replan.
     steps = [
         st for st in (_sanitise_steps(plan.steps, session) if plan.steps else [])
         if (st.specialist, st.objective.strip().lower()) not in done
@@ -904,15 +787,7 @@ CONFLICT_CHOICE = Choice(
         "answer different questions and neither confirms nor denies the other."
     ),
 )
-"""ADR-004 step 4. The verify node's generative call, replaced.
-
-The behaviour verifier was asked, in open prose, to attack the conclusions.
-Its output was a report whose contradictions field was read by a rule. Two
-closed-set questions carry the same information and cannot wander: is this
-enough, and do these agree. They are also where pair consistency is
-decided, because "does the answer change when the fact changes" is exactly
-"is this evidence sufficient for that claim".
-"""
+"""ADR-004 step 4."""
 
 
 def _verify_context(session: InvestigationState, reports: list[SpecialistReport]) -> str:
@@ -929,16 +804,7 @@ def _verify_context(session: InvestigationState, reports: list[SpecialistReport]
 
 
 async def verify(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
-    """Behaviour verification (ADR 7.2 step 5), as two decisions.
-
-    With a decision model: sufficiency and conflict are decided over the
-    findings and evidence, logged, and applied mechanically. An insufficient
-    verdict records what is missing as an open question and lowers report
-    confidence; a contradiction is recorded as a disagreement, never
-    smoothed away (ADR 7.2). No generative call is made.
-
-    Without one: the previous behaviour, one generative verifier pass.
-    """
+    """Behaviour verification (ADR 7.2 step 5), as two decisions."""
     session = state["session"]
     reports = [r for r in state.get("reports", []) if not r.failed]
     if not reports:
@@ -1001,11 +867,7 @@ async def verify(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
 
 
 async def safety_review(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
-    """Safety and Command Reviewer pass (ADR 7.1 S9, 7.2 step 6).
-
-    Skipped entirely when nothing was proposed, because reviewing an empty list
-    burns a model call for no benefit.
-    """
+    """Safety and Command Reviewer pass (ADR 7.1 S9, 7.2 step 6)."""
     session = merge_into_session(state)
     commands = session.commands_planned
     if not commands:
@@ -1033,8 +895,6 @@ async def safety_review(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# 7. Synthesis and memory curation
 # ---------------------------------------------------------------------------
 
 
@@ -1081,10 +941,6 @@ async def synthesise(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     answer.disagreements = list(dict.fromkeys([*answer.disagreements, *disagreements]))
 
     # The blanket citation attach that used to live here bolted the top ten
-    # evidence citations onto any answer that returned none, regardless of what
-    # it claimed. That is citation as ornament: it satisfied a presence check
-    # while carrying no relationship to the text. Support is now resolved
-    # per claim instead.
     answer = await _enforce_claim_support(answer, session, synth, extra)
     answer = await _enforce_sufficiency(answer, session, deps)
     answer = _enforce_grounding(answer, session)
@@ -1103,16 +959,7 @@ async def _enforce_claim_support(
     synth: Any,
     extra: list[str],
 ) -> FinalAnswer:
-    """Resolve every stated fact against evidence, deterministically.
-
-    One repair attempt, then mechanical demotion. Repairing more than once
-    invites the model to keep rewording until something passes, which optimises
-    the checker rather than the answer, and costs a model call per attempt.
-
-    The check itself never consults a model. That is the point of the exercise:
-    the components of MIMIR that are already deterministic are the only ones
-    that do not change their mind between identical runs.
-    """
+    """Resolve every stated fact against evidence, deterministically."""
     support = check_answer(answer, session.evidence)
     session.metadata["claim_support"] = {
         "factual_claims": support.total,
@@ -1173,12 +1020,7 @@ RETRIEVAL_CHOICE = Choice(
         "or produced no listing at all."
     ),
 )
-"""ADR-004 step 1. The first decision moved out of the generative model.
-
-It was a regex before, and the regex read a runbook that discusses timeouts
-as a report of one. Whether a search failed is a judgement over text with
-three possible answers, which is the shape a decision model exists for.
-"""
+"""ADR-004 step 1."""
 
 
 def _listing_noun(request: str) -> str:
@@ -1190,13 +1032,7 @@ def _listing_noun(request: str) -> str:
 
 
 def _acted_on(verdict: Any) -> bool:
-    """Whether a verdict clears the floor to be acted on.
-
-    The margin floor applies to every verdict, calibrated or not: a win by a
-    nose is not a decision, and an uncalibrated argmax at 0.58 over three
-    options is close to noise. The probability floor applies only when the
-    number means something.
-    """
+    """Whether a verdict clears the floor to be acted on."""
     config = get_settings().decisions
     if verdict.margin < config.min_margin:
         return False
@@ -1204,12 +1040,7 @@ def _acted_on(verdict: Any) -> bool:
 
 
 def _execution_counts(session: InvestigationState) -> tuple[int, int, int]:
-    """(failed, empty, observed) from the commands that actually ran.
-
-    An exit code is not prose and cannot be misread. When any of these is
-    non-zero the decision model is not consulted, because a computed fact
-    outranks a judged one (ADR-004 tier 1 before tier 2).
-    """
+    """(failed, empty, observed) from the commands that actually ran."""
     failed = empty = observed = 0
     for record in session.commands_executed:
         code = record.exit_code
@@ -1227,12 +1058,7 @@ def _execution_counts(session: InvestigationState) -> tuple[int, int, int]:
 async def _decide_retrieval(
     session: InvestigationState, deps: Any
 ) -> Retrieval | None:
-    """Ask the decision model, and log the decision whatever it says.
-
-    The log is the point as much as the verdict. Every decision with its
-    context is a calibration sample once the outcome is known, and it is the
-    experience the roadmap thesis says the system should accumulate.
-    """
+    """Ask the decision model, and log the decision whatever it says."""
     decider = getattr(deps, "decider", None)
     context = "\n".join(
         [
@@ -1262,29 +1088,13 @@ async def _decide_retrieval(
         }
     )
     # A calibrated verdict below the floor is logged and not used: the
-    # model's own uncertainty is the reason to have a calibrated one. An
-    # uncalibrated verdict has no floor to fall below, so its choice stands
-    # on the closed-set guarantee alone.
     return Retrieval(verdict.choice) if acted else None
 
 
 async def _enforce_sufficiency(
     answer: FinalAnswer, session: InvestigationState, deps: Any = None
 ) -> FinalAnswer:
-    """Refuse definite existence claims that outrun the search behind them.
-
-    The claim gate above asks whether each stated fact resolves to evidence.
-    It cannot catch this one, because "there is no billing pod" is a claim
-    about the *absence* of evidence and resolves to nothing by construction.
-    An answer that asserts absence after every cluster timed out passes the
-    claim gate cleanly, which is how the failure survived every model size
-    measured.
-
-    Three sources for the retrieval verdict, in order of authority: the exit
-    codes of commands that ran; the decision model over the operator's own
-    statement and the recorded failures; and only then the text patterns,
-    which stay for a machine with no decision model configured.
-    """
+    """Refuse definite existence claims that outrun the search behind them."""
     failed, empty, observed = _execution_counts(session)
     retrieval: Retrieval | None = None
     source = "text"
@@ -1292,11 +1102,7 @@ async def _enforce_sufficiency(
         retrieval = classify_retrieval(failed=failed, empty=empty, observed=observed)
         source = "executions"
     else:
-        # The operator's own explicit words outrank a judged verdict. "No
-        # listing was produced" is not a judgement call, and on the first
-        # measured run a 4B decider read it as "observed" at p=0.58. The
-        # decision model is for the residual: a statement that says nothing
-        # explicit about whether the looking succeeded.
+        # The operator's own explicit words outrank a judged verdict.
         stated = classify_retrieval(observations=session.user_request,
                                     risks="\n".join(session.risks))
         if stated is not Retrieval.UNKNOWN:
@@ -1334,9 +1140,6 @@ async def _enforce_sufficiency(
     demoted += led
 
     # Staleness is the same question asked of time rather than of reach: is
-    # what this rests on good enough to state as current? A note nobody has
-    # verified in fourteen months was treated exactly like one verified three
-    # days ago on every model measured.
     currency = classify_currency(
         observations=session.user_request,
         freshness=[str(e.freshness) for e in session.evidence],
@@ -1360,25 +1163,11 @@ async def _enforce_sufficiency(
 
 
 _STALE_AFTER_DAYS_DEFAULT = 180
-"""Mirrors config.knowledge.stale_after_days so the fallback is the real
-default rather than a number invented at the call site.
-
-The first version of this reached for ``settings.memory.stale_after_days``,
-which does not exist. getattr returned the literal written beside it and the
-gate ran on a 30-day window with nothing logged. Wrong config paths that fall
-back quietly are the same shape as the nine defects already catalogued here:
-the working path and the broken path produce identical output.
-"""
+"""Mirrors config.knowledge.stale_after_days so the fallback is the real default rather than a number invented at the call site."""
 
 
 def _stale_after_days() -> int:
-    """The configured freshness window.
-
-    A verification gate that crashes the run it protects has made things worse
-    than the bug it was added for, so a settings failure falls back rather than
-    raising. It says so in the log, because a silent fallback is what this
-    comment is about.
-    """
+    """The configured freshness window."""
     try:
         from mimir.config import get_settings
 
@@ -1390,17 +1179,7 @@ def _stale_after_days() -> int:
 
 
 def _enforce_grounding(answer: FinalAnswer, session: InvestigationState) -> FinalAnswer:
-    """Did the answer name anything nobody read?
-
-    The agent loop has run this check for some time. The investigation graph,
-    which is the path the ops corpus exercises, did not. An answer naming pods
-    that appear in no listing scored as an ordinary answer on every model size
-    measured.
-
-    What the operator asked is part of the ground truth. Repeating back a
-    workload name they supplied is not an invention, and flagging it would
-    teach them to ignore the warning.
-    """
+    """Did the answer name anything nobody read?"""
     observed = "\n".join(
         [
             *(e.excerpt for e in session.evidence[:40]),
@@ -1435,18 +1214,7 @@ def _enforce_grounding(answer: FinalAnswer, session: InvestigationState) -> Fina
 def _enforce_retry_signature(
     answer: FinalAnswer, session: InvestigationState
 ) -> FinalAnswer:
-    """Withdraw a retry diagnosis the timing does not show.
-
-    Retries with backoff leave the same identifier several times with the gap
-    between attempts roughly doubling. Shown a single request and a batch job
-    that opened four hundred connections, every model measured still blamed
-    retries, which makes the diagnosis uninformative: it appears whether or
-    not the pattern is there.
-
-    One-directional. A present signature is consistent with retries causing
-    the incident and does not establish it, so a match never raises
-    confidence. Only the absence demotes.
-    """
+    """Withdraw a retry diagnosis the timing does not show."""
     if not claims_retries(answer.answer or ""):
         return answer
     observations = "\n".join(
@@ -1580,9 +1348,7 @@ async def finalise(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
     hooks = deps.tool_context.hooks
     if hooks is not None:
         await hooks.on_session_complete(session)
-    # What the organisation keeps from this session (plan step 8). Derived
-    # from the session, never blocking it, and never promoted without a
-    # person: the corpus draft is a file for someone to accept or reject.
+    # What the organisation keeps from this session (plan step 8).
     try:
         from mimir.knowledge.experience import get_experience_store, write_corpus_draft
 
@@ -1615,18 +1381,10 @@ async def finalise(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
 
 
 def _harvest_executions(session: InvestigationState, deps: NodeDeps) -> None:
-    """Pull this session's executed commands into the durable state.
-
-    Typed helpers execute through the shared CommandExecutor and return a
-    ToolResult; the ExecutionRecord itself stays in the executor. Collecting it
-    here is what makes the audit trail real rather than nominal, and it has to
-    happen before the session is persisted.
-    """
+    """Pull this session's executed commands into the durable state."""
     executor = getattr(deps.tool_context, "executor", None)
     if executor is None or not hasattr(executor, "history_for"):
         return
@@ -1638,22 +1396,7 @@ def _harvest_executions(session: InvestigationState, deps: NodeDeps) -> None:
 
 
 def _harvest_model_calls(session: InvestigationState, deps: NodeDeps) -> int:
-    """Copy this session's model invocations onto the state for persistence.
-
-    Returns the number observed. The router counts invocations at the call site
-    (`invocations_attempted`); this counts what was attributable to this
-    session. The persistence layer then writes them in the same transaction as
-    the session row, so the telemetry invariant
-
-        model invocations observed == model-call records persisted
-
-    can be asserted without depending on the order two writers happen to run in.
-
-    The first attempt wrote directly to the repository from here and failed the
-    session_id foreign key on every row, because the session is not on disk yet
-    at this point. That produced observed=9, persisted=0 - visible only because
-    the invariant was added at the same time as the instrumentation.
-    """
+    """Copy this session's model invocations onto the state for persistence."""
     router = getattr(deps, "router", None)
     if router is None:
         return 0

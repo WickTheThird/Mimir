@@ -1,21 +1,4 @@
-"""Markdown memory store (ADR 11.1 layers, 11.2 layout, 11.3 metadata, G5).
-
-Every unit of curated knowledge is a Markdown file on disk with optional YAML
-frontmatter. Nothing here is a database: the files are the source of truth so
-they stay diffable, reviewable, and editable without MIMIR running.
-
-Three ideas carry the module:
-
-* :class:`MemoryLayer` maps a directory under ``knowledge/`` to one of the ADR
-  11.1 layers, and each layer maps onto a :class:`SourceType` so retrieval can
-  rank documents with the ADR 11.4 trust ladder already encoded in
-  :data:`mimir.models.evidence.TRUST_ORDER`.
-* :class:`DocumentMetadata` is the ADR 11.3 frontmatter, parsed leniently and
-  written back in a stable field order.
-* :func:`compute_freshness` turns ``last_verified`` and ``expires_after`` into a
-  :class:`Freshness` value. ADR R2 asks for visible freshness metadata, not
-  suppression, so a stale document is still returned; it is simply marked.
-"""
+"""Markdown memory store (ADR 11.1 layers, 11.2 layout, 11.3 metadata, G5)."""
 
 from __future__ import annotations
 
@@ -55,9 +38,7 @@ class MemoryLayer(StrEnum):
     UNKNOWN = "unknown"
 
 
-#: ADR 11.4 mapping. Stable knowledge and runbooks are both curated and reviewed
-#: so they share the runbook tier; anything imported or session-derived sits on
-#: the "curated imported memory" rung until it is promoted.
+# : ADR 11.4 mapping.
 LAYER_SOURCE_TYPE: dict[MemoryLayer, SourceType] = {
     MemoryLayer.STABLE: SourceType.RUNBOOK,
     MemoryLayer.RUNBOOKS: SourceType.RUNBOOK,
@@ -69,7 +50,7 @@ LAYER_SOURCE_TYPE: dict[MemoryLayer, SourceType] = {
     MemoryLayer.UNKNOWN: SourceType.IMPORTED_MEMORY,
 }
 
-#: Tie-break inside a single trust tier. Lower wins.
+# : Tie-break inside a single trust tier.
 LAYER_RANK: dict[MemoryLayer, int] = {
     MemoryLayer.STABLE: 0,
     MemoryLayer.RUNBOOKS: 1,
@@ -82,7 +63,6 @@ LAYER_RANK: dict[MemoryLayer, int] = {
 }
 
 #: Layers that require an explicit human approval before anything is written
-#: into them (ADR 11.6 step 4, NG4).
 CURATED_LAYERS: frozenset[MemoryLayer] = frozenset(
     {MemoryLayer.STABLE, MemoryLayer.RUNBOOKS, MemoryLayer.SKILLS}
 )
@@ -396,8 +376,7 @@ class MemoryDocument:
     """One Markdown file plus everything derived from its location."""
 
     doc_id: str
-    """Root-relative path with the extension dropped, for example
-    ``runbooks/kubernetes/pod-restart-investigation``."""
+    """Root-relative path with the extension dropped, for example ``runbooks/kubernetes/pod-restart-investigation``."""
 
     path: Path
     root: Path
@@ -470,11 +449,7 @@ class KnowledgeStore:
         return created
 
     def resolve(self, doc_id: str) -> Path:
-        """Map a document id or root-relative path to an absolute path.
-
-        Refuses anything that escapes the knowledge root: document ids reach
-        this method from model output.
-        """
+        """Map a document id or root-relative path to an absolute path."""
         cleaned = str(doc_id).strip().lstrip("/")
         if not cleaned:
             raise ValueError("empty document id")

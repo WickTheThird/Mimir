@@ -1,12 +1,4 @@
-"""The live terminal dashboard.
-
-Layout intent: the top half is what MIMIR is doing, the bottom half is what the
-machine is doing about it. The two together answer the question that neither
-answers alone, which is whether a long run is progressing or merely consuming.
-
-Unknown values render as a dim ``unavailable`` with the reason. There is no
-placeholder that could be mistaken for a measurement.
-"""
+"""The live terminal dashboard."""
 
 from __future__ import annotations
 
@@ -38,25 +30,14 @@ _FRAME = 0
 
 
 def _record(key: str, value: float, *, keep: int = 48) -> deque[float]:
-    """Append a sample to an in-process ring buffer.
-
-    History lives in the monitor rather than the database because it describes
-    the display's own sampling, not MIMIR's behaviour. Persisting it would
-    invite it being mistaken for a measurement the system made.
-    """
+    """Append a sample to an in-process ring buffer."""
     series = _HISTORY.setdefault(key, deque(maxlen=keep))
     series.append(value)
     return series
 
 
 def _sparkline(values: Sequence[float], *, width: int = 24) -> Text:
-    """A trend, drawn from real samples.
-
-    Scaled to the observed range rather than to a fixed ceiling, so a flat line
-    means genuinely flat rather than "too small to see". A single sample draws
-    nothing: one point is not a trend, and rendering it as a full bar would
-    imply a maximum that was never observed.
-    """
+    """A trend, drawn from real samples."""
     points = list(values)[-width:]
     if len(points) < 2:
         return Text("collecting", style="dim")
@@ -71,12 +52,7 @@ def _sparkline(values: Sequence[float], *, width: int = 24) -> Text:
 
 
 def _pulse(active: bool) -> Text:
-    """Motion only when something is genuinely happening.
-
-    A spinner that turns while the system is idle is an animation pretending to
-    be a status. This returns a static marker unless there is real activity to
-    report.
-    """
+    """Motion only when something is genuinely happening."""
     if not active:
         return Text("\u00b7", style="dim")
     return Text(_PULSE[_FRAME % len(_PULSE)], style="yellow bold")
@@ -86,21 +62,13 @@ _MODEL_CASE_COUNT: int | None = None
 
 
 def _model_case_count() -> int:
-    """How many corpus cases actually open a session.
-
-    Cached for the life of the process. The corpus is frozen during a run, and
-    re-reading and re-parsing every YAML file once a second to render a
-    denominator would make the monitor a measurable load on the machine it is
-    supposed to be reporting on.
-    """
+    """How many corpus cases actually open a session."""
     global _MODEL_CASE_COUNT
     if _MODEL_CASE_COUNT is None:
         try:
             from mimir.eval.harness import EvalHarness
 
-            # EvalCase.deterministic is the harness's own predicate. Counting
-            # anything else here would silently disagree with the thing being
-            # measured, which is how a denominator ends up meaning nothing.
+            # EvalCase.deterministic is the harness's own predicate.
             cases = EvalHarness.load_corpus()
             _MODEL_CASE_COUNT = sum(1 for case in cases if not case.deterministic)
         except Exception:  # noqa: BLE001 - a broken corpus must not kill the monitor
@@ -264,9 +232,6 @@ def render_models(state: runtime_mod.RuntimeState) -> Panel:
     )
 
     # Keyed by normalised tag for the same reason the probe normalises: a
-    # profile saying "nomic-embed-text" must find "nomic-embed-text:latest".
-    # Without this the row showed no resident size and the model was listed a
-    # second time as unassigned.
     resident = {runtime_mod.normalise_tag(m.name): m for m in state.loaded}
     seen: set[str] = set()
     for binding in state.bindings:
@@ -342,7 +307,6 @@ def render_machine(sample: machine_mod.MachineSample) -> Panel:
         line.append(f"{sample.cpu_count} cores", style="dim")
         _kv(body, "cpu", line)
         # A trend answers what an instantaneous reading cannot: whether load is
-        # climbing, flat, or was a spike that has already passed.
         _kv(body, "", _sparkline(history))
     else:
         _kv(body, "cpu", _unavailable(sample.cpu_percent.unavailable))
@@ -386,8 +350,6 @@ def render_machine(sample: machine_mod.MachineSample) -> Panel:
     _kv(body, "thermal", thermal)
 
     # Die temperature and GPU utilisation need powermetrics, which needs root.
-    # Saying so is more useful than omitting the row, because otherwise the
-    # absence looks like an oversight and someone goes looking for the bug.
     _kv(
         body,
         "temp / gpu",
@@ -416,7 +378,6 @@ def render_in_flight(
 
     header = Text()
     # Motion here is the difference between "slow" and "hung": the pulse turns
-    # only while a case has been observed advancing recently.
     header.append_text(_pulse(bool(act.council.active_names) or (flight.idle_s or 0) < 60))
     header.append(" IN FLIGHT", style="yellow bold")
     header.append(f"  pid {flight.pid}  {_duration(flight.elapsed_s)} elapsed", style="dim")
@@ -442,9 +403,6 @@ def render_in_flight(
     _kv(body, "pace", pace)
 
     # Per-case durations come from the database, not from the display's own
-    # sampling, so the trend survives restarting the monitor mid-run. This is
-    # the shape that would have made the A1-A3 decline visible while it was
-    # happening rather than three runs later.
     durations = [c.duration_s for c in act.live_cases if not c.running]
     if len(durations) >= 2:
         trend = Text()
@@ -454,8 +412,7 @@ def render_in_flight(
 
     idle = flight.idle_s
     if idle is not None:
-        # A case can legitimately take minutes. Silence far past the observed
-        # mean is the signal worth surfacing, not silence itself.
+        # A case can legitimately take minutes.
         threshold = max(180.0, (flight.mean_case_s or 60.0) * 3)
         style = "red bold" if idle > threshold else "dim"
         note = Text(f"{_duration(idle)} since the last case finished", style=style)
@@ -489,10 +446,7 @@ def render_evaluation(act: activity_mod.Activity) -> Panel:
             border_style="dim",
         )
 
-    # Schema v2 nests everything a comparison needs under one root. Older runs
-    # are flat, and are shown with their version so a reader can tell they
-    # predate the containment and tool-surface fixes rather than guessing from
-    # which keys happen to be present.
+    # Schema v2 nests everything a comparison needs under one root.
     provenance = run.metadata.get("provenance") or {}
     version = provenance.get("schema_version", 1)
     evaluation = provenance.get("evaluation") or {}
@@ -547,7 +501,6 @@ def render_evaluation(act: activity_mod.Activity) -> Panel:
             surface.append(f"   {count} tools", style="dim")
     else:
         # An empty fingerprint is not a match with another empty fingerprint.
-        # Comparing them as equal is what silently disabled the capability check.
         surface.append("not recorded; run is not comparable", style="red")
     _kv(body, "tool surface", surface)
 
@@ -604,8 +557,7 @@ def render_evaluation(act: activity_mod.Activity) -> Panel:
 
 
 _SPECIALIST_SHORT = {
-    # Chosen to fit the column without truncation. "kubernete" is worse than
-    # "k8s": an abbreviation reads as deliberate, a chopped word reads as a bug.
+    # Chosen to fit the column without truncation.
     "kubernetes_investigator": "k8s",
     "repository_explorer": "repo",
     "behaviour_verifier": "behaviour",
@@ -620,14 +572,7 @@ _SPECIALIST_SHORT = {
 
 
 def render_council(act: activity_mod.Activity) -> Panel:
-    """The council graph, drawn from its own telemetry.
-
-    This is not a picture of the model. Ollama exposes no weights, activations
-    or attention, so anything resembling one would be decoration presented as
-    data. What is real, and what this draws, is MIMIR's own topology: the
-    structure comes from the code, the edge weights come from measured calls,
-    latency, tool use and evidence.
-    """
+    """The council graph, drawn from its own telemetry."""
     council = act.council
     if not council.nodes:
         return Panel(
@@ -662,9 +607,6 @@ def render_council(act: activity_mod.Activity) -> Panel:
     entry, workers, exit_node = council.entry, council.workers, council.exit
 
     # The decorative "question" header and spacer rows were the first thing to
-    # go when the panel ran out of height: they carry no measurement, and losing
-    # the evidence row and the telemetry footer to make room for them would be
-    # trading data for ornament.
     if entry is not None:
         node_line(entry, "  ")
     for index, node in enumerate(workers):
@@ -705,7 +647,6 @@ def render_council(act: activity_mod.Activity) -> Panel:
     ]
     if idle:
         # A specialist that never runs is either correctly unused for this
-        # workload or quietly broken, and the graph is where that shows.
         footer.append(f"   never ran: {', '.join(idle)}", style="dim")
 
     return Panel(
@@ -716,12 +657,7 @@ def render_council(act: activity_mod.Activity) -> Panel:
 
 
 def render_telemetry(act: activity_mod.Activity) -> Panel:
-    """Measured cost per role over the last hour.
-
-    This panel could not exist before the telemetry repair: model_calls held
-    zero rows, so per-role latency and token cost were unknowable and the only
-    number available was wall clock for a whole investigation.
-    """
+    """Measured cost per role over the last hour."""
     health = act.telemetry
     if not act.roles:
         body = Text(
@@ -778,12 +714,7 @@ def render_telemetry(act: activity_mod.Activity) -> Panel:
 
 
 def render_live_cases(act: activity_mod.Activity, limit: int = 14) -> Panel:
-    """Cases of the run in flight, as they complete.
-
-    No pass or fail column. Scoring happens in process and is not written until
-    the run ends, so any verdict here would be invented. Confidence, evidence,
-    tool calls and duration are measured, and are shown instead.
-    """
+    """Cases of the run in flight, as they complete."""
     cases = act.live_cases
     if not cases:
         return Panel(
@@ -819,8 +750,6 @@ def render_live_cases(act: activity_mod.Activity, limit: int = 14) -> Panel:
         confidence = Text("-", style="dim")
         if case.confidence is not None:
             # Low confidence is correct on a trap case and wrong on a
-            # locate-the-symbol case, so this is coloured by magnitude only and
-            # never labelled good or bad.
             confidence = Text(
                 f"{case.confidence:.2f}",
                 style="green" if case.confidence >= 0.5
@@ -851,12 +780,7 @@ def render_live_cases(act: activity_mod.Activity, limit: int = 14) -> Panel:
 
 
 def render_series(act: activity_mod.Activity) -> Panel:
-    """Repeats of the same experiment, and where they disagree.
-
-    Only runs sharing a corpus, a commit and a model are grouped. Averaging
-    across a corpus change or a commit change would produce the mean of two
-    different experiments.
-    """
+    """Repeats of the same experiment, and where they disagree."""
     series = act.series
     if not series.runs:
         return Panel(
@@ -889,8 +813,6 @@ def render_series(act: activity_mod.Activity) -> Panel:
     parts: list[RenderableType] = [header]
 
     # pass^k first: it is the number that answers "can this be trusted", and a
-    # mean pass count hides the difference between eleven cases that always
-    # work and eighteen that sometimes do.
     k = len(series.runs)
     at, hat = series.pass_at_k(), series.pass_hat_k()
     if at and hat and k >= 2:
@@ -1012,13 +934,7 @@ def build(
     first: bool = False,
     height: int = 0,
 ) -> Layout:
-    """One adaptive layout.
-
-    There is no view flag. The panels that matter depend on what is happening,
-    not on what the operator remembered to type: cases appear when an evaluation
-    is in flight, the series appears once repeats exist to compare. A flag would
-    make the interesting state the one you have to know to ask for.
-    """
+    """One adaptive layout."""
     global _FRAME
     _FRAME += 1
 
@@ -1067,8 +983,7 @@ def build(
     )
     rows.append(lower)
 
-    # Cases only while a run is in flight. An empty case table on an idle
-    # machine is a row of nothing that pushes everything useful off screen.
+    # Cases only while a run is in flight.
     if running:
         rows.append(Layout(render_live_cases(act), name="cases"))
     elif has_series:

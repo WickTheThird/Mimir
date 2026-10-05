@@ -1,15 +1,4 @@
-"""Layered configuration for MIMIR.
-
-Resolution order (later wins):
-
-1. Built-in defaults in this module.
-2. ``$MIMIR_HOME/config.yaml`` (default ``~/.mimir/config.yaml``).
-3. ``./mimir.yaml`` in the current working directory.
-4. Environment variables prefixed ``MIMIR_`` (nested via ``__``).
-
-ADR references: section 18 (local model strategy), 19 (persistence),
-22 (deployment), 25 (open decisions kept configurable rather than hard-coded).
-"""
+"""Layered configuration for MIMIR."""
 
 from __future__ import annotations
 
@@ -45,38 +34,24 @@ class ModelProfile(BaseModel):
 
 
 class DecisionsConfig(BaseModel):
-    """A discriminative model for typed decisions (ADR 18.5).
-
-    Off by default. MIMIR works without one, and every caller falls back to
-    what it did before rather than treating an absent verdict as a low score.
-    """
+    """A discriminative model for typed decisions (ADR 18.5)."""
 
     enabled: bool = False
     backend: Literal["kev", "nimble", "local"] = "kev"
-    """kev: the served System One model, calibrated. nimble: in-process MLX.
-    local: the generative model already loaded, constrained to the option
-    set. The last gives the closed set and not the calibration."""
+    """kev: the served System One model, calibrated."""
     base_url: str = "http://127.0.0.1:8009"
     model: str = "kev-latest"
     model_path: str = ""
     adapter_path: str = ""
     min_probability: float = 0.7
-    """Below this the verdict is treated as no answer.
-
-    A calibrated model's own uncertainty is the point of using one: a decision
-    it is unsure about should fall back to the deterministic path rather than
-    be taken because it was the argmax."""
+    """Below this the verdict is treated as no answer."""
 
     min_margin: float = 0.15
-    """Required distance from the runner-up. A win by a nose is not a
-    decision, and on a two-way choice the argmax is always something."""
+    """Required distance from the runner-up."""
 
 
 class ModelRouting(BaseModel):
-    """Task-class to model-alias routing (ADR 18.4).
-
-    Every key falls back to ``default`` when the alias is unknown.
-    """
+    """Task-class to model-alias routing (ADR 18.4)."""
 
     default: str = "deep"
     fast_command: str = "fast"
@@ -272,7 +247,7 @@ class ApiConfig(BaseModel):
     api_keys: list[str] = Field(default_factory=list)
     allow_loopback_without_auth: bool = True
     cors_origins: list[str] = Field(default_factory=lambda: ["http://127.0.0.1:5173"])
-    # When true the OpenAI facade may run the full agent graph. ADR 16.4 says no by default.
+    # When true the OpenAI facade may run the full agent graph.
     facade_agent_mode: bool = False
     facade_rate_limit_per_minute: int = 120
     expose_privileged_routes_publicly: bool = False
@@ -304,19 +279,12 @@ class SkillsConfig(BaseModel):
 
 
 class LspConfig(BaseModel):
-    """Language server integration.
-
-    Switchable because adding tools changes the tool surface, and a run with a
-    different tool surface is not comparable to one without it. Turning this
-    off reproduces the pre-LSP surface exactly, so an experiment can isolate
-    one change at a time rather than measuring two.
-    """
+    """Language server integration."""
 
     enabled: bool = True
     timeout_s: float = 20.0
     index_grace_s: float = 2.0
-    """Pause after opening a document before querying. Servers answer before
-    indexing completes, often with nothing."""
+    """Pause after opening a document before querying."""
 
 
 class ObservabilityConfig(BaseModel):
@@ -454,11 +422,7 @@ def get_settings() -> Settings:
 
 
 def reset_settings_cache() -> None:
-    """Used by tests and by ``mimir config reload``.
-
-    Tolerates ``get_settings`` having been replaced (tests monkeypatch it with a
-    plain callable), so teardown never fails on a missing cache.
-    """
+    """Used by tests and by ``mimir config reload``."""
     clear = getattr(get_settings, "cache_clear", None)
     if clear is not None:
         clear()

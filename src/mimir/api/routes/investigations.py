@@ -1,8 +1,4 @@
-"""Investigation, session, and approval routes (ADR 6.2 C1, 15).
-
-These back the web UI. They are marked as the local-privileged surface, so they
-refuse non-loopback callers regardless of credentials (ADR 16.5).
-"""
+"""Investigation, session, and approval routes (ADR 6.2 C1, 15)."""
 
 from __future__ import annotations
 
@@ -80,8 +76,7 @@ async def stream_investigation(
             async for event in runner.stream(payload.question, state=state):
                 yield {"event": event.type.value, "data": json.dumps(event.to_dict(), default=str)}
         except asyncio.CancelledError:
-            # The browser navigated away. Nothing to clean up beyond letting the
-            # generator close; the run itself is already checkpointed.
+            # The browser navigated away.
             log.info("investigation_stream_cancelled", session_id=state.session_id)
             raise
         except Exception as exc:
@@ -142,8 +137,6 @@ async def export_session(
     return {"format": fmt, "content": body}
 
 
-# ---------------------------------------------------------------------------
-# Approvals (ADR 13.3, 15)
 # ---------------------------------------------------------------------------
 
 
@@ -222,8 +215,6 @@ async def decide_approval(
     return json.loads(decision.model_dump_json())
 
 
-# ---------------------------------------------------------------------------
-# Artifacts
 # ---------------------------------------------------------------------------
 
 

@@ -1,30 +1,4 @@
-"""Log analysis helpers (ADR 9.5, 5.6, goal G4).
-
-These helpers are the analytical core of log and timeout diagnosis. They never
-hand raw log volume back to the model (ADR R7 context explosion): logs live in
-the artifact store and are addressed by ``input_ref``; every helper returns a
-compact structured summary plus :class:`~mimir.models.evidence.Evidence` items
-that cite line numbers inside the artifact.
-
-Pipeline:
-
-* :data:`ingest_logs`             - accept pasted text (ADR 5.6) -> ``input_ref``.
-* :data:`filter_logs`             - narrow by pattern, level, and time window.
-* :data:`group_repeated_errors`   - collapse variable parts into templates.
-* :data:`extract_correlation_ids` - find trace/request ids by key and by shape.
-* :data:`correlate_logs`          - merge several artifacts onto one timeline.
-* :data:`detect_timeout_patterns` - explicit timeouts, round-number duration
-  clusters, retry amplification, pool exhaustion, restart loops.
-* :data:`compare_before_after`    - error-group frequency diff.
-* :data:`summarise_log_volume`    - histogram, level mix, top talkers, bursts.
-
-The line parser is configuration-free by design. It recognises ISO8601/RFC3339,
-Go standard library, klog, syslog, common-log-format and epoch timestamps, JSON
-lines, logfmt key=value pairs, zap-style tab separated fields, and bracketed
-levels. Java and Python stack-trace continuation lines are attached to the entry
-above them. Lines that match nothing are kept as unparsed entries rather than
-dropped, because an unparseable line is often the interesting one.
-"""
+"""Log analysis helpers (ADR 9.5, 5.6, goal G4)."""
 
 from __future__ import annotations
 
@@ -60,8 +34,6 @@ PREVIEW_LINES = 25
 
 
 # ---------------------------------------------------------------------------
-# parsed entry
-# ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True)
@@ -88,8 +60,6 @@ class LogEntry:
         return self.raw if not self.continuation else f"{self.raw}\n{self.continuation}"
 
 
-# ---------------------------------------------------------------------------
-# timestamp parsing
 # ---------------------------------------------------------------------------
 
 _MONTHS = {
@@ -194,8 +164,6 @@ def _strip_timestamp(line: str) -> tuple[float | None, str, str | None]:
 
 
 # ---------------------------------------------------------------------------
-# level and field parsing
-# ---------------------------------------------------------------------------
 
 _LEVEL_CANON = {
     "TRACE": "TRACE", "TRC": "TRACE", "VERBOSE": "TRACE",
@@ -213,9 +181,6 @@ _BRACKET_LEVEL = re.compile(r"^\s*[\[<(]\s*([A-Za-z]{3,11})\s*[\]>)][\s:|-]*")
 _BARE_LEVEL = re.compile(r"^\s*([A-Za-z]{3,11})\s*[:\t|]\s*")
 _TAB_LEVEL = re.compile(r"^\s*([A-Za-z]{3,11})\t")
 #: A level followed only by whitespace, as emitted by Go's slog, zap's console
-#: encoder, and most logfmt writers ("... ERROR checkout msg=..."). Matching a
-#: bare word is only safe because _canon_level rejects anything that is not a
-#: known level name, so an ordinary first word does not become a level.
 _SPACED_LEVEL = re.compile(r"^\s*([A-Za-z]{3,11})\s+")
 
 _KV_RE = re.compile(
@@ -412,8 +377,6 @@ def parse_log_text(text: str, *, max_lines: int = MAX_PARSE_LINES) -> tuple[list
 
 
 # ---------------------------------------------------------------------------
-# message templating
-# ---------------------------------------------------------------------------
 
 _MASKS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -435,11 +398,7 @@ _WS_RE = re.compile(r"\s+")
 
 
 def template_of(message: str, *, limit: int = 220) -> str:
-    """Mask variable parts so near-identical messages collapse into one group.
-
-    ``timeout after 30001ms`` and ``timeout after 29997ms`` both become
-    ``timeout after <dur>``.
-    """
+    """Mask variable parts so near-identical messages collapse into one group."""
     text = message
     for pattern, replacement in _MASKS:
         text = pattern.sub(replacement, text)
@@ -447,8 +406,6 @@ def template_of(message: str, *, limit: int = 220) -> str:
     return text[:limit]
 
 
-# ---------------------------------------------------------------------------
-# artifact access
 # ---------------------------------------------------------------------------
 
 _PARSE_CACHE: dict[str, tuple[list[LogEntry], bool]] = {}
@@ -561,8 +518,6 @@ def _span(entries: list[LogEntry]) -> tuple[float | None, float | None]:
 
 
 # ---------------------------------------------------------------------------
-# ingest_logs
-# ---------------------------------------------------------------------------
 
 
 class IngestLogsInput(BaseModel):
@@ -637,8 +592,6 @@ async def ingest_logs(args: IngestLogsInput, ctx: ToolContext) -> ToolResult:
     )
 
 
-# ---------------------------------------------------------------------------
-# filter_logs
 # ---------------------------------------------------------------------------
 
 
@@ -782,8 +735,6 @@ async def filter_logs(args: FilterLogsInput, ctx: ToolContext) -> ToolResult:
 
 
 # ---------------------------------------------------------------------------
-# group_repeated_errors
-# ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True)
@@ -907,8 +858,6 @@ async def group_repeated_errors(args: GroupErrorsInput, ctx: ToolContext) -> Too
     )
 
 
-# ---------------------------------------------------------------------------
-# correlation ids
 # ---------------------------------------------------------------------------
 
 _ID_KEY_STEMS = frozenset(
@@ -1102,10 +1051,8 @@ async def extract_correlation_ids(args: ExtractIdsInput, ctx: ToolContext) -> To
 
 
 # ---------------------------------------------------------------------------
-# timeout vocabulary, shared by correlate_logs and detect_timeout_patterns
-# ---------------------------------------------------------------------------
 
-#: Configured timeouts cluster on round values. Natural latency does not.
+# : Configured timeouts cluster on round values.
 ROUND_TIMEOUTS_S: tuple[float, ...] = (
     0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 15.0,
     20.0, 30.0, 45.0, 60.0, 90.0, 120.0, 180.0, 300.0, 600.0,
@@ -1218,8 +1165,6 @@ def entry_durations(entry: LogEntry) -> list[float]:
     return [d for d in out if 0 < d < 86400]
 
 
-# ---------------------------------------------------------------------------
-# correlate_logs
 # ---------------------------------------------------------------------------
 
 
@@ -1445,8 +1390,6 @@ async def correlate_logs(args: CorrelateLogsInput, ctx: ToolContext) -> ToolResu
     )
 
 
-# ---------------------------------------------------------------------------
-# detect_timeout_patterns
 # ---------------------------------------------------------------------------
 
 _SEVERITY_WEIGHT = {
@@ -1707,8 +1650,6 @@ async def detect_timeout_patterns(args: DetectTimeoutsInput, ctx: ToolContext) -
 
 
 # ---------------------------------------------------------------------------
-# compare_before_after
-# ---------------------------------------------------------------------------
 
 
 class CompareInput(BaseModel):
@@ -1860,8 +1801,6 @@ async def compare_before_after(args: CompareInput, ctx: ToolContext) -> ToolResu
     )
 
 
-# ---------------------------------------------------------------------------
-# summarise_log_volume
 # ---------------------------------------------------------------------------
 
 _BUCKET_LADDER = (1, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600, 21600, 86400)

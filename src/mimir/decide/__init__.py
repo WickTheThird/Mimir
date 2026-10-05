@@ -21,11 +21,7 @@ from mimir.decide.local import LocalDecider
 async def decide_async(
     decider: Any, context: str, fields: list[Choice], *, session_id: str = ""
 ) -> dict[str, Verdict]:
-    """Ask any backend from async code without blocking the loop.
-
-    The served backends are synchronous HTTP; the local one is native async.
-    Nodes should not know which they have.
-    """
+    """Ask any backend from async code without blocking the loop."""
     if decider is None or not getattr(decider, "available", False) or not fields:
         return {}
     native = getattr(decider, "decide_async", None)

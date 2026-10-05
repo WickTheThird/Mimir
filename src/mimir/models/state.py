@@ -1,10 +1,4 @@
-"""Explicit investigation state (ADR 12).
-
-The ADR is emphatic that a LangGraph investigation must use explicit state
-rather than relying on chat history alone. :class:`InvestigationState` is that
-state. It is a plain pydantic model so it can be serialised into checkpoints,
-persisted, rendered in the web UI, and exported as an evidence package.
-"""
+"""Explicit investigation state (ADR 12)."""
 
 from __future__ import annotations
 
@@ -29,8 +23,7 @@ from mimir.models.specialist import (
 
 
 class EnvironmentContext(BaseModel):
-    """Resolved operating context. Populated from the shell, stored profile, or
-    the user prompt (ADR 5.1 step 1)."""
+    """Resolved operating context."""
 
     environment: str | None = None
     cluster_context: str | None = None
@@ -99,10 +92,7 @@ class MemoryProposal(BaseModel):
 
 
 class InvestigationState(BaseModel):
-    """The full state carried through the LangGraph run.
-
-    Field names follow the conceptual state listed in ADR 12.
-    """
+    """The full state carried through the LangGraph run."""
 
     session_id: str = Field(default_factory=lambda: f"ses_{uuid.uuid4().hex[:12]}")
     user_request: str = ""
@@ -118,14 +108,7 @@ class InvestigationState(BaseModel):
     commands_planned: list[ProposedCommand] = Field(default_factory=list)
     commands_executed: list[ExecutionRecord] = Field(default_factory=list)
     model_calls: list[dict[str, Any]] = Field(default_factory=list)
-    """Model invocation telemetry, one entry per attempt (ADR 20).
-
-    Carried on the state rather than written directly from the graph because
-    model_calls.session_id is a foreign key: the session row is created by
-    save_state, so a write that happens earlier fails the constraint on every
-    row. Persisting it in the same transaction removes the ordering hazard
-    instead of relying on call order staying correct.
-    """
+    """Model invocation telemetry, one entry per attempt (ADR 20)."""
     outputs: dict[str, str] = Field(default_factory=dict)
     """artifact_ref -> short description, full bodies live in the artifact store."""
 

@@ -1,16 +1,4 @@
-"""Skill discovery, indexing, and selection (ADR 10.2, 10.5).
-
-Discovery walks every root returned by :meth:`mimir.config.Settings.skill_roots`
-looking for ``<dir>/SKILL.md`` at depth one or two, so skills can be grouped into
-families on disk without changing their identity. Earlier roots win: an operator
-root listed in ``skills.roots`` shadows a shipped skill of the same name, and the
-shadowing is recorded rather than silently applied.
-
-The registry only ever hands out level-1 metadata. :meth:`SkillRegistry.catalogue`
-renders the whole library as one line per skill so the coordinator can carry all
-of them for a few hundred tokens; the instruction body is not reachable from
-here at all. Level 2 and level 3 live behind :mod:`mimir.skills.runner`.
-"""
+"""Skill discovery, indexing, and selection (ADR 10.2, 10.5)."""
 
 from __future__ import annotations
 
@@ -34,8 +22,7 @@ log = get_logger(__name__)
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
-#: Dropped before scoring. Operational questions are short, so a stopword that
-#: survives here would dominate every score.
+# : Dropped before scoring.
 _STOPWORDS: frozenset[str] = frozenset(
     {
         "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "am",
@@ -50,32 +37,22 @@ _STOPWORDS: frozenset[str] = frozenset(
     }
 )
 
-#: Field weights. Name and tags are curated by the skill author, so a hit there
-#: is a stronger signal than an incidental word in a prose description.
+# : Field weights.
 _WEIGHT_NAME = 3.0
 _WEIGHT_TAGS = 2.5
 _WEIGHT_WHEN = 2.0
 _WEIGHT_DESCRIPTION = 1.0
 
 # Calibrated against the seed corpus: correct top-ranked skills score roughly
-# 0.15 to 0.55, and the first clearly-irrelevant skill sits below 0.10. Raising
-# this silently disables automatic selection; lowering it attaches unrelated
-# runbooks to every request. Guarded by the skill-selection evaluation cases.
 _MIN_SCORE = 0.12
 
 
-#: Suffixes stripped when expanding a token. Ordered longest first so "restarting"
-#: reduces to "restart" rather than "restartin".
+# : Suffixes stripped when expanding a token.
 _SUFFIXES = ("ing", "ed", "es", "s")
 
 
 def _expand(terms: set[str]) -> set[str]:
-    """A token plus its crude stem, so plural and tense variants still match.
-
-    Deliberately not a real stemmer. A full stemmer pulls in a dependency and
-    over-merges short operational words, and this only has to close the gap
-    between how operators phrase questions and how skills are tagged.
-    """
+    """A token plus its crude stem, so plural and tense variants still match."""
     out = set(terms)
     for term in terms:
         for suffix in _SUFFIXES:
@@ -152,7 +129,6 @@ class SkillRegistry:
             if not root.is_dir():
                 continue
             # Depth one is the Agent Skills layout; depth two allows grouping
-            # skills into families without renaming them.
             for pattern in (f"*/{SKILL_FILENAME}", f"*/*/{SKILL_FILENAME}"):
                 for path in sorted(root.glob(pattern)):
                     resolved = path.resolve()
@@ -245,12 +221,7 @@ class SkillRegistry:
         max_chars: int = 4000,
         line_chars: int = 200,
     ) -> str:
-        """Level 1 for the whole library, one line per skill.
-
-        This is the only skill text the coordinator sees before selection, so it
-        is capped. If the library outgrows the cap the tail is dropped with an
-        explicit note rather than silently truncated mid-line.
-        """
+        """Level 1 for the whole library, one line per skill."""
         skills = [s for s in self.all() if specialist is None or s.specialist == specialist]
         lines: list[str] = []
         used = 0
@@ -269,20 +240,7 @@ class SkillRegistry:
     # -- selection --------------------------------------------------------
 
     def score(self, skill: Skill, terms: set[str]) -> tuple[float, list[str]]:
-        """Rank one skill against a query.
-
-        Two calibration details matter, both found by measuring real queries
-        rather than by reasoning about the formula:
-
-        1. Terms are expanded morphologically. Operators write "pods restarting"
-           and "timing out"; skills are tagged "pod", "restart", "timeout".
-           Without expansion the obvious query matches nothing.
-        2. The denominator is the best a single term can score, not the sum of
-           the two highest field weights. The old denominator assumed every
-           query term hits both the name and the tags at full weight, which no
-           real query does, so correct matches landed near 0.1 against a 0.25
-           threshold and automatic selection returned nothing.
-        """
+        """Rank one skill against a query."""
         if not terms:
             return 0.0, []
         expanded = _expand(terms)
@@ -293,8 +251,6 @@ class SkillRegistry:
             (_WEIGHT_DESCRIPTION, _expand(set(tokenise(skill.description)))),
         )
         # A term scores once, at the weight of the strongest field it appears
-        # in. Summing across fields would let a word repeated in the name, tags,
-        # and description outweigh three distinct matches.
         best: dict[str, float] = {}
         for weight, bag in fields:
             for term in expanded & bag:

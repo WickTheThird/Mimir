@@ -1,16 +1,4 @@
-"""What MIMIR is doing, read from its own records.
-
-The database is opened read-only. The monitor watches work that is often
-writing to that same database, and a dashboard that can take a write lock on
-the store it observes is a dashboard that can stall the thing it is measuring.
-``mode=ro`` makes that impossible rather than unlikely.
-
-Everything reported here is derived from rows MIMIR wrote for its own purposes.
-Nothing is instrumented specially for display, so the monitor cannot show a
-healthy picture that the audit trail would contradict. When those two disagree
-the audit trail is the one that is wrong, and that has happened: sessions and
-evidence accumulated normally while the execution table stayed empty.
-"""
+"""What MIMIR is doing, read from its own records."""
 
 from __future__ import annotations
 
@@ -87,12 +75,7 @@ class EvalRunRow:
 
 @dataclass
 class RoleTelemetry:
-    """Measured cost of one role, from model_calls rather than from guesswork.
-
-    Before the telemetry repair this panel could not exist: the table was empty,
-    so per-role latency and token cost were unknowable and the only visible
-    number was wall-clock for the whole investigation.
-    """
+    """Measured cost of one role, from model_calls rather than from guesswork."""
 
     role: str
     model: str
@@ -114,13 +97,7 @@ class RoleTelemetry:
 
 @dataclass
 class CouncilNode:
-    """One specialist, with its measured cost and output.
-
-    Every number here is observed. None of it describes the model's internals:
-    Ollama exposes no weights, activations or attention, so anything resembling
-    a picture of "what the model is thinking" would be invented. What MIMIR does
-    expose is its own topology, and that is what this measures.
-    """
+    """One specialist, with its measured cost and output."""
 
     specialist: str
     calls: int = 0
@@ -140,12 +117,7 @@ class CouncilNode:
 
 @dataclass
 class Council:
-    """The council graph with measured edge weights.
-
-    Structure comes from the code (who may run, and in what order); weights come
-    from the database (how often, how long, how many tools, how much evidence).
-    Neither is guessed.
-    """
+    """The council graph with measured edge weights."""
 
     nodes: list[CouncilNode] = field(default_factory=list)
     evidence_sources: list[tuple[str, int]] = field(default_factory=list)
@@ -190,11 +162,7 @@ class TelemetryHealth:
     orphaned_rows: int = 0
     complete: bool = True
     instrumented_since: float | None = None
-    """Timestamp of the oldest telemetry row.
-
-    Sessions older than this predate the instrumentation, so their lack of
-    telemetry is expected and must not be reported as a defect.
-    """
+    """Timestamp of the oldest telemetry row."""
 
     @property
     def summary(self) -> str:
@@ -210,15 +178,7 @@ class TelemetryHealth:
 
 @dataclass
 class LiveCase:
-    """One case of a running evaluation, identified while the run is in flight.
-
-    Cases are matched to sessions by prompt, because the harness does not write
-    an eval_results row until the whole run finishes. Pass or fail is therefore
-    deliberately absent: scoring happens in process and is not on disk yet, and
-    showing a guess at it would be exactly the unsupported claim this project
-    measures. What is shown is what was measured: confidence, evidence, tool
-    calls, duration.
-    """
+    """One case of a running evaluation, identified while the run is in flight."""
 
     case_id: str
     session_id: str
@@ -244,9 +204,7 @@ class SeriesRun:
     created_at: float
     results: dict[str, bool] = field(default_factory=dict)
     deterministic: set[str] = field(default_factory=set)
-    """Cases that ran without a model. They are reported separately because
-    mixing them into a reliability figure dilutes it: they are always stable,
-    so they only ever drag the number toward 100%."""
+    """Cases that ran without a model."""
 
     @property
     def pass_rate(self) -> float:
@@ -255,12 +213,7 @@ class SeriesRun:
 
 @dataclass
 class Series:
-    """Runs sharing a corpus and a commit, so their scores are on one footing.
-
-    Grouping is by (corpus_hash, commit, model). Runs that differ in either are
-    not repeats of each other, and averaging across them would produce a mean
-    of two different experiments.
-    """
+    """Runs sharing a corpus and a commit, so their scores are on one footing."""
 
     runs: list[SeriesRun] = field(default_factory=list)
     corpus_hash: str = ""
@@ -280,20 +233,14 @@ class Series:
 
     @property
     def stdev(self) -> float:
-        """Population standard deviation. With three runs this is a description
-        of what was seen, not an estimate of a distribution."""
+        """Population standard deviation."""
         if len(self.runs) < 2:
             return 0.0
         mean = self.mean
         return (sum((c - mean) ** 2 for c in self.counts) / len(self.runs)) ** 0.5
 
     def unstable_cases(self) -> list[tuple[str, list[bool | None], bool, float]]:
-        """Cases whose outcome moved, with their majority and stability.
-
-        Stability is the fraction of runs agreeing with the majority outcome.
-        With three runs it can only be 3/3 or 2/3, and pretending to more
-        precision than that would misrepresent the sample.
-        """
+        """Cases whose outcome moved, with their majority and stability."""
         if len(self.runs) < 2:
             return []
         case_ids = sorted({cid for r in self.runs for cid in r.results})
@@ -309,13 +256,7 @@ class Series:
         return out
 
     def pass_at_k(self, *, model_only: bool = True) -> tuple[int, int] | None:
-        """Cases solved at least once. "Is the capability there?"
-
-        Reported beside pass^k rather than instead of it. A high pass@k with a
-        low pass^k means the system can reach the answer but cannot be relied
-        on to, which points at routing and procedure rather than at the model's
-        knowledge.
-        """
+        """Cases solved at least once."""
         cases = self._cases(model_only)
         if not cases:
             return None
@@ -325,12 +266,7 @@ class Series:
         return solved, len(cases)
 
     def pass_hat_k(self, *, model_only: bool = True) -> tuple[int, int] | None:
-        """Cases solved on every run. "Can this be trusted?"
-
-        This is the number to quote when someone asks whether MIMIR works. A
-        mean pass count hides the difference between eleven cases that always
-        work and eighteen that sometimes do.
-        """
+        """Cases solved on every run."""
         cases = self._cases(model_only)
         if not cases:
             return None
@@ -365,17 +301,7 @@ class Series:
 
 @dataclass
 class InFlightEval:
-    """Progress of a run that has not been persisted yet.
-
-    ``eval_runs`` gets one row when the run finishes, so during the hour a model
-    suite takes there is nothing in it to read. Progress is therefore counted
-    from the per-case sessions the harness writes as it goes, bounded to those
-    created after the evaluate process started.
-
-    ``total`` is the number of model cases in the corpus. It is a separate count
-    from the corpus size, because deterministic cases open no session and
-    including them would make the run look permanently stalled at 40%.
-    """
+    """Progress of a run that has not been persisted yet."""
 
     pid: int
     started_at: float
@@ -427,12 +353,7 @@ class Activity:
 
     @property
     def audit_gap(self) -> str:
-        """A one-line warning when the audit trail contradicts the activity.
-
-        Not decoration. The executions table sat at zero across seventeen
-        sessions because nothing populated it, and the only visible symptom was
-        a number nobody was looking at.
-        """
+        """A one-line warning when the audit trail contradicts the activity."""
         if self.sessions and self.model_calls_total == 0:
             return "model_calls empty: per-call telemetry is not recorded"
         if self.telemetry.sessions_without_calls:
@@ -514,9 +435,7 @@ def collect(settings: Settings | None = None, *, limit: int = 12) -> Activity:
         ]
         out.running = [s for s in out.sessions if s.running]
 
-        # A missing or older table degrades this one panel. It previously made
-        # collect() report the entire store unreadable, so one absent table
-        # blanked the whole dashboard.
+        # A missing or older table degrades this one panel.
         try:
             run = conn.execute(
                 "select id, suite, model_alias, total, passed, failed, created_at, "
@@ -556,12 +475,7 @@ def collect(settings: Settings | None = None, *, limit: int = 12) -> Activity:
 
 
 def _collect_telemetry(conn: sqlite3.Connection, out: Activity) -> None:
-    """Per-role cost, measured over the recent window rather than all time.
-
-    Bounded to the last hour so the figures describe what is happening now. An
-    all-time mean would be dominated by whatever model was configured longest
-    ago, which is the opposite of what a live monitor is for.
-    """
+    """Per-role cost, measured over the recent window rather than all time."""
     since = time.time() - 3600
     try:
         rows = conn.execute(
@@ -593,10 +507,6 @@ def _collect_telemetry(conn: sqlite3.Connection, out: Activity) -> None:
     try:
         health.model_calls_total = _count(conn, "model_calls")
         # Only sessions from after telemetry started being recorded can be
-        # judged on whether they recorded any. Counting older ones reported
-        # "17/20 sessions recorded no model calls" at a moment when every
-        # session since the fix had recorded them correctly: history rendered
-        # as a present fault, which is the failure this monitor exists to avoid.
         first = conn.execute("select min(created_at) from model_calls").fetchone()
         floor = float(first[0]) if first and first[0] else None
         if floor is None:
@@ -626,14 +536,7 @@ def _collect_telemetry(conn: sqlite3.Connection, out: Activity) -> None:
 def collect_council(
     settings: Settings | None = None, *, window_s: float = 3600.0
 ) -> Council:
-    """Measure the council graph over a recent window.
-
-    A specialist counts as active if it issued a model call in the last few
-    seconds. That is inferred from telemetry rather than from any liveness
-    signal, so it lags by roughly one call; the alternative is instrumenting the
-    graph for the display's benefit, which would make the display capable of
-    disagreeing with the audit trail.
-    """
+    """Measure the council graph over a recent window."""
     active = settings or get_settings()
     council = Council(window_s=window_s)
     try:
@@ -683,13 +586,7 @@ def collect_council(
 
 
 def live_cases(started_at: float, settings: Settings | None = None) -> list[LiveCase]:
-    """Per-case detail for a run that has not been scored yet.
-
-    Sessions are matched to corpus cases by prompt. That mapping is exact for
-    this corpus because prompts are unique, and where a prompt is reused the
-    case id falls back to the truncated prompt rather than guessing between
-    candidates.
-    """
+    """Per-case detail for a run that has not been scored yet."""
     active = settings or get_settings()
     try:
         from mimir.eval.harness import EvalHarness
@@ -744,11 +641,7 @@ def live_cases(started_at: float, settings: Settings | None = None) -> list[Live
 
 
 def collect_series(settings: Settings | None = None, *, limit: int = 6) -> Series:
-    """Completed runs that share a corpus and a commit, newest last.
-
-    Runs differing in either are not repeats of each other, so they are not
-    grouped: a mean across them would average two different experiments.
-    """
+    """Completed runs that share a corpus and a commit, newest last."""
     active = settings or get_settings()
     series = Series()
     try:
@@ -804,7 +697,6 @@ def collect_series(settings: Settings | None = None, *, limit: int = 6) -> Serie
             )
             results = {r[0]: bool(r[1]) for r in rows_}
             # A deterministic case never invokes a model, so it finishes in
-            # microseconds. That is the only marker the results table carries.
             deterministic = {r[0] for r in rows_ if (r[2] or 0.0) <= 0.5}
         except sqlite3.Error:
             results, deterministic = {}, set()
@@ -825,11 +717,7 @@ def collect_series(settings: Settings | None = None, *, limit: int = 6) -> Serie
 
 
 def tail_log(path: Path | None, *, lines: int = 8, max_bytes: int = 200_000) -> list[str]:
-    """Last lines of a log file, read from the end.
-
-    Bounded so that pointing the monitor at a multi-gigabyte log does not read
-    the whole thing into memory once a second.
-    """
+    """Last lines of a log file, read from the end."""
     if path is None or not path.is_file():
         return []
     try:
@@ -847,12 +735,7 @@ def tail_log(path: Path | None, *, lines: int = 8, max_bytes: int = 200_000) -> 
 def in_flight_eval(
     pid: int, started_at: float, total: int, settings: Settings | None = None
 ) -> InFlightEval:
-    """Count completed cases for a running evaluation.
-
-    Sessions are attributed by creation time rather than by any run id, because
-    the harness does not mint one until it persists. Bounding on the process
-    start is what keeps a previous run's sessions out of this one's count.
-    """
+    """Count completed cases for a running evaluation."""
     active = settings or get_settings()
     out = InFlightEval(pid=pid, started_at=started_at, total=total)
     try:

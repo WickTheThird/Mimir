@@ -18,14 +18,7 @@ router = APIRouter(tags=["system"])
 
 @router.get("/health")
 async def health() -> dict[str, Any]:
-    """Liveness. Deliberately unauthenticated and cheap: it must answer even
-    when the model runtime is down, or a tunnel health check will flap.
-
-    This is the ONLY route under /api that a non-loopback caller may reach.
-    Everything else here is control plane: it discloses the tool inventory, the
-    safety posture, and the operator's model configuration, none of which the
-    inference client needs. See deploy/cloudflared/README.md.
-    """
+    """Liveness."""
     return {"status": "ok", "version": __version__}
 
 

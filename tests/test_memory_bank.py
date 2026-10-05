@@ -1,8 +1,4 @@
-"""The working set.
-
-The store holds everything ever learned and the index retrieves any of it.
-Neither knows what is currently relevant, so these cover the layer that does.
-"""
+"""The working set."""
 
 from __future__ import annotations
 
@@ -40,8 +36,7 @@ class TestActivation:
         assert _activation(8, now - 3 * HALF_LIFE_S, now) >= ACTIVE_THRESHOLD
 
     def test_many_chunks_of_one_note_are_one_recall(self, bank):
-        """A search returning six chunks of the same document has recalled one
-        thing, and counting six would make long notes permanent."""
+        """A search returning six chunks of the same document has recalled one thing, and counting six would make long notes permanent."""
         bank.touch(["a", "a", "a"], query="x")
         assert bank.working_set()[0].hits == 1
 
@@ -57,8 +52,7 @@ class TestForgetting:
         assert bank.working_set() == []
 
     def test_forgetting_drops_the_activation_not_the_note(self, bank, tmp_path):
-        """Losing the note that something was once relevant is the point.
-        Losing the note itself would be destruction."""
+        """Losing the note that something was once relevant is the point."""
         bank.touch(["imports/x"], query="q")
         bank._db.execute("UPDATE activations SET last_recall = 0")
         bank._db.commit()

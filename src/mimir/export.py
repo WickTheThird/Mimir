@@ -1,11 +1,4 @@
-"""Evidence-package handoff (ADR 5.8).
-
-Produces a compact package for a hosted coding agent (GLM, Claude, Codex) so it
-spends its context implementing rather than rediscovering. The ADR lists the
-required sections; they are all here, and the explicit non-goals section matters
-as much as the evidence, because it is what stops the receiving agent from
-wandering.
-"""
+"""Evidence-package handoff (ADR 5.8)."""
 
 from __future__ import annotations
 

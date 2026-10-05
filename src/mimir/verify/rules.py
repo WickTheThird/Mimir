@@ -1,21 +1,4 @@
-"""Project rules as data, checked without a model.
-
-A model writing code has to hold four things at once: the rules of the
-language, the rules of the framework, the rules of this codebase, and the
-actual task. A small local model is weak at all four, and the first three do
-not need it. They are checkable.
-
-The rules here are the third kind, the ones no compiler knows: side effects
-must be awaited in this runtime, money is in minor units on the wire, this
-column is NOT NULL so that path needs a row. Every team has a list of these and
-it usually lives in a document nobody re-reads, or in a person. Written as a
-pattern with a reason, it becomes a gate instead of advice, and the difference
-matters: advice is something a model can be persuaded out of, and a gate is not.
-
-Rules are data on purpose. Encoding them in Python would mean a code change and
-a release to record something learned in an incident, which is the reliable way
-to ensure nobody records it.
-"""
+"""Project rules as data, checked without a model."""
 
 from __future__ import annotations
 
@@ -130,8 +113,6 @@ def _rule_from(data: dict[str, Any], source: str) -> Rule | None:
                 re.compile(str(pattern))
             except re.error as exc:
                 # A rule that cannot compile is skipped loudly rather than
-                # silently, because a gate nobody knows has stopped working is
-                # worse than no gate.
                 log.warning("rule_pattern_invalid", rule=identifier, key=key, error=str(exc))
                 return None
     paths = data.get("paths") or []
@@ -173,11 +154,7 @@ def load_rules(roots: list[Path]) -> list[Rule]:
 
 
 def rule_roots(settings: Any, repo_root: Path | None = None) -> list[Path]:
-    """Where rules live: the operator's home, then the repository itself.
-
-    A repository carrying its own rules is the point. The invariants of a
-    codebase belong with the codebase, and travel with it.
-    """
+    """Where rules live: the operator's home, then the repository itself."""
     roots = [Path(settings.home) / "rules"]
     if repo_root is not None:
         roots.append(Path(repo_root) / ".mimir" / "rules")

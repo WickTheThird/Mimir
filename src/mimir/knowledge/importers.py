@@ -1,25 +1,4 @@
-"""Importers for prior assistant transcripts (ADR 11.5, NG4).
-
-ADR 11.5 sets six conditions on importing Claude, Codex, or ChatGPT history:
-raw exports are untrusted source material, candidate knowledge is summarised
-rather than dumped, secrets are removed, claims are dated, important claims get
-verified later, and conflicts are retained as conflicts.
-
-This module enforces the first four mechanically:
-
-* Everything lands under ``imports/<tool>/``. :meth:`ConversationImporter.write_note`
-  refuses any other destination, so an import can never reach ``stable/``.
-* Every note is written with ``confidence: low`` and
-  ``verification_status: unverified``, which the promotion gate in
-  :mod:`mimir.knowledge.promotion` then requires a human to lift.
-* :func:`mimir.redaction.redact` runs over every message before anything is
-  summarised, stored, or logged.
-* ``created_at`` is the date of the original conversation, not the date of the
-  import, so an old chat reads as stale rather than fresh (ADR R2).
-
-The summariser is pluggable: pass any ``Callable[[ImportedConversation], str]``
-to use a local model. The default is extractive and needs no model at all.
-"""
+"""Importers for prior assistant transcripts (ADR 11.5, NG4)."""
 
 from __future__ import annotations
 
@@ -198,11 +177,7 @@ def iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
 
 
 def parse_claude_session(path: Path) -> ImportedConversation | None:
-    """Parse a Claude Code session JSONL file.
-
-    The format has shifted over releases, so this reads defensively: a row
-    contributes a message if any recognised role and text can be found on it.
-    """
+    """Parse a Claude Code session JSONL file."""
     messages: list[ImportedMessage] = []
     title = ""
     session_id = path.stem
@@ -246,12 +221,7 @@ def parse_claude_session(path: Path) -> ImportedConversation | None:
 
 
 def parse_codex_session(path: Path) -> ImportedConversation | None:
-    """Parse a Codex CLI rollout JSONL file.
-
-    Codex rollouts wrap the interesting payload in ``payload`` or ``item``
-    depending on version, so both are unwrapped before the Claude-shaped reader
-    logic is reused.
-    """
+    """Parse a Codex CLI rollout JSONL file."""
     messages: list[ImportedMessage] = []
     first_ts: float | None = None
     conversation_id = path.stem
@@ -290,12 +260,7 @@ def parse_codex_session(path: Path) -> ImportedConversation | None:
 
 
 def parse_chatgpt_export(path: Path) -> list[ImportedConversation]:
-    """Parse a ChatGPT ``conversations.json`` data export.
-
-    Each conversation is a node ``mapping``; messages are walked in creation
-    order rather than by following parent links, which is enough for a summary
-    and immune to the branch structure changing.
-    """
+    """Parse a ChatGPT ``conversations.json`` data export."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except (json.JSONDecodeError, OSError) as exc:
@@ -394,12 +359,7 @@ def _derive_title(messages: list[ImportedMessage]) -> str:
 
 
 def extractive_summary(conversation: ImportedConversation) -> str:
-    """Model-free candidate summary.
-
-    Pulls out the original request, the commands that were actually run, and the
-    assistant sentences that read like environment claims. Everything is framed
-    as a claim to verify, never as an established fact.
-    """
+    """Model-free candidate summary."""
     lines: list[str] = []
 
     requests = [m.text.strip() for m in conversation.user_messages if m.text.strip()]
@@ -484,7 +444,6 @@ class ConversationImporter:
             category=category,
             created_at=original,
             # Deliberately never set: an import has not been verified against
-            # anything, so freshness must read from the original date only.
             last_verified=None,
             source=f"{tool} export: {Path(conversation.source_path).name}",
             confidence=Confidence.LOW,

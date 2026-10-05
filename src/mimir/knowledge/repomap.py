@@ -1,15 +1,4 @@
-"""A map of a repository, built once and refreshed on change.
-
-ADR-002 gap: a coding assistant that starts every task with a text search
-is reading the codebase for the first time on every task. This is one
-indexed pass per repository: where symbols are defined, what imports what,
-which tests exercise which modules, and which files change most. The LSP
-stays for precision inside a file; this is the altitude it lacks.
-
-Derived cache under ``$MIMIR_HOME/cache``. Delete it and it rebuilds. Python
-is parsed with ``ast``; other languages get a regex over definitions, which
-is coarse and says so in the ``kind`` column.
-"""
+"""A map of a repository, built once and refreshed on change."""
 
 from __future__ import annotations
 
@@ -255,8 +244,7 @@ class RepoMap:
             "SELECT DISTINCT path FROM imports WHERE resolved=?", (path,))]
 
     def tests_for(self, paths: list[str], *, depth: int = 2) -> list[str]:
-        """Test files that import the changed modules, directly or through
-        one intermediary. What run_worktree_tests should run first."""
+        """Test files that import the changed modules, directly or through one intermediary."""
         frontier = set(paths)
         seen: set[str] = set(paths)
         tests: set[str] = set()

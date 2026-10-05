@@ -1,11 +1,4 @@
-"""First-run setup (``mimir init``).
-
-Writes a commented config file, creates the ADR 11.2 directory layout, seeds the
-knowledge base, and builds the search index. It never overwrites an existing
-config without ``--force``, and it never invents environment specifics: cluster
-names, namespaces, and SDM resources are left as clearly marked placeholders for
-the operator to fill in (ADR 5.4, 9.3).
-"""
+"""First-run setup (``mimir init``)."""
 
 from __future__ import annotations
 
@@ -195,7 +188,6 @@ def update_config(changes: dict[str, Any]) -> Path:
 
     merged = merge(existing, changes)
     # Comments are lost on rewrite; keep the original as a reference so the
-    # operator can still read the explanations they were written with.
     if path.is_file() and not (path.parent / "config.yaml.orig").exists():
         shutil.copyfile(path, path.parent / "config.yaml.orig")
     path.write_text(yaml.safe_dump(merged, sort_keys=False, width=88), encoding="utf-8")
@@ -254,7 +246,6 @@ def _seed_knowledge(root: Path) -> list[str]:
         created.append(str(target.relative_to(root)))
 
     # Seed content that ships in the repository, if MIMIR is running from a
-    # checkout rather than an installed wheel.
     source_root = Path(__file__).resolve().parents[3] / "knowledge"
     if source_root.is_dir() and source_root != root:
         for source in source_root.rglob("*.md"):

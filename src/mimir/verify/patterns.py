@@ -1,21 +1,4 @@
-"""A retry storm has a shape. One request is not a storm.
-
-con-retry-innocent-b failed in every run of every model from 7B to 117B.
-Shown a single request followed by connection pool exhaustion, with a batch
-job that opened four hundred connections sitting in plain view, MIMIR
-diagnoses a retry storm. Shown a real one, it also diagnoses a retry storm,
-so the diagnosis carries no information.
-
-Retries with exponential backoff leave a signature: the same identifier
-several times, with the gap between attempts roughly doubling. That is a
-pattern over timestamps, not a judgement, and it either is present or it is
-not.
-
-The gate is one-directional on purpose. Finding the signature does not
-establish that retries caused the incident, so it never upgrades an answer.
-Its absence does establish that this particular story is unsupported, so it
-demotes.
-"""
+"""A retry storm has a shape."""
 
 from __future__ import annotations
 
@@ -38,17 +21,14 @@ _REPEAT_ONCE = re.compile(
     r"\bthe same [\w ]{0,24}?(?:id|identifier|request|line|message)\b[^.]{0,24}?\bonce\b",
     re.IGNORECASE,
 )
-# Greedy over the whole list. A non-greedy version stopped at the second
-# value and read "gaps of 1s, 2s and 4s" as two gaps. The verdict came out
-# right anyway, which is how a parsing bug survives a passing test.
+# Greedy over the whole list.
 _GAPS = re.compile(
     r"\bgaps? of ((?:[0-9.]+\s*(?:ms|s|m|h)\b[\s,]*(?:and\s*)?)+)", re.IGNORECASE
 )
 _DURATION = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*(ms|s|m|h)\b", re.IGNORECASE)
 _UNIT_SECONDS = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}
 
-# A cause attributed to retrying. Deliberately narrow: an answer that merely
-# mentions a retry configuration is not diagnosing a storm.
+# A cause attributed to retrying.
 _RETRY_CAUSE = re.compile(
     r"\b(retry storm|retry amplification|retrying|retries|retry loop"
     r"|repeated retries|client retries|exponential backoff)\b",
@@ -56,12 +36,7 @@ _RETRY_CAUSE = re.compile(
 )
 
 MIN_ATTEMPTS = 3
-"""Two points make a gap. Three make a trend.
-
-Two attempts always look like backoff because a single gap cannot fail to be
-consistent with doubling, so the threshold is three or the test passes on
-every pair of lines in any log.
-"""
+"""Two points make a gap."""
 
 
 @dataclass(slots=True)
@@ -71,13 +46,7 @@ class RetryEvidence:
 
     @property
     def doubling(self) -> bool:
-        """Whether each gap is roughly twice the one before it.
-
-        The tolerance is wide because real backoff carries jitter, and a
-        scheduler under load stretches gaps further. Narrow tolerance would
-        reject genuine storms, and this gate's job is to catch the answer that
-        has no pattern at all, not to grade the pattern's tidiness.
-        """
+        """Whether each gap is roughly twice the one before it."""
         if len(self.gaps) < 2:
             return False
         return all(
@@ -120,12 +89,7 @@ def claims_retries(text: str) -> bool:
 
 
 def demote_unsupported_retry(answer: Any, evidence: RetryEvidence) -> tuple[Any, int]:
-    """Withdraw a retry diagnosis that the timing does not show.
-
-    Only ever demotes. A present signature is consistent with retries having
-    caused the incident but does not establish it, so a gate that promoted on
-    a match would be manufacturing confidence from a correlation.
-    """
+    """Withdraw a retry diagnosis that the timing does not show."""
     text = " ".join(
         filter(
             None,

@@ -1,9 +1,4 @@
-"""Deterministic extraction of what the operator asked for.
-
-Every case is a phrasing from a real session. The governing rule is that this
-never guesses: a parser that fills in a plausible value when it is unsure
-reintroduces the silent wrongness it exists to remove.
-"""
+"""Deterministic extraction of what the operator asked for."""
 
 from __future__ import annotations
 
@@ -12,9 +7,7 @@ from mimir.agent.request import parse_request
 
 class TestTheRequestThatStartedThis:
     def test_every_parameter_is_taken_out_of_the_sentence(self):
-        """The council was given five parameters in one sentence, carried none
-        of them through six tool calls, and reported that a pod which was
-        running did not exist."""
+        """The council was given five parameters in one sentence, carried none of them through six tool calls, and reported that a pod which was run..."""
         request = parse_request(
             "can you tell me the last 10 logs of any messaging outbound pod "
             "that is inside dev and in a cluster with ch1?"
@@ -27,8 +20,7 @@ class TestTheRequestThatStartedThis:
         assert not request.namespace, "none was stated, so none is invented"
 
     def test_a_widening_fallback_is_offered_but_not_taken(self):
-        """"messaging outbound" widens to "outbound", not to "messaging",
-        which is a prefix of forty other things."""
+        """"messaging outbound" widens to "outbound", not to "messaging", which is a prefix of forty other things."""
         request = parse_request("logs of any messaging outbound pod")
         assert request.name_candidates[0] == "messaging-outbound"
         assert "outbound" in request.name_candidates
@@ -37,8 +29,7 @@ class TestTheRequestThatStartedThis:
 
 class TestScope:
     def test_a_namespace_before_the_noun_beats_the_word_after_it(self):
-        """"in the payments namespace over the last 2 hours" matches
-        "namespace over" if the forms are tried in the wrong order."""
+        """"in the payments namespace over the last 2 hours" matches "namespace over" if the forms are tried in the wrong order."""
         request = parse_request("show restarts in the payments namespace over the last 2 hours")
         assert request.namespace == "payments"
 
@@ -46,8 +37,7 @@ class TestScope:
         assert parse_request("-n messaging-squad get logs").namespace == "messaging-squad"
 
     def test_a_cluster_described_two_words_out_is_still_found(self):
-        """"the ch1 dev cluster" puts the environment nearest the noun, so
-        taking only the adjacent word yields "dev", which names no cluster."""
+        """"the ch1 dev cluster" puts the environment nearest the noun, so taking only the adjacent word yields "dev", which names no cluster."""
         request = parse_request("tail 50 lines from the kannel client pods on the ch1 dev cluster")
         assert request.context_contains == "ch1"
         assert request.environment == "dev"
@@ -65,8 +55,7 @@ class TestCountsAndWindows:
         assert parse_request("tail 50 lines from api").tail == 50
 
     def test_a_duration_is_not_a_count(self):
-        """"the last 2 hours" read as two lines silently answers a different
-        question."""
+        """"the last 2 hours" read as two lines silently answers a different question."""
         request = parse_request("show restarts over the last 2 hours")
         assert request.tail == 0
         assert request.since == "2h"
@@ -95,19 +84,14 @@ class TestRouting:
         return triage(text).kind.value
 
     def test_a_described_target_routes_to_the_loop(self):
-        """The first version required a namespace flag or a hyphenated name, so
-        this fell through to the council, which listed 211 namespaces, invented
-        a pod to exec into, never read a log line, and reported that no such
-        pod existed. Two were running."""
+        """The first version required a namespace flag or a hyphenated name, so this fell through to the council, which listed 211 namespaces, inven..."""
         assert self._kind(
             "can you tell me the last 10 logs of any messaging outbound pod "
             "that is inside dev and in a cluster with ch1?"
         ) == "direct"
 
     def test_a_mutation_never_reaches_the_read_only_loop(self):
-        """"restart the api deployment" parses as an action against a named
-        target, and the loop reads. Mutation belongs to the council, which has
-        the prepare, approve and execute path."""
+        """"restart the api deployment" parses as an action against a named target, and the loop reads."""
         for text in (
             "restart the api deployment",
             "scale the api deployment to 5 in namespace payments",
@@ -117,8 +101,7 @@ class TestRouting:
             assert self._kind(text) == "investigate", text
 
     def test_direct_never_short_circuits_the_graph(self):
-        """Marking it cheap returned a canned reply that does not exist for
-        this verdict, and would have changed what the corpus measures."""
+        """Marking it cheap returned a canned reply that does not exist for this verdict, and would have changed what the corpus measures."""
         from mimir.graph.triage import triage
 
         verdict = triage("fetch the last 30 minutes of logs for the api deployment")
@@ -151,8 +134,7 @@ class TestBinding:
         )
 
     def test_the_environment_is_part_of_the_cluster_constraint(self):
-        """Left out, "any outbound pod in dev in a cluster with ch1" returned
-        the ch1 production clusters too."""
+        """Left out, "any outbound pod in dev in a cluster with ch1" returned the ch1 production clusters too."""
         agent = self._agent()
         agent.note_instruction(
             "logs of any messaging outbound pod inside dev in a cluster with ch1"
@@ -162,9 +144,7 @@ class TestBinding:
         assert bound["name_contains"] == "messaging-outbound"
 
     def test_a_namespace_nobody_named_is_cleared_not_defaulted(self):
-        """The model read "dev" as a namespace. No namespace is called dev, so
-        a search that would have found both pods returned nothing, and the
-        emptiness looked like an answer."""
+        """The model read "dev" as a namespace."""
         agent = self._agent()
         agent.note_instruction("logs of any outbound pod inside dev with ch1")
         assert agent.bind("find_workloads", {"namespace_contains": "dev"})[
@@ -177,19 +157,14 @@ class TestBinding:
         assert agent.bind("find_workloads", {})["namespace_contains"] == "messaging-squad"
 
     def test_a_stated_line_count_is_not_negotiable(self):
-        """"the last 10 logs" returning a hundred lines has answered a
-        different question."""
+        """"the last 10 logs" returning a hundred lines has answered a different question."""
         agent = self._agent()
         agent.note_instruction("the last 10 logs of api pods in -n payments")
         assert agent.bind("get_logs", {"target": "api", "tail": 500})["tail"] == 10
 
 
 class TestALocatedPodCarriesItsCluster:
-    """A search that spans clusters returns the context each match lives in,
-    and the next call names the pod without it. Left alone the pod name
-    resolves against whatever the kubeconfig points at: a request for logs from
-    a ch1 dev cluster returned logs from an unrelated one, and the answer named
-    the wrong cluster while looking entirely correct."""
+    """A search that spans clusters returns the context each match lives in, and the next call names the pod without it."""
 
     def _agent(self):
         from mimir.agent.ops import OpsAgent
@@ -231,10 +206,7 @@ class TestALocatedPodCarriesItsCluster:
         assert bound["namespace"] == "messaging-squad"
 
     def test_a_stated_context_loses_to_where_the_pod_was_found(self):
-        """This reversed deliberately. Where a pod was found is an observation
-        and what the model writes is a guess about the same thing. A 7B put the
-        context and namespace into one field four times running, and a
-        fill-if-absent rule let the wrong value stand."""
+        """This reversed deliberately."""
         agent = self._agent()
         self._found(agent)
         bound = agent.bind("get_logs", {"target": "messaging-outbound-abc",
@@ -255,9 +227,7 @@ class TestALocatedPodCarriesItsCluster:
 
 
 class TestTheTurnEndsWhenTheAskedActionIsDone:
-    """Under a constrained decoder the answer branch is always available and
-    the model does not reliably take it. A run that retrieved exactly the
-    requested log lines then fetched them another five times."""
+    """Under a constrained decoder the answer branch is always available and the model does not reliably take it."""
 
     def _agent(self):
         return TestALocatedPodCarriesItsCluster._agent(self)
@@ -282,10 +252,7 @@ class TestTheTurnEndsWhenTheAskedActionIsDone:
 
 
 class TestALocatedPodOverridesAGuess:
-    """A smaller model guesses the scope worse. One put the context and the
-    namespace into the namespace field as a single slash-joined string, four
-    times over, and a fill-if-absent rule let the wrong value stand because the
-    field was not empty."""
+    """A smaller model guesses the scope worse."""
 
     def _agent_with(self, context="aws-backend-ch1-dev", namespace="messaging-squad"):
         from mimir.tools.base import ToolResult

@@ -1,21 +1,4 @@
-"""Skill helpers exposed to the model (ADR 9, 10.2).
-
-Four typed helpers, one per disclosure level plus maintenance:
-
-``list_skills``       level 1: the catalogue, or a ranked shortlist for a request.
-``load_skill``        level 2: one skill's instruction body, plus named level-3 files.
-``run_skill_script``  runs a ``scripts/`` helper through the command executor.
-``validate_skill``    parses and structurally checks a skill package.
-
-``load_skill`` will not return every reference by default and there is no
-"load everything" argument: level-3 files must be named. ``run_skill_script``
-builds a :class:`~mimir.models.command.ProposedCommand` and hands it to
-``ctx.executor``, so the policy engine, approval broker, timeouts, redaction,
-and audit record all apply. Nothing here executes a script in-process.
-
-This module imports only :mod:`mimir.skills` and :mod:`mimir.tools.base`, so it
-loads even when the environment-specific helper modules are absent.
-"""
+"""Skill helpers exposed to the model (ADR 9, 10.2)."""
 
 from __future__ import annotations
 

@@ -1,21 +1,4 @@
-"""A minimal, synchronous LSP client over stdio.
-
-Only what repository investigation needs: definition, references, hover,
-document symbols and diagnostics. No completion, no formatting, no rename.
-
-Three properties matter more than coverage:
-
-* **It never blocks forever.** Every request carries a deadline. A language
-  server indexing a large repository can take tens of seconds before it answers
-  anything useful, and a hung server must degrade to "unavailable" rather than
-  wedging an investigation.
-* **It fails loudly and specifically.** "No server installed" and "server
-  returned no result" are different answers. Collapsing them would let a
-  missing toolchain read as "this symbol does not exist", which is the
-  confidently-wrong failure this project exists to prevent.
-* **It is not a model.** Everything here is exact. Where the server answers,
-  the answer is authoritative over anything the LLM believes.
-"""
+"""A minimal, synchronous LSP client over stdio."""
 
 from __future__ import annotations
 
@@ -36,8 +19,7 @@ log = get_logger(__name__)
 
 DEFAULT_TIMEOUT = 20.0
 INDEX_GRACE = 2.0
-"""Servers answer before indexing finishes, often with nothing. A short grace
-period after didOpen buys a correct answer instead of an empty one."""
+"""Servers answer before indexing finishes, often with nothing."""
 
 
 class LspError(RuntimeError):
@@ -45,11 +27,7 @@ class LspError(RuntimeError):
 
 
 class LspUnavailable(LspError):
-    """No server is installed for this language.
-
-    Distinct from an empty result on purpose: a caller must be able to tell
-    "I cannot answer this" from "the answer is nothing".
-    """
+    """No server is installed for this language."""
 
 
 @dataclass(frozen=True)
@@ -95,11 +73,7 @@ class _Pending:
 
 
 class LspClient:
-    """One server process for one project root.
-
-    Instances are cached by (binary, root) in :func:`get_client` because
-    starting a language server costs seconds and indexing costs more.
-    """
+    """One server process for one project root."""
 
     def __init__(self, spec: ServerSpec, root: Path, *, timeout: float = DEFAULT_TIMEOUT):
         self.spec = spec
@@ -214,12 +188,7 @@ class LspClient:
         return pending.result
 
     def _read_loop(self) -> None:
-        """Frame LSP messages off stdout and dispatch them.
-
-        Runs on a daemon thread. Any parse failure ends the loop rather than
-        looping on a corrupt stream; the next request then times out and
-        reports the server as unusable, which is the honest outcome.
-        """
+        """Frame LSP messages off stdout and dispatch them."""
         proc = self._proc
         if proc is None or proc.stdout is None:
             return
@@ -343,11 +312,7 @@ class LspClient:
         return _symbols(result or [], str(path))
 
     def diagnostics(self, path: Path) -> list[dict[str, Any]]:
-        """Diagnostics the server published for this file.
-
-        Published asynchronously, so this opens the document and waits briefly
-        rather than assuming they have already arrived.
-        """
+        """Diagnostics the server published for this file."""
         uri = self.open(path)
         deadline = time.time() + 3.0
         while uri not in self._diagnostics and time.time() < deadline:
@@ -433,12 +398,7 @@ _CLIENTS: dict[tuple[str, str], LspClient] = {}
 
 
 def get_client(path: Path, root: Path) -> LspClient:
-    """Cached client for the server that handles ``path`` rooted at ``root``.
-
-    Cached because a language server costs seconds to start and longer to
-    index. One process per (binary, root) is reused for the life of the
-    process.
-    """
+    """Cached client for the server that handles ``path`` rooted at ``root``."""
     spec = server_for(str(path))
     if spec is None:
         raise LspUnavailable(f"no language server is configured for {Path(path).name}")

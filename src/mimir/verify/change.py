@@ -1,25 +1,4 @@
-"""Every change is checked before it is allowed to stand.
-
-MIMIR wrote files and hoped. The model was asked to know the language, the
-framework and the codebase, and when it got one of them wrong the edit stayed,
-looked plausible in a diff, and was found later by whoever ran the code.
-
-None of those three need a model to check. A file either parses or it does not.
-The language server either reports a new error or it does not. A project rule
-either matches or it does not. So the model proposes and the rules dispose,
-which is the same argument as the risk classifier: the part that must be
-correct does not get to depend on the part that is probabilistic.
-
-Two kinds of outcome, and the distinction is deliberate. A file that no longer
-parses is reverted, because there is no reading under which that is an
-improvement and leaving it breaks every later tool call on the same file.
-Everything else is reported and left in place: an edit that introduces a type
-error may be the first half of a change the next step completes, and reverting
-it would make the loop unable to work in two steps.
-
-It can only ever block on evidence. No language server means no diagnostics
-check, not a failed one.
-"""
+"""Every change is checked before it is allowed to stand."""
 
 from __future__ import annotations
 
@@ -64,14 +43,7 @@ class ChangeReport:
 
     @property
     def guts_the_file(self) -> bool:
-        """Removed a lot, and much more than it added.
-
-        One attempt removed 248 lines and added 76 while passing every check
-        there was. Deleting is legitimate, so this is reported rather than
-        refused, but it must not be silent: a change that takes out three
-        times what it puts in is either a refactor the operator asked for or
-        an accident, and only they can tell which.
-        """
+        """Removed a lot, and much more than it added."""
         return self.lines_removed >= 20 and self.lines_removed >= 3 * max(
             1, self.lines_added
         )
@@ -124,12 +96,7 @@ class ChangeReport:
 
 
 def check_syntax(path: str, text: str) -> Violation | None:
-    """Does this file parse at all.
-
-    In-process and instant for the languages that allow it. This is the check
-    that earns the revert: a file that does not parse is not a partial change,
-    it is a broken one, and every later read of it returns nonsense.
-    """
+    """Does this file parse at all."""
     kind = _PARSERS.get(Path(path).suffix.lower())
     if kind == "python":
         try:
@@ -159,19 +126,7 @@ def check_syntax(path: str, text: str) -> Violation | None:
 
 
 def _lint(root: Path, relative: str) -> list[dict[str, Any]] | None:
-    """What the project's own linter says, or ``None`` when it cannot say.
-
-    Parsing is not enough and a real run proved it. Asked to add one method,
-    the model inserted its block in the middle of another method, leaving that
-    method's tail orphaned after a comment and its own definition duplicated.
-    The file parsed. The new method worked. It was broken, and the syntax gate
-    passed it, and the loop reported success.
-
-    A linter finds that in milliseconds: redefinition of an existing name, and
-    a variable assigned and never used where the tail was severed. These are
-    the shape of mistake an editing model makes, and they are exactly what a
-    linter is for.
-    """
+    """What the project's own linter says, or ``None`` when it cannot say."""
     if Path(relative).suffix.lower() != ".py":
         return None
     binary = shutil.which("ruff") or str(Path(sys.executable).parent / "ruff")
@@ -195,21 +150,13 @@ def _lint(root: Path, relative: str) -> list[dict[str, Any]] | None:
         if isinstance(f, dict)
     ]
     # E902 is the linter saying it could not read the file, not something it
-    # found in it. Counting that as a new finding would report a defect on the
-    # evidence that no evidence was gathered, which is the shape this whole
-    # gate exists to refuse.
     if any(f["code"] == "E902" for f in out):
         return None
     return out
 
 
 def _formatted(root: Path, relative: str) -> bool | None:
-    """Whether the file matches the project's formatter, or ``None`` if unknown.
-
-    Only useful as a before-and-after pair. A repository that does not use the
-    formatter has every file report unformatted, so the answer is meaningless
-    on its own and a blanket check would flag every edit ever made.
-    """
+    """Whether the file matches the project's formatter, or ``None`` if unknown."""
     if Path(relative).suffix.lower() != ".py" or not shutil.which("ruff"):
         return None
     try:
@@ -250,12 +197,7 @@ def verify_change(
     baseline_lint: list[dict[str, Any]] | None = None,
     was_formatted: bool = False,
 ) -> ChangeReport:
-    """Check one written file. Reverts only what cannot be read.
-
-    ``original`` is ``None`` for a new file, in which case a revert deletes it.
-    ``baseline`` is the diagnostics before the change, so a file that was
-    already failing to compile is not blamed on the edit that touched it.
-    """
+    """Check one written file."""
     report = ChangeReport(path=relative)
     target = Path(root) / relative
     if original is not None:
@@ -285,9 +227,7 @@ def verify_change(
     if Path(relative).suffix.lower() in _PARSERS:
         report.checks_run.append("syntax")
 
-    # Did the change connect what it added. Four attempts at one task passed
-    # syntax, lint and tests while two of them introduced a constant and never
-    # used it, and the incomplete ones had the smallest diffs.
+    # Did the change connect what it added.
     from mimir.verify import definitions
 
     for issue in definitions.check(original, updated):
@@ -316,8 +256,7 @@ def verify_change(
     else:
         report.checks_skipped.append("no project rules configured")
 
-    # Only when the file was formatted before the change. Otherwise the
-    # repository does not use the formatter and every edit would be flagged.
+    # Only when the file was formatted before the change.
     if was_formatted:
         after_formatting = _formatted(Path(root), relative)
         if after_formatting is None:
@@ -344,9 +283,7 @@ def verify_change(
     if after is None:
         report.checks_skipped.append("no language server for this file")
     else:
-        # Only what this change introduced. A file that was already failing is
-        # not the fault of the edit that touched it, and blaming it there
-        # teaches the loop to avoid the file rather than fix it.
+        # Only what this change introduced.
         known = {(d.get("line"), d.get("message")) for d in (baseline or [])}
         report.new_diagnostics = [
             d for d in after if (d.get("line"), d.get("message")) not in known
@@ -367,8 +304,7 @@ def baseline_formatted(root: Path, relative: str) -> bool:
 
 
 def baseline_lint(root: Path, relative: str) -> list[dict[str, Any]] | None:
-    """Lint findings before a change, so a file that was already failing its
-    own linter is not blamed on the edit that touched it."""
+    """Lint findings before a change, so a file that was already failing its own linter is not blamed on the edit that touched it."""
     return _lint(Path(root), relative)
 
 

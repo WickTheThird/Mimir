@@ -1,22 +1,4 @@
-"""Did the change actually connect what it added.
-
-Four attempts at one task all passed syntax, the linter and the tests. Asked to
-introduce a constant and use it as a default, two of them introduced the
-constant and never used it, one introduced it twice, and one did the job. The
-gate could not tell them apart, and because the incomplete attempts produce the
-smallest diffs, a selector preferring small diffs would have chosen one of
-those.
-
-Nothing here needs a model, and neither case is a matter of taste. A module
-level name that is defined and never read is dead: whatever the change was for,
-it did not connect. A name defined twice at module level is one definition too
-many, and the linter does not flag it for assignments the way it does for
-functions.
-
-Both are read from the syntax tree, and both are reported only when the change
-introduced them, so a file that already had dead constants is not blamed on the
-edit that touched it.
-"""
+"""Did the change actually connect what it added."""
 
 from __future__ import annotations
 
@@ -63,13 +45,7 @@ def _loads(tree: ast.Module) -> set[str]:
 
 
 def check(original: str | None, updated: str) -> list[DefinitionIssue]:
-    """Names the change introduced that are dead or defined twice.
-
-    A new file is not judged. The question is whether the change connected what
-    it added, and for a file that did not exist a moment ago the answer is not
-    in the file: a module of constants written for its importers looks exactly
-    like a module of constants nobody uses.
-    """
+    """Names the change introduced that are dead or defined twice."""
     if original is None:
         return []
     try:
@@ -99,8 +75,6 @@ def check(original: str | None, updated: str) -> list[DefinitionIssue]:
         if name in read:
             continue
         # A name listed in __all__ is used by whoever imports the module, and
-        # this file cannot see that. Only names the module keeps to itself can
-        # be called dead from here.
         if exported and _in_all(new_tree, name):
             continue
         issues.append(DefinitionIssue(name, lines[0], "dead"))

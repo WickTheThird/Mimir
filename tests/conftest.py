@@ -92,7 +92,6 @@ def repo_fixture(tmp_path: Path, settings):
     (repo / "cmd").mkdir(parents=True)
 
     # Without go.mod the module prefix is unknown, so "billing/internal/auth"
-    # cannot be resolved to a path and the import graph stops at the entrypoint.
     (repo / "go.mod").write_text("module billing\n\ngo 1.22\n", encoding="utf-8")
 
     (repo / "cmd" / "main.go").write_text(

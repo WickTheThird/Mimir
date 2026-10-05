@@ -1,9 +1,4 @@
-"""Every write is checked before it is allowed to stand.
-
-MIMIR wrote files and hoped. The model was asked to know the language, the
-framework and the codebase at once, and when it got one wrong the edit stayed,
-looked plausible in a diff, and was found by whoever ran the code.
-"""
+"""Every write is checked before it is allowed to stand."""
 
 from __future__ import annotations
 
@@ -38,15 +33,13 @@ class TestSyntax:
         assert check_syntax("a.json", '{"a": 1}') is None
 
     def test_a_language_with_no_parser_here_is_not_failed(self):
-        """It can only block on evidence. No parser means no check, not a
-        failed one."""
+        """It can only block on evidence."""
         assert check_syntax("a.rs", "this is not rust {{{") is None
 
 
 class TestRevert:
     def test_an_unparseable_edit_is_undone(self, tmp_path, settings):
-        """There is no reading under which that is an improvement, and leaving
-        it breaks every later tool call on the same file."""
+        """There is no reading under which that is an improvement, and leaving it breaks every later tool call on the same file."""
         target = tmp_path / "a.py"
         good = "def f():\n    return 1\n"
         target.write_text("def f(:\n")
@@ -65,9 +58,7 @@ class TestRevert:
         assert not target.exists()
 
     def test_a_rule_violation_is_reported_not_reverted(self, tmp_path, settings):
-        """An edit that breaks an invariant may be the first half of a change
-        the next step completes. Reverting it would stop the loop working in
-        two steps."""
+        """An edit that breaks an invariant may be the first half of a change the next step completes."""
         (settings.home / "rules" / "r.yaml").write_text(
             "- id: no-todo\n  title: no TODO markers\n  forbid: 'TODO'\n"
         )
@@ -136,9 +127,7 @@ class TestReporting:
 
 
 class TestInsertedBlocksLandAtTheRightDepth:
-    """The model decides what to insert and where. It should not also have to
-    decide how deep, and when it did, three runs in a row produced a file that
-    no longer parsed."""
+    """The model decides what to insert and where."""
 
     SOURCE = [
         "class Glossary:\n",
@@ -161,8 +150,7 @@ class TestInsertedBlocksLandAtTheRightDepth:
         return body
 
     def test_a_method_lands_beside_its_siblings_not_inside_the_one_above(self):
-        """The line before the insertion point is inside a method body, so
-        following it would nest the new method in that body."""
+        """The line before the insertion point is inside a method body, so following it would nest the new method in that body."""
         body = self._insert(4, "def count(self):\n    return 0")
         assert body.startswith("    def count(self):")
         assert "        return 0" in body
@@ -191,8 +179,7 @@ class TestTheLinterCanDecline:
     def test_a_file_it_cannot_read_reports_nothing_rather_than_a_defect(
         self, tmp_path, settings
     ):
-        """Reporting a defect on the evidence that no evidence was gathered is
-        the shape this whole gate exists to refuse."""
+        """Reporting a defect on the evidence that no evidence was gathered is the shape this whole gate exists to refuse."""
         report = verify_change(tmp_path, "gone.py", updated="x = 1\n",
                                original=None, settings=settings)
         assert report.new_lint == []
@@ -200,13 +187,7 @@ class TestTheLinterCanDecline:
 
 
 class TestParsingIsNotEnough:
-    """A real run proved it.
-
-    Asked to add one method, the model inserted its block into the middle of
-    another method, leaving that method's tail orphaned after a comment and its
-    own definition duplicated. The file parsed. The new method worked. It was
-    broken, the syntax gate passed it, and the loop reported success.
-    """
+    """A real run proved it."""
 
     CORRUPTED = (
         "class A:\n"
@@ -255,10 +236,7 @@ class TestParsingIsNotEnough:
 
 
 class TestInsertsDoNotDuplicateTheirSurroundings:
-    """Models include the code around the insertion point in what they insert,
-    apparently to show where it goes. Twice in six real runs: once a section
-    comment, which was untidy, and once an entire method, which left the
-    original's tail orphaned and its definition duplicated."""
+    """Models include the code around the insertion point in what they insert, apparently to show where it goes."""
 
     def _drop(self, body, neighbours, after):
         from mimir.tools.code import _drop_repeated_context
@@ -271,8 +249,7 @@ class TestInsertsDoNotDuplicateTheirSurroundings:
         assert self._drop(body, after, 0) == "    def count(self):\n        return 0\n"
 
     def test_a_repeated_multi_line_tail_is_dropped_whole(self):
-        """The damaging case is several lines long, and comparing one line at a
-        time walks straight past it."""
+        """The damaging case is several lines long, and comparing one line at a time walks straight past it."""
         body = (
             "    def count(self):\n        return 0\n"
             "        self._db.commit()\n        return cursor.rowcount or 0\n"
@@ -294,8 +271,7 @@ class TestInsertsDoNotDuplicateTheirSurroundings:
 
 
 class TestFormattingIsCheckedOnlyWhenItWasClean:
-    """A repository that does not use the formatter has every file report
-    unformatted, so a blanket check would flag every edit ever made."""
+    """A repository that does not use the formatter has every file report unformatted, so a blanket check would flag every edit ever made."""
 
     def test_a_file_that_was_not_formatted_is_not_judged_on_formatting(
         self, tmp_path, settings
@@ -323,9 +299,7 @@ class TestFormattingIsCheckedOnlyWhenItWasClean:
 
 
 class TestAnInsertThatChangesNothingSaysSo:
-    """A repeated insert was deduplicated down to nothing and still reported
-    success, so each no-op looked like progress and the loop inserted the same
-    method four times before the repeat guard stopped it."""
+    """A repeated insert was deduplicated down to nothing and still reported success, so each no-op looked like progress and the loop inserted t..."""
 
     def test_inserting_what_is_already_there_is_refused(self, tmp_path):
         import asyncio
@@ -369,10 +343,7 @@ class TestAnInsertThatChangesNothingSaysSo:
 
 
 class TestTheTestCommandCanActuallyRun:
-    """A worktree has no virtualenv, and on this machine there is no working
-    plain "python" either, so every test command the model wrote exited 127. It
-    could not verify its own change, never learned the change had worked, and
-    spent the rest of the turn poking at the file."""
+    """A worktree has no virtualenv, and on this machine there is no working plain "python" either, so every test command the model wrote exited..."""
 
     def test_a_bare_python_becomes_the_project_interpreter(self, tmp_path):
         from mimir.tools.code import _resolve_interpreter
@@ -391,8 +362,7 @@ class TestTheTestCommandCanActuallyRun:
             assert _resolve_interpreter(command, tmp_path) == command
 
     def test_a_resolvable_name_is_not_trusted_over_a_real_interpreter(self, tmp_path):
-        """which answers with a pyenv shim that exists as a file and fails when
-        run. Existing is not working."""
+        """which answers with a pyenv shim that exists as a file and fails when run."""
         import ast
         import inspect
 
@@ -408,10 +378,7 @@ class TestTheTestCommandCanActuallyRun:
 
 
 class TestAChangeThatMostlyDeletes:
-    """One attempt removed 248 lines and added 76 while passing syntax, lint,
-    tests and the definition check. The scorer summed both directions into "324
-    lines changed", which reads as a large edit rather than a file being
-    gutted."""
+    """One attempt removed 248 lines and added 76 while passing syntax, lint, tests and the definition check."""
 
     def _report(self, before, after, settings, tmp_path):
         (tmp_path / "a.py").write_text(after)

@@ -1,16 +1,4 @@
-"""Authentication and network posture (ADR 6.2 C1, 13.4, 16.5).
-
-Two rules the ADR states plainly:
-
-* Privileged helpers stay bound to loopback. Only the authenticated inference
-  facade is ever exposed through Cloudflare (ADR 16.5).
-* Non-loopback access requires authentication (ADR 6.2 C1).
-
-The distinction that matters here is not "is the caller authenticated" but
-"which surface is the caller on". A valid API key gets you the inference facade.
-It does not get you shell, Kubernetes, SDM, database, or filesystem execution,
-because those routes refuse non-loopback callers regardless of credentials.
-"""
+"""Authentication and network posture (ADR 6.2 C1, 13.4, 16.5)."""
 
 from __future__ import annotations
 
@@ -56,13 +44,7 @@ class Caller:
 
 
 def _client_address(request: Request) -> str:
-    """The immediate peer address.
-
-    Deliberately ignores X-Forwarded-For. A proxy header is attacker-controlled
-    input, and trusting it here would let a remote caller claim to be loopback
-    and reach the privileged surface. If a reverse proxy is ever put in front of
-    MIMIR, this needs an explicit trusted-proxy allow list, not a header read.
-    """
+    """The immediate peer address."""
     return request.client.host if request.client else ""
 
 
@@ -113,7 +95,6 @@ class Authenticator:
             return None
         for index, key in enumerate(self.settings.api.api_keys):
             # Constant-time comparison: a timing oracle on a key check is cheap
-            # to avoid and this endpoint is internet reachable.
             if hmac.compare_digest(presented, key):
                 return f"key{index}"
         return None

@@ -1,9 +1,4 @@
-"""Secret redaction (ADR 13.4, 20).
-
-Applied to command output before it is stored, shown, embedded in a prompt, or
-written to a log. The goal is not perfect DLP; it is to stop the obvious classes
-of credential from being persisted in Markdown, session storage, or telemetry.
-"""
+"""Secret redaction (ADR 13.4, 20)."""
 
 from __future__ import annotations
 
@@ -13,7 +8,6 @@ from typing import Any
 REDACTED = "[REDACTED]"
 
 # Ordered most specific first so that a token is not partially matched by a
-# looser rule before the precise one gets a chance.
 _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "private_key",
@@ -39,14 +33,7 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         ),
     ),
     (
-        # Prose form: "my password is hunter2", "the token was abc123". Imported
-        # chat transcripts (ADR 11.5) are full of this shape, and the assignment
-        # rule above only matches `key=value`.
-        #
-        # The value must look like a credential rather than an ordinary word:
-        # at least 8 characters with a digit, or mixed case with a digit, or a
-        # symbol. Without that, "the password is wrong" would be redacted, and a
-        # redactor that fires on prose is one people turn off.
+        # Prose form: "my password is hunter2", "the token was abc123".
         "prose_credential",
         re.compile(
             r"(?i)\b((?:my |the |a |your |our )?"
@@ -59,7 +46,6 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 # Values registered at runtime, for example configured API keys, that must never
-# appear in output even though they match no generic pattern.
 _LITERALS: set[str] = set()
 
 

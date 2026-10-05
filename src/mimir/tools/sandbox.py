@@ -1,36 +1,4 @@
-"""Restricted code runner, the K3 programmatic execution helper (ADR 8 K3, 9.7).
-
-Purpose: do bulk parsing, filtering, diffing, and statistics in code so that
-large data never has to pass through the model context (ADR R7).
-
-WHAT IS ACTUALLY ENFORCED, honestly stated:
-
-* A separate process, so a crash or a runaway allocation cannot take MIMIR down.
-* A scrubbed environment. Credentials matching ``settings.sandbox.scrub_env_patterns``
-  are removed, so the child does not inherit KUBECONFIG, SDM state, cloud keys,
-  or tokens. This is the ADR 9.7 requirement that it "must not inherit privileged
-  credentials by default".
-* POSIX resource limits: address space, CPU time, file size, and process count.
-* A wall-clock timeout with process-group kill, so ``while True`` cannot hang.
-* A temporary working directory, removed afterwards.
-* An AST pre-check that rejects obviously dangerous constructs.
-
-WHAT IS NOT ENFORCED, equally honestly:
-
-* This is NOT a security boundary against a determined adversary. The AST check
-  is a guardrail against accidents and casual misuse; it can be defeated by a
-  motivated attacker with enough indirection.
-* Network access is NOT blocked at the kernel level. Doing that on macOS needs
-  root or a sandbox profile that would break the interpreter. The AST check
-  refuses ``socket`` and friends, and the scrubbed environment means an
-  exfiltration attempt has no credentials to steal, but a process that really
-  wants to open a socket can.
-* The filesystem is NOT jailed. The child runs as the same user.
-
-The trust model that makes this acceptable: the code executed here is written by
-a local model working on the operator's behalf, not supplied by a third party.
-Untrusted web and log content is passed in as DATA files, never as code.
-"""
+"""Restricted code runner, the K3 programmatic execution helper (ADR 8 K3, 9.7)."""
 
 from __future__ import annotations
 
@@ -55,8 +23,7 @@ from mimir.tools.base import Capability, ToolContext, ToolError, ToolResult, too
 
 log = get_logger(__name__)
 
-#: Modules the runner refuses outright. Not exhaustive by design; see the module
-#: docstring on what this is and is not.
+# : Modules the runner refuses outright.
 _DENIED_IMPORTS = frozenset(
     {
         "socket",
@@ -120,9 +87,6 @@ def emit(value):
 '''
 
 #: Marker separating emitted JSON from ordinary stdout, so a script can print
-#: freely for debugging without corrupting the structured result. It must be
-#: plain text: str.splitlines() also splits on the ASCII record separators
-#: (\x1c-\x1e), so using one of those as a sentinel silently loses it.
 _EMIT_MARKER = "@@MIMIR_EMIT@@"
 
 
@@ -190,7 +154,6 @@ def _scrubbed_env(scrub_patterns: list[str], inputs: dict[str, str]) -> dict[str
         if key in keep or not any(pattern in key.upper() for pattern in scrub_patterns)
     }
     # Belt and braces: drop anything that still looks like a credential even if
-    # the configured patterns missed it.
     for key in list(env):
         upper = key.upper()
         if any(word in upper for word in ("TOKEN", "SECRET", "PASSWORD", "KEY", "CREDENTIAL")):
@@ -218,7 +181,6 @@ def _limits(memory_mb: int, cpu_seconds: int):
                 resource.setrlimit(what, (min(limit, hard), hard))
             except (ValueError, OSError):
                 # macOS refuses RLIMIT_AS and RLIMIT_NPROC in some configurations.
-                # A limit we cannot set is reported by the caller, not fatal here.
                 continue
 
     return apply
@@ -270,7 +232,6 @@ async def run_python(args: RunPythonInput, ctx: ToolContext) -> ToolResult:
             if artifact is None:
                 raise ToolError(f"unknown artifact ref: {ref}", code="not_found")
             # Copy rather than expose the store path, so a script cannot walk the
-            # artifact index and read material from another session.
             target = workdir / f"{name}.dat"
             shutil.copyfile(artifact.path, target)
             input_paths[name] = str(target)

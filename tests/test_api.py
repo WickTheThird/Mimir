@@ -1,9 +1,4 @@
-"""API surface tests (ADR 6.2 C1/C9, 16).
-
-The property that matters most: a valid API key buys the inference facade and
-nothing else. Privileged execution stays loopback-only regardless of credentials
-(ADR 16.5, NG5).
-"""
+"""API surface tests (ADR 6.2 C1/C9, 16)."""
 
 from __future__ import annotations
 
@@ -32,7 +27,6 @@ def client(settings):
     from mimir.api.app import create_app
 
     # TestClient presents as a non-loopback peer, which is exactly the case that
-    # needs testing: it exercises the remote path rather than the local bypass.
     with TestClient(create_app(settings)) as test_client:
         yield test_client
 
@@ -105,11 +99,7 @@ def test_streaming_terminates_properly(client, auth):
 
 
 def test_api_key_does_not_grant_privileged_execution(client, auth):
-    """ADR 16.5. This is the single most important API property.
-
-    Warp reaches MIMIR through a public tunnel with a key. That key must not
-    become a remote shell into the operator's machine.
-    """
+    """ADR 16.5."""
     for path, payload in [
         ("/api/investigations", {"question": "x"}),
         ("/api/investigations/stream", {"question": "x"}),

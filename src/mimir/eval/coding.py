@@ -1,11 +1,4 @@
-"""Run the coding corpus: build a fixture repository, change it, check the diff.
-
-Plan step 6a. Until this existed every coding claim was aspirational by
-ADR-002 §5. Each case is a small repository stated in the corpus, an
-instruction, and expectations over the unified diff and the fixture's own
-tests. Contrastive pairs share an instruction and differ by one fact in the
-repository, so the correct change flips.
-"""
+"""Run the coding corpus: build a fixture repository, change it, check the diff."""
 
 from __future__ import annotations
 

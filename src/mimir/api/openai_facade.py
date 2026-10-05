@@ -1,26 +1,4 @@
-"""OpenAI-compatible inference facade (ADR 6.2 C9, 16).
-
-This is the only surface intended to be reachable from outside the machine, via
-Cloudflare Tunnel, so that Warp can use the local model as a custom BYOK
-endpoint.
-
-ADR 16.4 is the design constraint that shapes this module: Warp already owns the
-outer agent loop, so the facade behaves as a MODEL GATEWAY, not as a nested
-LangGraph agent. Running a full autonomous graph behind Warp's own loop would
-duplicate planning, conflict on tool schemas, make approvals ambiguous, and risk
-proposing or executing the same command twice.
-
-What the facade does add, without nesting an agent:
-
-* the operator's system prompt conventions,
-* optional read-only memory retrieval, so the local model answers with the
-  operator's curated knowledge (ADR 16, "shared local model, memory, prompt
-  assets, and selected read-only retrieval capabilities").
-
-What it never does (ADR 16.5, NG5): expose shell, Kubernetes, SDM, database, or
-filesystem execution. Warp runs commands locally on the operator's own machine,
-which is the entire point; the endpoint only supplies model responses.
-"""
+"""OpenAI-compatible inference facade (ADR 6.2 C9, 16)."""
 
 from __future__ import annotations
 
@@ -108,8 +86,7 @@ class ChatCompletionRequest(BaseModel):
     tool_choice: Any = None
     response_format: dict[str, Any] | None = None
     user: str | None = None
-    # MIMIR extension. Off by default so a stock Warp request stays a plain
-    # gateway call (ADR 16.4).
+    # MIMIR extension.
     mimir_memory: bool = Field(default=False, alias="mimir_memory")
 
     model_config = {"populate_by_name": True, "extra": "ignore"}
@@ -294,16 +271,11 @@ def _resolve_alias(requested: str, settings: Any) -> str:
 
 def _task_class(alias: str) -> str:
     # Warp's interactive loop is latency sensitive, so a profile named for speed
-    # is routed as such; everything else takes the default path.
     return TaskClass.FAST_COMMAND if alias == "fast" else TaskClass.DEFAULT
 
 
 def _apply_system_prompt(messages: list[LLMMessage]) -> list[LLMMessage]:
-    """Append MIMIR's terminal conventions to the caller's system prompt.
-
-    Appended rather than replacing: Warp sends its own system prompt describing
-    its tools and output format, and overwriting it would break the client.
-    """
+    """Append MIMIR's terminal conventions to the caller's system prompt."""
     out = list(messages)
     for index, message in enumerate(out):
         if message.role == Role.SYSTEM:
@@ -315,11 +287,7 @@ def _apply_system_prompt(messages: list[LLMMessage]) -> list[LLMMessage]:
 
 
 async def _augment_with_memory(messages: list[LLMMessage]) -> list[LLMMessage]:
-    """Inject relevant curated memory as read-only context (ADR 16, 11).
-
-    This is retrieval, not agency: no tool is executed, nothing mutates, and a
-    failure degrades to the plain gateway path.
-    """
+    """Inject relevant curated memory as read-only context (ADR 16, 11)."""
     question = next(
         (m.content for m in reversed(messages) if m.role == Role.USER and m.content), ""
     )

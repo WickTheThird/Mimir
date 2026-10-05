@@ -1,11 +1,4 @@
-"""MIMIR command line interface (ADR 14).
-
-Command surface follows ADR 14.1. Those names were "illustrative, not committed",
-so where a name was ambiguous the clearer one is used and the ADR shape is kept.
-
-Every path runs through :class:`~mimir.graph.runner.InvestigationRunner`, so the
-CLI and the API cannot diverge in behaviour.
-"""
+"""MIMIR command line interface (ADR 14)."""
 
 from __future__ import annotations
 
@@ -57,8 +50,6 @@ app.add_typer(keys_app, name="keys")
 
 
 # ---------------------------------------------------------------------------
-# shared plumbing
-# ---------------------------------------------------------------------------
 
 
 def _build_runner(quiet: bool = False) -> InvestigationRunner:
@@ -98,13 +89,7 @@ async def _run_stream(
     show_evidence: bool = True,
     interface: str = "cli",
 ) -> InvestigationState:
-    """Drive one investigation and render it as it happens.
-
-    Always closes the runner. The checkpointer is an async context manager held
-    open in an AsyncExitStack; letting the event loop finalise it during
-    shutdown instead of closing it here raises "asynchronous generator is
-    already running" and prints a traceback over the answer.
-    """
+    """Drive one investigation and render it as it happens."""
     state = runner.new_session(question, environment=environment, interface=interface)
     spinner = Spinner("dots", text=Text("thinking", style="dim"))
     panel = render.render_context(state)
@@ -184,13 +169,7 @@ def _render_event(event: RunEvent, live: Live, status: Any, show_evidence: bool)
 def _validate_live_flags(
     allow_live: bool, confirmed: bool, allowlist: str
 ) -> list[str]:
-    """Three independent things must be true before a scoring run reaches real
-    infrastructure.
-
-    A benchmark quietly acquired cluster access once already. One flag is too
-    easy to inherit from a copied command line, so the confirmation and the
-    context allowlist are separate and both mandatory.
-    """
+    """Three independent things must be true before a scoring run reaches real infrastructure."""
     if not allow_live:
         return []
     missing = []
@@ -218,8 +197,6 @@ def _run(coro: Any) -> Any:
         raise typer.Exit(130) from None
 
 
-# ---------------------------------------------------------------------------
-# top level
 # ---------------------------------------------------------------------------
 
 
@@ -275,11 +252,7 @@ def command(
         False, "--execute", help="Offer to run the command after showing it."
     ),
 ) -> None:
-    """Construct a command from a natural-language description (ADR G1).
-
-    The command is always displayed before anything runs, and anything above the
-    auto-execute ceiling still requires approval even with --execute.
-    """
+    """Construct a command from a natural-language description (ADR G1)."""
     runner = _build_runner(quiet=True)
     state = _run(
         _run_stream(
@@ -315,11 +288,7 @@ def mcp(
     port: int = typer.Option(8010, "--port"),
     host: str = typer.Option("127.0.0.1", "--host"),
 ) -> None:
-    """Serve MIMIR's capabilities as MCP tools for an outer agent such as Warp.
-
-    Three tools, each running the full path with every gate: construct_command,
-    investigate, code_task. Nothing executes or applies without the operator.
-    """
+    """Serve MIMIR's capabilities as MCP tools for an outer agent such as Warp."""
     from mimir.mcp import serve
 
     serve(transport=transport, host=host, port=port)
@@ -329,11 +298,7 @@ def mcp(
 def calibrate(
     runs: int = typer.Option(10, "--runs", help="How many recent eval runs to pool."),
 ) -> None:
-    """Check the decision log against outcomes, per decision type (ADR-004 step 5).
-
-    Held out and grouped by session. Prints expected calibration error before
-    and after temperature scaling; only an improvement earns a temperature.
-    """
+    """Check the decision log against outcomes, per decision type (ADR-004 step 5)."""
     import sqlite3
 
     from mimir.eval.calibration import calibrate as _calibrate
@@ -420,8 +385,6 @@ def logs(
 
 
 # ---------------------------------------------------------------------------
-# repo / k8s / sdm
-# ---------------------------------------------------------------------------
 
 
 @repo_app.command("ask")
@@ -494,8 +457,6 @@ def sdm_investigate(
     )
 
 
-# ---------------------------------------------------------------------------
-# sessions
 # ---------------------------------------------------------------------------
 
 
@@ -580,8 +541,6 @@ def export_session(
 
 
 # ---------------------------------------------------------------------------
-# memory / skills / models
-# ---------------------------------------------------------------------------
 
 
 @memory_app.command("search")
@@ -633,12 +592,7 @@ def memory_adopt(
     overwrite: bool = typer.Option(False, "--overwrite", help="Rewrite existing notes."),
     dry_run: bool = typer.Option(False, "--dry-run", help="List what would be imported."),
 ) -> None:
-    """Adopt curated agent memory files as candidate memory.
-
-    Separate from 'memory import', which reads whole conversation transcripts.
-    A memory file is one fact a person decided to keep, which is a different
-    artefact and worth far more per token than a summarised session.
-    """
+    """Adopt curated agent memory files as candidate memory."""
     from mimir.knowledge.agent_memory import (
         AgentMemoryImporter,
         discover_memory_files,
@@ -795,7 +749,6 @@ def skills_validate() -> None:
     from mimir.tools.base import load_all_tools
 
     # The tool registry must be populated first, or every declared tool looks
-    # unregistered and the whole report is noise.
     load_all_tools()
     registry = get_skill_registry().reload()
     ok = True
@@ -866,8 +819,6 @@ def models_set(
     console.print(f"[green]updated {alias} in {path}[/green]")
 
 
-# ---------------------------------------------------------------------------
-# setup and diagnostics
 # ---------------------------------------------------------------------------
 
 
@@ -942,12 +893,7 @@ def monitor(
         False, "--once", help="Render a single frame and exit. Useful in scripts."
     ),
 ) -> None:
-    """Live view of MIMIR activity, model runtime, and host resources.
-
-    Read-only. The database is opened read-only and the runtime is polled with
-    status endpoints, never a generate call, so watching a benchmark cannot
-    change its result.
-    """
+    """Live view of MIMIR activity, model runtime, and host resources."""
     from mimir.monitor import dashboard
 
     dashboard.run(
@@ -990,21 +936,14 @@ def evaluate(
         "with --allow-live; anything else is refused by the policy engine.",
     ),
 ) -> None:
-    """Run the evaluation corpus (ADR 21).
-
-    Deterministic cases exercise the policy engine and need no model. Model cases
-    run full investigations and need a runtime.
-    """
+    """Run the evaluation corpus (ADR 21)."""
     from mimir.eval.harness import EvalHarness
 
     # Validate the live-access flags before doing any work, so an invalid
-    # invocation fails in a second rather than after the deterministic suite.
     live_contexts = _validate_live_flags(allow_live, confirm_live_eval, live_context_allowlist)
 
     harness = EvalHarness(get_settings())
-    # Before any case runs. Provenance describes what launched the run; taking
-    # it at the end records anything the operator changed while it was in
-    # flight as though it had produced the result.
+    # Before any case runs.
     from mimir.eval.provenance import collect as collect_provenance
 
     report_provenance = collect_provenance(
@@ -1053,8 +992,7 @@ def evaluate(
         console.print(model_report.summary())
         report.absorb(model_report)
 
-    # Persist unconditionally. ADR-002 section 5: a figure nobody can trace to a
-    # stored run is aspirational, so every run gets an id.
+    # Persist unconditionally.
     run_id = harness.persist(
         report,
         suite="regression" if not corpus else str(corpus),
@@ -1065,8 +1003,7 @@ def evaluate(
         console.print(f"\n[dim]run {run_id} stored; inspect with 'mimir eval runs'[/dim]")
 
     for result in report.results:
-        # Pending cases are already reported in their own section. Printing them
-        # as failures too trains the reader to skim past red lines.
+        # Pending cases are already reported in their own section.
         if not result.passed and not result.pending:
             console.print(
                 Text(f"  FAIL {result.case_id}: {result.detail}", style="red")
@@ -1137,11 +1074,7 @@ def eval_probe(
     replicates: int = typer.Option(3, "--replicates", "-r"),
     json_out: bool = typer.Option(False, "--json"),
 ) -> None:
-    """Measure the runtime rather than assuming it.
-
-    Each probe answers one question that changes what to build next, and each
-    reports what it did not control.
-    """
+    """Measure the runtime rather than assuming it."""
     import json as _json
 
     from mimir.eval.probes import PROBES
@@ -1209,16 +1142,7 @@ def eval_matrix(
     corpus: Path | None = typer.Option(None, "--corpus"),
     limit: int | None = typer.Option(None, "--limit", help="Cap the combinations run."),
 ) -> None:
-    """Benchmark role-to-model assignments, not models in isolation.
-
-    The interesting question is not which model scores highest alone but which
-    assignment of models to roles performs best together. A strong planner
-    paired with a weak synthesiser can lose to two mediocre models that agree
-    on format.
-
-    Combinations grow as len(models) ** len(roles), so --limit exists to keep a
-    sweep finishable. What is dropped is reported rather than silently skipped.
-    """
+    """Benchmark role-to-model assignments, not models in isolation."""
     from mimir.eval.matrix import run_matrix
 
     role_list = [r.strip() for r in roles.split(",") if r.strip()]
@@ -1262,12 +1186,7 @@ def eval_compare(
     baseline: str = typer.Argument(..., help="Run id to compare against."),
     candidate: str = typer.Argument(..., help="Run id under test."),
 ) -> None:
-    """Compare two runs across every dimension, not just the pass count.
-
-    Reports confounds first. A candidate that beat the baseline on a different
-    corpus, different prompts, or with live infrastructure enabled has not
-    beaten it at all, and the headline number would hide that.
-    """
+    """Compare two runs across every dimension, not just the pass count."""
     from mimir.eval.provenance import comparable
     from mimir.persistence.repositories import EvalRepository
 
@@ -1334,7 +1253,6 @@ def eval_compare(
     console.print(table)
 
     # Failure categories are where the useful answer usually is: which defects
-    # disappeared tells you what the change actually fixed.
     left_fail = left_meta.get("failure_breakdown") or {}
     right_fail = right_meta.get("failure_breakdown") or {}
     if left_fail or right_fail:

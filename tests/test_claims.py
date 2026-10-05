@@ -1,8 +1,4 @@
-"""Claim support tests.
-
-The governing requirement: a citation must be evidence, not ornament. Most of
-these exist to pin down the difference.
-"""
+"""Claim support tests."""
 
 from __future__ import annotations
 
@@ -50,8 +46,7 @@ class TestSubjectExtraction:
 
 class TestAntiDecoration:
     def test_a_claim_naming_a_file_needs_that_file_in_the_evidence(self):
-        """The failure this whole gate exists to prevent: any citation
-        satisfying any claim."""
+        """The failure this whole gate exists to prevent: any citation satisfying any claim."""
         evidence = [_evidence(claim="config loaded", source_id="src/config.py",
                               path="src/config.py")]
         support = check_claim(
@@ -72,8 +67,7 @@ class TestAntiDecoration:
         assert support.evidence_ids
 
     def test_a_path_matches_on_its_filename_but_not_on_a_common_directory(self):
-        """handler.py should match; the bare directory "auth" should not stand
-        in for the whole path."""
+        """handler.py should match; the bare directory "auth" should not stand in for the whole path."""
         assert check_claim(
             "see services/auth/handler.py",
             ClaimKind.OBSERVED,
@@ -88,8 +82,7 @@ class TestAntiDecoration:
 
 class TestEvidenceEligibility:
     def test_model_knowledge_cannot_support_an_observed_fact(self):
-        """Recall is not observation. Treating it as evidence is precisely the
-        move this project exists to prevent."""
+        """Recall is not observation."""
         evidence = [_evidence(claim="kubectl rollout undo reverts a deployment",
                               excerpt="kubectl rollout undo reverts a deployment",
                               source_type=SourceType.MODEL_KNOWLEDGE)]
@@ -133,8 +126,7 @@ class TestDanglingCitations:
 
 class TestDemotion:
     def test_unsupported_facts_are_relabelled_not_deleted(self):
-        """The claim may be true; what is false is calling it observed.
-        Deleting it would hide the failure by saying less."""
+        """The claim may be true; what is false is calling it observed."""
         answer = Answer(observed=["src/ghost.py handles retries", "src/real.py exists"])
         support = check_answer(answer, [_evidence(source_id="src/real.py",
                                                   path="src/real.py")])
@@ -174,8 +166,7 @@ class TestDemotion:
 
 class TestCompletenessGuard:
     def test_needle_coverage_is_reported_alongside_the_claim_rate(self):
-        """A gate can always lower the unsupported rate by making answers
-        emptier. Coverage is what makes that visible."""
+        """A gate can always lower the unsupported rate by making answers emptier."""
         from mimir.eval.harness import CaseKind, CaseResult, EvalReport
 
         report = EvalReport()
@@ -276,8 +267,7 @@ class TestGroundingDemotion:
         assert answer.confidence <= 0.3
 
     def test_a_name_the_operator_supplied_is_not_an_invention(self):
-        """Repeating back a name they gave us is not hallucination, and
-        flagging it teaches the reader to ignore the warning."""
+        """Repeating back a name they gave us is not hallucination, and flagging it teaches the reader to ignore the warning."""
         from mimir.verify.grounding import check, demote_ungrounded
 
         answer = self._answer("messaging-whatsapp has no pods.")

@@ -1,9 +1,4 @@
-"""Monitor tests.
-
-The theme running through these: a dashboard is only worth having if a wrong
-reading is impossible rather than unlikely. Two of these tests exist because the
-first implementation got it wrong and said so on screen in red.
-"""
+"""Monitor tests."""
 
 from __future__ import annotations
 
@@ -19,11 +14,7 @@ from mimir.monitor.dashboard import _bar, _bytes, _duration
 
 class TestTagNormalisation:
     def test_bare_name_matches_implicit_latest(self):
-        """The profile says nomic-embed-text, /api/tags says it with :latest.
-
-        Comparing raw strings made the monitor print "not pulled" in red for a
-        model that was loaded and answering requests.
-        """
+        """The profile says nomic-embed-text, /api/tags says it with :latest."""
         assert runtime.normalise_tag("nomic-embed-text") == "nomic-embed-text:latest"
 
     def test_explicit_tag_is_untouched(self):
@@ -33,8 +24,7 @@ class TestTagNormalisation:
 
 class TestProcessClassification:
     def test_a_shell_in_the_project_directory_is_not_a_running_mimir(self):
-        """Substring matching caught the shell that happened to be sitting in
-        the repository and reported it as an active investigation."""
+        """Substring matching caught the shell that happened to be sitting in the repository and reported it as an active investigation."""
         assert machine._classify("zsh", ["/bin/zsh", "-c", "cd /home/me/mimir"]) is None
 
     def test_entry_point_is_recognised_with_its_verb(self):
@@ -53,8 +43,7 @@ class TestUnavailableRatherThanFabricated:
         assert machine.Reading(value=0.0).known, "zero is a measurement, not an absence"
 
     def test_no_recorded_warning_is_not_a_temperature(self):
-        """pmset reporting nothing means nothing has been recorded. Rendering
-        that as "nominal" would be a claim the output does not support."""
+        """pmset reporting nothing means nothing has been recorded."""
         state, _, _ = machine._thermal()
         assert state in ("no warning recorded", "throttled", "warning", "unavailable")
         assert state != "nominal"
@@ -69,9 +58,7 @@ class TestInFlightEvaluation:
         assert flight.eta_s == pytest.approx(500.0)
 
     def test_no_eta_before_two_cases_have_finished(self):
-        """One sample is not a pace. Extrapolating from it produces a confident
-        estimate built on nothing, which is the failure mode this project
-        treats as worse than saying nothing."""
+        """One sample is not a pace."""
         flight = activity.InFlightEval(pid=1, started_at=time.time(), completed=1, total=20)
         assert flight.eta_s is None
 
@@ -90,8 +77,7 @@ class TestActivityStore:
         assert act.error
 
     def test_the_store_is_opened_read_only(self, tmp_path):
-        """The monitor watches work that is writing to this database. It must
-        not be able to take a lock on it."""
+        """The monitor watches work that is writing to this database."""
         from mimir.config import Settings
 
         home = tmp_path / "home"
@@ -112,9 +98,7 @@ class TestActivityStore:
         read_only.close()
 
     def test_audit_gap_surfaces_a_silent_telemetry_hole(self):
-        """Sessions accumulating while a telemetry table stays at zero is the
-        exact shape of the executions bug: normal-looking activity, one number
-        nobody was reading."""
+        """Sessions accumulating while a telemetry table stays at zero is the exact shape of the executions bug: normal-looking activity, one number..."""
         act = activity.Activity()
         act.sessions = [
             activity.SessionRow("s1", "completed", "t", "cli", "", 0.0, 0.0, 1.0, None, None)
@@ -128,9 +112,7 @@ class TestActivityStore:
 
 class TestPullProgress:
     def test_sparse_preallocation_is_not_read_as_complete(self):
-        """Ollama pre-allocates the blob at full size. Reporting apparent size
-        shows 100% from the first second, which is how a stalled download looks
-        finished."""
+        """Ollama pre-allocates the blob at full size."""
         pull = runtime.PullProgress(
             blob="sha256:abc",
             downloaded_bytes=9 << 30,
@@ -170,8 +152,7 @@ class TestTelemetryInvariant:
         assert report.telemetry_complete
 
     def test_incomplete_does_not_fail_safety_acceptance(self):
-        """Missing telemetry is experimental debt, not evidence of an
-        unobserved mutation, so it must not block an otherwise safe run."""
+        """Missing telemetry is experimental debt, not evidence of an unobserved mutation, so it must not block an otherwise safe run."""
         from mimir.eval.harness import EvalReport
 
         report = EvalReport()
@@ -181,8 +162,7 @@ class TestTelemetryInvariant:
         assert report.acceptable, "safety acceptance is a separate question"
 
     def test_invocation_id_is_not_derived_from_time(self):
-        """Two calls can start in the same float tick. Keying on a timestamp
-        makes duplicate telemetry indistinguishable from a genuine retry."""
+        """Two calls can start in the same float tick."""
         from mimir.llm.base import ModelCallRecord
 
         common = {
@@ -195,9 +175,7 @@ class TestTelemetryInvariant:
 
 class TestReportMerging:
     def test_absorb_carries_the_contamination_verdict(self):
-        """Extending results alone dropped every report-level field. A model run
-        that tripped containment was persisted as clean, because the
-        deterministic report's defaults look identical to a clean result."""
+        """Extending results alone dropped every report-level field."""
         from mimir.eval.harness import EvalReport
 
         combined = EvalReport(label="deterministic")
@@ -218,8 +196,7 @@ class TestReportMerging:
 
 class TestCorpusLoading:
     def test_a_malformed_file_raises_rather_than_shrinking_the_corpus(self, tmp_path):
-        """A bad indent once dropped thirteen cases and the run reported a
-        perfect score against a denominator nobody chose."""
+        """A bad indent once dropped thirteen cases and the run reported a perfect score against a denominator nobody chose."""
         from mimir.eval.harness import CorpusError, EvalHarness
 
         (tmp_path / "broken.yaml").write_text("cases:\n  - id: a\n- id: b\n")
@@ -242,12 +219,7 @@ class TestCorpusLoading:
 
 class TestTelemetryPanel:
     def test_history_is_not_reported_as_a_present_fault(self):
-        """Sessions older than the first telemetry row predate the
-        instrumentation, so their lack of model calls is expected.
-
-        Counting them showed "17/20 recent sessions recorded no model calls" at
-        a moment when every session since the fix was instrumented correctly.
-        """
+        """Sessions older than the first telemetry row predate the instrumentation, so their lack of model calls is expected."""
         health = activity.TelemetryHealth(
             sessions_checked=3, sessions_without_calls=0,
             model_calls_total=43, instrumented_since=1000.0,
@@ -289,11 +261,7 @@ class TestTelemetryPanel:
 
 
 def _rendered(renderable) -> str:
-    """Render to plain text.
-
-    str() of a Rich renderable is its repr, not its content, so asserting
-    against it passes or fails for reasons unrelated to what is displayed.
-    """
+    """Render to plain text."""
     from rich.console import Console
 
     console = Console(width=120, record=True, file=io.StringIO())
@@ -423,8 +391,7 @@ class TestSeriesStatistics:
         assert agreement == pytest.approx(2 / 3)
 
     def test_a_tie_resolves_to_pass_and_is_reported_as_half(self):
-        """With an even number of runs a tie is not a majority. It is reported
-        at 50% agreement so nobody reads it as a settled outcome."""
+        """With an even number of runs a tie is not a majority."""
         s = self._series({"x": True}, {"x": False})
         _, _, majority, agreement = s.unstable_cases()[0]
         assert majority is True
@@ -441,8 +408,7 @@ class TestSeriesStatistics:
 
 class TestLiveCases:
     def test_no_pass_or_fail_is_claimed_before_scoring(self):
-        """Scoring happens in process and is not written until the run ends.
-        A verdict shown here would be invented."""
+        """Scoring happens in process and is not written until the run ends."""
         case = activity.LiveCase(
             case_id="inv-001", session_id="s", prompt="p", task_type="t",
             confidence=0.35, evidence=7, tool_calls=2, duration_s=19.0,
@@ -496,8 +462,7 @@ class TestCouncilGraph:
         assert self._node("x").mean_latency_ms == 0.0
 
     def test_total_latency_is_never_zero_so_shares_are_safe(self):
-        """Share of time divides by this. A council with no recorded latency
-        would otherwise raise while rendering."""
+        """Share of time divides by this."""
         assert self._council(self._node("x")).total_latency_ms == 1.0
 
     def test_active_nodes_are_reported(self):
@@ -532,8 +497,7 @@ class TestCouncilGraph:
 
 
 class TestTrends:
-    """Motion must encode information, or it is an animation pretending to be
-    a status."""
+    """Motion must encode information, or it is an animation pretending to be a status."""
 
     def test_one_sample_is_not_a_trend(self):
         from mimir.monitor.dashboard import _sparkline
@@ -542,8 +506,7 @@ class TestTrends:
         assert _sparkline([42.0]).plain == "collecting"
 
     def test_a_flat_series_draws_flat(self):
-        """Scaling to the observed range means a flat line reads as genuinely
-        flat, rather than being stretched to look like variation."""
+        """Scaling to the observed range means a flat line reads as genuinely flat, rather than being stretched to look like variation."""
         from mimir.monitor.dashboard import _sparkline
 
         assert set(_sparkline([5.0] * 6).plain) == {"▁"}
@@ -576,15 +539,7 @@ class TestTrends:
 
 
 class TestPersistedMetadataShape:
-    """Assert on what reaches the database, not on what the code appears to do.
-
-    Two fields were silently missing from every stored run: `enabled_tools` was
-    dropped by the merge, and the telemetry keys were never written at all
-    because a blind string replacement did not match its anchor. Both looked
-    correct in the source. Neither had a test asserting the persisted shape, so
-    both reached the database, and the only reason they were caught is that
-    someone read a stored record back.
-    """
+    """Assert on what reaches the database, not on what the code appears to do."""
 
     REQUIRED = (
         "unapproved_mutations",
@@ -632,8 +587,7 @@ class TestPersistedMetadataShape:
         assert captured["valid_for_efficiency_comparison"] is True
 
     def test_absorb_carries_the_tool_names_not_only_the_hash(self):
-        """The hash proves two runs used the same tools; the names say which.
-        A stored run with a hash and an empty name list cannot be audited."""
+        """The hash proves two runs used the same tools; the names say which."""
         from mimir.eval.harness import EvalReport
 
         combined = EvalReport(label="deterministic")
@@ -658,9 +612,7 @@ class TestPersistedMetadataShape:
 
 
 class TestPassAtK:
-    """pass@k answers "is the capability there"; pass^k answers "can it be
-    trusted". Reporting only one of them, or only a mean, hides the gap that
-    matters."""
+    """pass@k answers "is the capability there"; pass^k answers "can it be trusted"."""
 
     def _series(self, *runs, deterministic=()):
         s = activity.Series(corpus_hash="c", commit="abc")
@@ -686,8 +638,7 @@ class TestPassAtK:
         assert s.pass_hat_k() == (0, 1)
 
     def test_deterministic_cases_are_excluded_by_default(self):
-        """They are always stable, so including them only drags the
-        reliability figure toward 100% and hides the model's behaviour."""
+        """They are always stable, so including them only drags the reliability figure toward 100% and hides the model's behaviour."""
         s = self._series(
             {"model": True, "det": True},
             {"model": False, "det": True},
@@ -703,8 +654,7 @@ class TestPassAtK:
         assert s.pass_hat_k() is None
 
     def test_the_gap_is_what_distinguishes_capability_from_reliability(self):
-        """18/21 solvable but 11/21 reliable is a routing and procedure
-        problem, not a knowledge problem."""
+        """18/21 solvable but 11/21 reliable is a routing and procedure problem, not a knowledge problem."""
         runs = [{f"c{i}": True for i in range(11)} for _ in range(3)]
         for i in range(11, 18):          # 7 unstable
             runs[0][f"c{i}"] = True

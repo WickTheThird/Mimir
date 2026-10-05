@@ -1,23 +1,4 @@
-"""Incremental chunk index over the Markdown memory (ADR 11.2, G5, R7).
-
-The files on disk stay the source of truth; this is a derived cache that can be
-deleted and rebuilt at any time. It lives under ``$MIMIR_HOME/cache`` rather
-than inside ``knowledge/`` so the knowledge tree stays clean in version control.
-
-Design points:
-
-* Chunks, not whole documents, are indexed. A runbook is a sequence of steps and
-  the useful retrieval unit is a section, not a 400-line file (ADR R7 context
-  explosion).
-* Splitting is heading-aware so every chunk keeps a heading path that can be
-  shown to the user and turned into a :class:`~mimir.models.evidence.Citation`.
-* Reindexing is incremental: a document is re-chunked only when its content hash
-  changes, so a full sweep over an unchanged tree costs one ``stat`` per file.
-* Keyword search uses SQLite FTS5 when the local build has it and degrades to a
-  LIKE scan when it does not.
-* Embeddings are optional and stored as float32 BLOBs; similarity is computed in
-  numpy rather than by an extension, which keeps the dependency surface at zero.
-"""
+"""Incremental chunk index over the Markdown memory (ADR 11.2, G5, R7)."""
 
 from __future__ import annotations
 
@@ -94,7 +75,6 @@ def chunk_markdown(
             )
         else:
             # Too small to stand alone: fold it into the previous chunk so a one
-            # line section is still retrievable.
             previous = chunks[-1]
             previous.text = f"{previous.text}\n\n{text}"
             previous.end_line = end_line
@@ -220,12 +200,7 @@ def _fts5_available(conn: sqlite3.Connection) -> bool:
 
 
 def _fts_query(query: str) -> str:
-    """Build a permissive FTS5 MATCH expression.
-
-    Tokens are OR-ed rather than AND-ed: recall matters more than precision here
-    because the hybrid scorer, trust ladder, and freshness pass all re-rank
-    afterwards.
-    """
+    """Build a permissive FTS5 MATCH expression."""
     tokens = [t for t in _FTS_TOKEN_RE.findall(query) if len(t) > 1]
     if not tokens:
         return ""
@@ -658,12 +633,7 @@ class KnowledgeIndex:
         return {row["doc_id"]: row for row in rows}
 
     def superseded_by(self) -> dict[str, list[str]]:
-        """Map ``target doc_id -> [documents that claim to supersede it]``.
-
-        Cheap enough to run on every retrieval, and it catches the case that
-        matters for ADR 11.5: a retrieved note has already been replaced by one
-        the query did not surface.
-        """
+        """Map ``target doc_id -> [documents that claim to supersede it]``."""
         out: dict[str, list[str]] = {}
         for row in self._conn.execute(
             "SELECT doc_id, supersedes FROM documents WHERE supersedes IS NOT NULL "

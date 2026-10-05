@@ -1,26 +1,4 @@
-"""Calibrate the decision log against outcomes, per decision type.
-
-ADR-004 step 5. Every decision the graph makes is logged with its options,
-choice and probability. Once a session has an outcome, each logged decision
-is a (probability, was_it_right) pair, and a decision type with enough pairs
-can be checked and corrected.
-
-Two rules carried over from the rest of the evaluation work:
-
-* **Grouped, held out.** A temperature fitted on the pairs it is then
-  scored on reports a calibration it does not have. Folds are grouped by
-  session so a session's decisions never straddle the split.
-* **Nothing is called calibrated until it is measured to be.** Below the
-  minimum sample the report says "insufficient" and no temperature is
-  written. `Verdict.calibrated` stays False for that decision type and the
-  probability floor stays off, which is the honest state.
-
-What "right" means differs per field and is defined here, not guessed:
-for ``retrieval``, ``sufficient`` and ``conflict`` the case outcome is the
-label (a decision that fed a passing answer was right); for ``next`` and
-``target`` the same. This is coarse and stated as such. A finer label needs
-the decision-level ground truth that step 8's records will carry.
-"""
+"""Calibrate the decision log against outcomes, per decision type."""
 
 from __future__ import annotations
 

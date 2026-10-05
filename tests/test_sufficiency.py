@@ -33,11 +33,7 @@ def test_a_search_that_could_not_run_is_not_a_finding():
 
 
 def test_failure_beats_completion_when_both_appear():
-    """A partial search cannot establish that the unreached targets are empty.
-
-    Treating some targets answering as a complete search is the exact error
-    this module exists to stop.
-    """
+    """A partial search cannot establish that the unreached targets are empty."""
     blob = "Two clusters answered successfully. The third timed out."
     assert classify_retrieval(observations=blob) is Retrieval.FAILED
 
@@ -80,8 +76,7 @@ def test_an_answer_making_no_existence_claim_is_left_alone():
 
 
 def test_demotion_rewrites_the_prose_not_only_the_bullets():
-    """A demoted bullet under intact prose leaves the wrong conclusion in
-    the line the operator actually reads."""
+    """A demoted bullet under intact prose leaves the wrong conclusion in the line the operator actually reads."""
     answer = FinalAnswer(
         answer="There is no billing pod.",
         observed_facts=["There is no billing pod in any namespace."],
@@ -124,9 +119,7 @@ def test_a_sound_answer_passes_through_untouched():
 
 
 def test_the_gate_reads_the_field_the_real_answer_actually_has():
-    """Written after a SimpleNamespace stand-in accepted a field name that
-    FinalAnswer does not have, so the unit tests passed and the graph raised
-    AttributeError on the first real run."""
+    """Written after a SimpleNamespace stand-in accepted a field name that FinalAnswer does not have, so the unit tests passed and the graph rai..."""
     answer = FinalAnswer(answer="There is no billing pod.", confidence=0.9)
     assert not hasattr(answer, "summary")
     answer, moved = demote_overreach(
@@ -195,8 +188,7 @@ class TestStaleDemotion:
         assert "6 replicas" in answer.answer
 
     def test_an_answer_that_already_says_verify_is_left_alone(self):
-        """Appending a second instruction to an answer that gave the right one
-        reads as a system that does not understand its own output."""
+        """Appending a second instruction to an answer that gave the right one reads as a system that does not understand its own output."""
         text = "The note says 6 replicas. Verify against the live system."
         answer = self._answer(text)
         answer, moved = demote_stale(answer, Currency.STALE)
@@ -211,9 +203,7 @@ class TestStaleDemotion:
 
 
 def test_the_freshness_window_comes_from_config_not_from_a_literal():
-    """The first version read settings.memory.stale_after_days, which does not
-    exist, so getattr returned the default written beside it and the gate ran
-    on a 30-day window with nothing logged."""
+    """The first version read settings.memory.stale_after_days, which does not exist, so getattr returned the default written beside it and the..."""
     from mimir.config import get_settings
     from mimir.graph.nodes import _stale_after_days
 
@@ -224,9 +214,7 @@ class TestTheGateDoesNotFireOnEverything:
     """A gate that fires on nearly every case is not a gate."""
 
     def test_silence_about_looking_does_not_demote(self):
-        """47 of the 52 model cases in this corpus classify as unknown,
-        because a prompt describing a situation rarely narrates whether a
-        search ran. Demoting on unknown fired on almost all of them."""
+        """47 of the 52 model cases in this corpus classify as unknown, because a prompt describing a situation rarely narrates whether a search ran."""
         result = check("The pod is running.", observations="The pod is important.")
         assert result.retrieval is Retrieval.UNKNOWN
         assert not result.overreaching
@@ -257,13 +245,7 @@ class TestTheGateDoesNotFireOnEverything:
 
 
 def test_no_gate_fires_on_a_large_fraction_of_the_corpus():
-    """The guard that caught the sufficiency gate demoting 47 of 52 cases.
-
-    A gate is meant to be the exception. One that fires on most cases is
-    either measuring something other than what it claims, or the corpus is
-    uniformly broken in a way that deserves its own investigation. Either
-    way it must not reach a sweep unexamined.
-    """
+    """The guard that caught the sufficiency gate demoting 47 of 52 cases."""
     from mimir.eval.harness import EvalHarness
     from mimir.verify.grounding import check as grounding_check
     from mimir.verify.patterns import claims_retries
@@ -295,8 +277,7 @@ class TestFromTheFirstMeasuredRun:
     """Three failures that were ordering and wording, not mechanism."""
 
     def test_the_operators_statement_outranks_unrelated_structured_freshness(self):
-        """A recent memory hit about something else does not make a
-        fourteen-month-old unverified note current."""
+        """A recent memory hit about something else does not make a fourteen-month-old unverified note current."""
         assert classify_currency(observations=NEVER, freshness=["recent"]) is Currency.STALE
 
     def test_structured_freshness_still_decides_when_the_statement_is_silent(self):
@@ -316,8 +297,7 @@ class TestFromTheFirstMeasuredRun:
         assert moved == 0 and answer.confidence <= 0.35
 
     def test_an_empty_listing_makes_the_answer_say_none(self):
-        """The model said it could not determine which pods were running for
-        lack of tools. The listing had answered: none."""
+        """The model said it could not determine which pods were running for lack of tools."""
         from mimir.verify.sufficiency import demote_empty
 
         answer = FinalAnswer(answer="I cannot determine which pods are running.", confidence=0.4)
@@ -338,8 +318,7 @@ class TestFromTheFirstMeasuredRun:
 
 
 class TestTheVerdictWordLeads:
-    """Found in the full sweep: the gate classified correctly and the answer
-    hedged in other words, so the one word that settles it never appeared."""
+    """Found in the full sweep: the gate classified correctly and the answer hedged in other words, so the one word that settles it never appeared."""
 
     def test_a_failed_retrieval_leads_with_unknown_even_when_the_prose_hedges(self):
         from mimir.verify.sufficiency import state_verdict

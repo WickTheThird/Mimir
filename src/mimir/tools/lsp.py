@@ -1,22 +1,4 @@
-"""Language server tools: exact answers where regex was guessing.
-
-``find_symbol`` and ``find_references`` are ripgrep plus a heuristic that
-decides whether a matching line looks like a definition. That works until a
-name is shadowed, re-exported, imported under an alias, defined in a string, or
-simply common. A language server resolves the same questions from a parsed,
-type-aware model of the project and is right by construction.
-
-Every tool here follows the same chain, and no step in it is a guess:
-
-    document symbols  ->  exact position of the name
-                      ->  server query
-                      ->  location, signature or diagnostic
-
-ADR-003 section 4.7: where a problem has a reliable algorithmic solution, use
-it rather than asking a language model to imitate one. Section 4.2 makes the
-consequence explicit - a server answer outranks anything the model believes
-about the same symbol.
-"""
+"""Language server tools: exact answers where regex was guessing."""
 
 from __future__ import annotations
 
@@ -74,21 +56,12 @@ def _client(target: Path, root: Path) -> LspClient:
     try:
         return get_client(target, root)
     except LspUnavailable as exc:
-        # Distinguished from an empty result on purpose. "No server installed"
-        # must never read as "this symbol does not exist".
+        # Distinguished from an empty result on purpose.
         raise ToolError(str(exc), code="unavailable") from exc
 
 
 def _position(client: LspClient, target: Path, symbol: str) -> tuple[int, int]:
-    """Exact position of ``symbol``, from the server's own symbol table.
-
-    The line comes from the server. The column is the offset of the name within
-    that line, because a server returning SymbolInformation reports the range
-    of the whole definition - column 0, the ``def`` or ``class`` keyword - and
-    a position query there resolves nothing. Locating the name inside a line
-    the server already identified keeps the answer anchored to the parse rather
-    than to a text search over the file.
-    """
+    """Exact position of ``symbol``, from the server's own symbol table."""
     symbols = client.document_symbols(target)
     matches = [e for e in symbols if e.name == symbol]
     if not matches:

@@ -1,15 +1,4 @@
-"""Host resource sampling.
-
-The governing rule is the same one that governs evaluation: never display a
-number you cannot source. Several signals that people expect on a Mac (die
-temperature, GPU utilisation, per-core power) require ``powermetrics``, which
-needs root and cannot run unattended. Those fields report ``unavailable`` with
-the reason, rather than a plausible-looking fabrication.
-
-That distinction matters more here than it looks. A dashboard that prints
-"thermal: nominal" when it has read nothing is worse than one that prints
-nothing, because the operator will believe it and stop checking.
-"""
+"""Host resource sampling."""
 
 from __future__ import annotations
 
@@ -81,13 +70,7 @@ _RUNTIME_MARKERS = ("ollama", "llama-server", "mlx_lm", "llama.cpp")
 
 
 def _classify(name: str, cmdline: list[str]) -> str | None:
-    """Return a display label for processes worth showing, else None.
-
-    Matching is deliberately narrow. An early version matched the substring
-    "mimir" anywhere in the command line, which caught the shell that happened
-    to be sitting in the project directory and reported it as a running
-    investigation.
-    """
+    """Return a display label for processes worth showing, else None."""
     joined = " ".join(cmdline)
     lowered = name.lower()
 
@@ -101,11 +84,6 @@ def _classify(name: str, cmdline: list[str]) -> str | None:
         return lowered
 
     # A MIMIR process is identified by its entry point, not by the string
-    # appearing somewhere in an argument. Only the first two tokens can be an
-    # entry point: the interpreter and the script. Tokens containing spaces are
-    # arguments, never executables, and skipping them matters because
-    # os.path.basename("cd /home/me/mimir") is "mimir", which classified any
-    # shell sitting in the project directory as a running investigation.
     for index, token in enumerate(cmdline[:2]):
         if " " in token:
             continue
@@ -126,13 +104,7 @@ def _classify(name: str, cmdline: list[str]) -> str | None:
 
 
 def _thermal() -> tuple[str, str, Reading]:
-    """Read what macOS will actually tell an unprivileged process.
-
-    ``pmset -g therm`` reports throttling state without root. It commonly
-    reports nothing at all, which means "no warning has been recorded", not
-    "the machine is cool". Those are different claims and only the first is
-    supported by the output.
-    """
+    """Read what macOS will actually tell an unprivileged process."""
     try:
         result = subprocess.run(
             ["pmset", "-g", "therm"], capture_output=True, text=True, timeout=3
@@ -151,8 +123,7 @@ def _thermal() -> tuple[str, str, Reading]:
     if limit.known and limit.value is not None and limit.value < 100:
         return "throttled", f"CPU speed limit {limit.value:.0f}%", limit
     if "No thermal warning level has been recorded" in text:
-        # Precisely what this means: nothing has been recorded. It is not a
-        # temperature reading and must not be presented as one.
+        # Precisely what this means: nothing has been recorded.
         return "no warning recorded", "pmset has recorded no thermal warning", limit
     if "warning level" in text.lower():
         return "warning", text.splitlines()[0], limit

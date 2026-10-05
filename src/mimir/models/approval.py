@@ -1,9 +1,4 @@
-"""Human-in-the-loop approval records (ADR 13, 14.2, 15).
-
-Approvals are raised by the policy engine, surfaced by whichever interface owns
-the session (CLI, web UI, API), and resolved out of band. LangGraph interrupts
-carry the :class:`ApprovalRequest` payload verbatim.
-"""
+"""Human-in-the-loop approval records (ADR 13, 14.2, 15)."""
 
 from __future__ import annotations
 

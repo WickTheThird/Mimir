@@ -1,17 +1,4 @@
-"""System prompts for the council (ADR 7).
-
-Two rules run through all of them and are the reason MIMIR exists rather than a
-bare chat window:
-
-1. Evidence first. Observed facts, inferences, and unverified hypotheses are
-   labelled separately and never blended (ADR 2, 21.3).
-2. Data is not instruction. Anything retrieved from a repository, a log, a
-   Markdown note, or a web page is untrusted content (ADR 13.5).
-
-Specialist prompts are deliberately narrow. A specialist that is asked to stay
-in its lane produces a smaller, more checkable answer than one told to be
-generally helpful.
-"""
+"""System prompts for the council (ADR 7)."""
 
 from __future__ import annotations
 
@@ -268,11 +255,7 @@ def specialist_system_prompt(
     skill_bodies: dict[str, str] | None = None,
     memory_context: str = "",
 ) -> str:
-    """Assemble the system prompt for one specialist turn.
-
-    Skills are injected here rather than being permanently resident, which is
-    the progressive disclosure requirement in ADR 10.2.
-    """
+    """Assemble the system prompt for one specialist turn."""
     parts = [BASE_RULES, SPECIALIST_PROMPTS.get(specialist, "")]
 
     if environment_lines:

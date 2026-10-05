@@ -1,20 +1,4 @@
-"""Network containment for offline evaluation.
-
-Tool filtering decides what the model is *offered*. This decides what the
-process can *reach*. Both are needed, because the first failed on its own: a
-denylist omitted the web capability and a supposedly offline benchmark sent
-evaluation prompts to Google, Yandex, and Brave.
-
-Containment here is a process-level guard, not a sandbox. It intercepts name
-resolution and socket connection, permits loopback (the model runtime lives
-there), and refuses everything else while counting the attempts. A blocked
-attempt is recorded rather than silently dropped, because the count is the
-evidence that a run really was offline.
-
-It is not a security boundary. A determined caller can bypass it. It is a
-correctness boundary against the failure that actually happened: a tool nobody
-remembered to classify quietly reaching the internet.
-"""
+"""Network containment for offline evaluation."""
 
 from __future__ import annotations
 
@@ -79,12 +63,7 @@ def _is_loopback(host: str) -> bool:
 
 @contextmanager
 def network_containment(*, enabled: bool = True) -> Iterator[ContainmentReport]:
-    """Permit loopback, refuse and count everything else.
-
-    Proxy variables are cleared too. A proxy would route an "external" request
-    through a loopback address and defeat the check, which is precisely the kind
-    of gap that makes single-layer defences unreliable.
-    """
+    """Permit loopback, refuse and count everything else."""
     report = ContainmentReport()
     if not enabled:
         yield report

@@ -1,9 +1,4 @@
-"""Interactive mode: ``mimir`` with no arguments (ADR 14.1).
-
-A conversational loop over the same runner the one-shot commands use. Session
-state persists across turns, so follow-up questions can reference earlier command
-output as evidence (ADR 5.1 step 7).
-"""
+"""Interactive mode: ``mimir`` with no arguments (ADR 14.1)."""
 
 from __future__ import annotations
 
@@ -81,12 +76,7 @@ Read-only work runs without asking. Anything that changes state stops for approv
 
 
 def _banner_facts(settings: Any) -> dict[str, str]:
-    """What is actually loaded, read at startup rather than described.
-
-    The banner used to say only what MIMIR is for. It said nothing about which
-    model was bound or which tools existed, so a session that had silently lost
-    its language servers looked identical to one that had them.
-    """
+    """What is actually loaded, read at startup rather than described."""
     try:
         from mimir.tools.base import load_all_tools
 
@@ -111,9 +101,6 @@ def _banner_facts(settings: Any) -> dict[str, str]:
 async def run_repl(console: Console) -> None:
     settings = get_settings()
     # Every other command surface quiets its logging; this one never did, so
-    # structured developer output (correlation ids, session ids, shadowed skill
-    # counts) was printed straight into a conversational prompt. The log file
-    # still receives everything at the configured level.
     configure_logging(
         level="WARNING",
         json_logs=settings.observability.json_logs,
@@ -176,8 +163,6 @@ async def run_repl(console: Console) -> None:
             continue
 
         # An instruction whose target the operator already named is carried out
-        # rather than investigated. The council is for questions whose answer
-        # has to be argued for.
         if triage(line).kind is Triage.DIRECT:
             if ops is None:
                 ops = start_ops_view(console, runner, environment)
@@ -194,22 +179,14 @@ async def run_repl(console: Console) -> None:
 
 
 def _close_coding(coding: AgentView, settings: Any) -> None:
-    """Stop addressing the worktree by name; leave the worktree itself alone.
-
-    Discarding on exit would throw away work because someone typed /done, and
-    a task worktree is meant to survive until it is reviewed."""
+    """Stop addressing the worktree by name; leave the worktree itself alone."""
     from mimir.tools.repo import get_repository_directory
 
     get_repository_directory(settings).forget_session(f"{coding.task}-worktree")
 
 
 async def _run_interruptibly(coro: Any) -> None:
-    """Run a turn so Ctrl-C stops the turn rather than the session.
-
-    Without this, interrupting a twelve step loop that has gone the wrong way
-    means killing the process, which loses the conversation and every file it
-    had already read.
-    """
+    """Run a turn so Ctrl-C stops the turn rather than the session."""
     task = asyncio.ensure_future(coro)
     loop = asyncio.get_running_loop()
     # Not every platform has POSIX signal handlers on the loop.
@@ -229,12 +206,7 @@ async def _run_interruptibly(coro: Any) -> None:
 
 
 def _decay_memory(settings: Any) -> None:
-    """Let the working set age at the start of a session, not during one.
-
-    Decaying mid-turn would mean a note recalled at step two could fall out by
-    step nine of the same piece of work, which is not forgetting, it is losing
-    your place.
-    """
+    """Let the working set age at the start of a session, not during one."""
     try:
         from mimir.knowledge.bank import get_memory_bank
 
@@ -259,7 +231,6 @@ async def _ask(
     state = runner.new_session(question, environment=environment, interface="cli")
     if previous is not None:
         # Carry forward what was already established so a follow-up does not
-        # re-gather the same evidence (ADR 5.1 step 7).
         state.evidence = list(previous.evidence)
         state.commands_executed = list(previous.commands_executed)
         state.outputs = dict(previous.outputs)
@@ -442,19 +413,10 @@ def main() -> None:
 
 
 # ---------------------------------------------------------------------------
-# capability introspection
-#
-# The prompt used to describe what MIMIR is for and nothing about what it
-# currently has. A session whose language servers had silently gone missing,
-# or whose model was serving a different context than configured, looked
-# exactly like a healthy one. These read live state rather than repeating the
-# documentation.
-# ---------------------------------------------------------------------------
 
 
 def _when(value: Any) -> str:
-    """A stored timestamp is an epoch float. Printed raw it is unreadable, and
-    a list nobody can read by date is a list nobody uses."""
+    """A stored timestamp is an epoch float."""
     from datetime import datetime
 
     try:
@@ -508,7 +470,6 @@ def _open_session(console: Console, argument: str) -> None:
         return
 
     # An eight character prefix is what /sessions prints, so it is what people
-    # type back. Resolving it here means the display and the input agree.
     state = load_state(wanted)
     if state is None:
         matches = [
@@ -758,7 +719,6 @@ def _print_worktrees(console: Console, argument: str) -> None:
         entry = matches[0]
         root = Path(str(entry["path"]))
         # Same base as diff_worktree uses: the working tree against its own
-        # HEAD. Task worktrees are written to, not committed in.
         worktree = TaskWorktree(
             name=str(entry["name"]), branch=str(entry["branch"]), root=root,
             repo_root=root, base_commit="HEAD", created_at=0.0,

@@ -1,11 +1,4 @@
-"""Did the change connect what it added.
-
-Four attempts at one task all passed syntax, the linter and the tests. Two
-introduced a constant and never used it, one introduced it twice, one did the
-job. Nothing in the gate could tell them apart, and because the incomplete
-attempts produce the smallest diffs, a selector preferring small diffs would
-have chosen one of those.
-"""
+"""Did the change connect what it added."""
 
 from __future__ import annotations
 
@@ -47,8 +40,7 @@ class TestTheCaseThisWasWrittenFor:
 
 class TestWhatItDoesNotJudge:
     def test_a_new_file_is_not_judged(self):
-        """A module of constants written for its importers looks exactly like a
-        module of constants nobody uses."""
+        """A module of constants written for its importers looks exactly like a module of constants nobody uses."""
         assert definitions.check(None, "A = 1\nB = 2\n") == []
 
     def test_something_already_dead_is_not_blamed_on_this_change(self):

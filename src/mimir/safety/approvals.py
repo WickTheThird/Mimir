@@ -1,10 +1,4 @@
-"""Approval broker (ADR 13.3, 14.2, 15).
-
-An approval is raised by whichever component hit a gated command, and resolved
-by whichever interface owns the session. The broker is an in-process async
-rendezvous with a persistence hook, so the CLI can prompt inline while the web
-UI resolves the same approval over HTTP.
-"""
+"""Approval broker (ADR 13.3, 14.2, 15)."""
 
 from __future__ import annotations
 
@@ -76,7 +70,6 @@ class ApprovalBroker:
         if not self._listeners:
             return
         # Every listener must run even if one raises; a failed UI notification
-        # must not strand the approval.
         await asyncio.gather(
             *(listener(request) for listener in list(self._listeners)),
             return_exceptions=True,
@@ -230,11 +223,7 @@ def reset_approval_broker() -> None:
 
 
 class AutoApprovalBroker(ApprovalBroker):
-    """Test and headless helper. Never enabled by configuration.
-
-    Used only by the evaluation harness where every gated command is expected to
-    be refused or auto-decided deterministically.
-    """
+    """Test and headless helper."""
 
     def __init__(
         self, decision: ApprovalStatus = ApprovalStatus.REJECTED, **kwargs: object

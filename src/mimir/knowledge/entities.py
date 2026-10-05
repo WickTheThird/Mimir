@@ -1,22 +1,4 @@
-"""What the system has seen, as things with names and edges between them.
-
-ADR-003 phase 4 in its smallest useful form, built for three jobs:
-
-* **Targeting.** "Restart the api deployment" names a workload and no
-  namespace. If the store has seen exactly one `api`, that is a computed
-  fact. If it has seen several, the candidate set is closed and small, which
-  is what a decision model is for. Today every one of those links is
-  re-derived by a generative model per question, and the operator's own
-  first complaint (`messaging-whatsapp` in `messaging-squad`) was this.
-* **Caller or callee.** A pod belongs to a workload in a namespace in a
-  context. Walking those edges is a query, not a judgement.
-* **Stale state.** Every fact carries ``seen_at``. A replica count seen
-  fourteen days ago is not a current replica count.
-
-The store grows only from observations tools already make. No crawler, and
-nothing here calls a cluster. It is a derived cache: delete it and the next
-investigation rebuilds it.
-"""
+"""What the system has seen, as things with names and edges between them."""
 
 from __future__ import annotations
 
@@ -106,12 +88,7 @@ class EntityStore:
         self._db.commit()
 
     def observe(self, tool: str, args: Any, result: Any) -> int:
-        """Record what a tool result showed. Returns how many entities.
-
-        Tolerant of shape on purpose: the tools put rows under different keys
-        and this must never raise inside a tool call. An observation that
-        cannot be read is logged and skipped, not a failure of the tool.
-        """
+        """Record what a tool result showed."""
         data = getattr(result, "data", None)
         if not getattr(result, "ok", False) or not isinstance(data, dict):
             return 0

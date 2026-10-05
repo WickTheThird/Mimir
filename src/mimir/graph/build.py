@@ -1,30 +1,4 @@
-"""Graph assembly (ADR 6.2 C2).
-
-LangGraph is used for what the ADR asks of it: durable execution, conditional
-routing, parallel subgraph delegation, checkpointing, and session continuation.
-
-Shape:
-
-    START
-      -> resolve_context
-      -> recall_memory
-      -> coordinate
-      -> (ask_user | select_skills)
-      -> dispatch        [fan out with Send, one branch per planned step]
-      -> gather
-      -> assess          [conclude | continue -> replan -> dispatch | ask]
-      -> (verify | safety_review)
-      -> safety_review
-      -> synthesise
-      -> curate_memory
-      -> finalise
-      -> END
-
-Approvals are not modelled as graph interrupts. They arise inside a tool call,
-several frames below any node boundary, so they are brokered by
-:class:`~mimir.safety.approvals.ApprovalBroker` which any interface can resolve.
-The graph checkpoint still makes the run durable across a restart.
-"""
+"""Graph assembly (ADR 6.2 C2)."""
 
 from __future__ import annotations
 
@@ -75,11 +49,7 @@ def _route_after_coordinate(state: GraphState) -> str:
 
 
 def _dispatch(state: GraphState) -> list[Send] | str:
-    """Fan out one branch per planned step (ADR 7.2, 10.5 subagent execution).
-
-    Returning a list of Send objects is what makes specialists run in parallel
-    with independent contexts, rather than one long shared conversation.
-    """
+    """Fan out one branch per planned step (ADR 7.2, 10.5 subagent execution)."""
     steps = state.get("pending_steps") or []
     if not steps:
         return "gather"
@@ -129,7 +99,6 @@ def build_graph(deps: NodeDeps, *, parallel: bool = True) -> StateGraph:
         "coordinate",
         _route_after_coordinate,
         # "done" is the triage exit: conversational input answered directly,
-        # still recorded as a session so the audit trail stays complete.
         {"ask_user": "ask_user", "select_skills": "select_skills", "done": "finalise"},
     )
     graph.add_edge("ask_user", END)
@@ -138,13 +107,10 @@ def build_graph(deps: NodeDeps, *, parallel: bool = True) -> StateGraph:
         graph.add_conditional_edges("select_skills", _dispatch, ["specialist", "gather"])
     else:
         # Sequential mode exists for constrained machines and for debugging, where
-        # interleaved specialist output is hard to follow.
         graph.add_conditional_edges("select_skills", _dispatch_serial, ["specialist", "gather"])
 
     graph.add_edge("specialist", "gather")
-    # The recurrent edge (ADR-003 phase 3, ADR-004 step 2). gather folds the
-    # round in, assess decides by policy then by the decision model, replan
-    # asks the coordinator for the next steps and hands them back to dispatch.
+    # The recurrent edge (ADR-003 phase 3, ADR-004 step 2).
     graph.add_edge("gather", "assess")
     graph.add_conditional_edges(
         "assess",

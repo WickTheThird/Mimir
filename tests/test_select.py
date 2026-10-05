@@ -1,10 +1,4 @@
-"""Best-of-k, and the selector that makes it worth anything.
-
-Across twelve stored runs of the 52 case suite, none of the 52 fails
-structurally: every case has passed at least once, so pass@1 of 0.873 becomes
-0.944 at three attempts. Turning that into a real gain needs a selector that is
-right, which is why this one only looks at things that were observed.
-"""
+"""Best-of-k, and the selector that makes it worth anything."""
 
 from __future__ import annotations
 
@@ -77,8 +71,7 @@ class TestScoring:
         assert winner.score > loser.score
 
     def test_the_smaller_diff_wins_a_tie(self):
-        """Between two attempts that pass everything, the smaller one did what
-        was asked and no more."""
+        """Between two attempts that pass everything, the smaller one did what was asked and no more."""
         small, large = _candidate("/x", 0), _candidate("/x", 1)
         for c, lines in ((small, 5), (large, 90)):
             c.files_changed, c.lines_added = 1, lines
@@ -87,8 +80,7 @@ class TestScoring:
 
     def test_a_suite_that_could_not_start_is_not_a_suite_that_failed(self):
         """Exit codes other than 0 and 1 mean the runner itself broke."""
-        """Or an attempt that broke the test runner outranks one that broke a
-        test."""
+        """Or an attempt that broke the test runner outranks one that broke a test."""
         broke_runner, broke_test = _candidate("/x", 0), _candidate("/x", 1)
         broke_runner.files_changed = broke_test.files_changed = 1
         broke_test.tests_ran, broke_test.tests_passed = True, False
@@ -148,8 +140,7 @@ class TestSelection:
     def test_nothing_usable_returns_nothing_rather_than_the_least_bad(
         self, repo, settings
     ):
-        """Shipping the least broken of three broken attempts is worse than
-        saying none worked."""
+        """Shipping the least broken of three broken attempts is worse than saying none worked."""
         winner, all_of = self._run(repo, settings, ["def f(:\n", "def g(:\n"])
         assert winner is None
         assert len(all_of) == 2
@@ -183,10 +174,7 @@ class TestChangedFiles:
 
 
 class TestDeletionIsNotJustSize:
-    """One attempt removed 248 lines and added 76 while passing syntax, lint,
-    tests and the definition check. A single combined count reported it as "324
-    lines changed", which reads as a large edit rather than a file being
-    gutted."""
+    """One attempt removed 248 lines and added 76 while passing syntax, lint, tests and the definition check."""
 
     def test_an_attempt_that_deletes_loses_to_one_that_does_not(self):
         keeps, guts = _candidate("/x", 0), _candidate("/x", 1)
@@ -203,8 +191,7 @@ class TestDeletionIsNotJustSize:
         assert "+76/-248" in c.render()
 
     def test_deletion_outranks_pure_size(self):
-        """A bigger addition that deletes nothing beats a smaller one that
-        removes a hundred lines."""
+        """A bigger addition that deletes nothing beats a smaller one that removes a hundred lines."""
         bigger, deleter = _candidate("/x", 0), _candidate("/x", 1)
         for c in (bigger, deleter):
             c.files_changed = 1
@@ -215,9 +202,7 @@ class TestDeletionIsNotJustSize:
 
 
 class TestASkippedCheckIsVisible:
-    """A test command that could not start left the render silent, and the
-    selector quietly demoted itself from deciding on tests to deciding on diff
-    size. That is the fail-open shape this project exists to refuse."""
+    """A test command that could not start left the render silent, and the selector quietly demoted itself from deciding on tests to deciding on..."""
 
     def test_a_test_command_that_never_started_is_reported(self, repo, settings):
         (repo / "src" / "a.py").write_text("def f():\n    return 2\n")
@@ -235,9 +220,7 @@ class TestASkippedCheckIsVisible:
 
 
 class TestTheSelectorRunsTestsTheSameWayTheToolDoes:
-    """Two places run tests and only one resolved a bare python. A selector
-    given "python -m pytest" scored every candidate as TESTS DID NOT RUN and
-    fell back to diff size, with the tests never having executed."""
+    """Two places run tests and only one resolved a bare python."""
 
     def test_a_bare_python_is_resolved_against_the_source_checkout(
         self, repo, settings, tmp_path

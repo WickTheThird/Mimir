@@ -1,24 +1,4 @@
-"""Turn a completed task into a skill draft. Borrowed from Hermes Agent.
-
-Hermes Agent's loop: after a task, write what worked as a reusable skill in
-the agentskills.io shape, keep it, improve it on reuse. MIMIR already has
-the skill format (SKILL.md with frontmatter), the registry, the runner and
-the tests. What it lacked was the step that writes one from experience.
-
-Two rules that are MIMIR's, not Hermes's:
-
-* **Drafts live outside the live roots.** A draft is written to
-  ``$MIMIR_HOME/knowledge/skills-drafts/<name>/SKILL.md`` and the registry
-  never sees it until a person runs ``mimir skills promote``. The project
-  does not auto-promote anything (ADR 11.6, NG4), and a skill the planner
-  can select is an instruction the model will follow.
-* **A draft carries a test.** The session it came from supplies the input
-  and the discriminating nouns of the answer, so the skill runner can check
-  the skill still does what it was drafted from.
-
-Only confident, evidenced sessions that actually used tools qualify; a
-chat that needed no investigation teaches nothing worth a file.
-"""
+"""Turn a completed task into a skill draft."""
 
 from __future__ import annotations
 
@@ -44,9 +24,7 @@ def _slug(text: str, limit: int = 48) -> str:
 
 
 def _known_tools() -> set[str]:
-    """Names the registry knows. A draft may only name helpers that exist;
-    the loader enforces it at read time and this enforces it at write time,
-    so a draft is never born invalid."""
+    """Names the registry knows."""
     try:
         from mimir.tools.base import load_all_tools
 

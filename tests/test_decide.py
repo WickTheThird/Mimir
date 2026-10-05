@@ -1,10 +1,4 @@
-"""Typed decisions.
-
-A discriminative model scores the answers you allow rather than writing one.
-These pin the boundaries, because the risk of adding a model to a system built
-on rules is that the model quietly starts deciding things the rules were
-deciding correctly.
-"""
+"""Typed decisions."""
 
 from __future__ import annotations
 
@@ -16,8 +10,7 @@ from mimir.decide.backends import _from_kev
 
 class TestTheClosedAnswerSet:
     def test_more_options_than_the_model_takes_is_refused(self):
-        """Silently truncating drops the option that was correct and returns a
-        confident answer from a smaller world."""
+        """Silently truncating drops the option that was correct and returns a confident answer from a smaller world."""
         with pytest.raises(ValueError, match="1 to 26"):
             Choice("x", tuple(str(i) for i in range(MAX_OPTIONS + 1)))
 
@@ -59,8 +52,7 @@ class TestAbsenceIsNotAVerdict:
 
 class TestUncertaintyIsThePoint:
     def test_margin_measures_distance_from_the_runner_up(self):
-        """A win by a nose is not a decision, and on a two-way choice the
-        argmax is always something."""
+        """A win by a nose is not a decision, and on a two-way choice the argmax is always something."""
         close = Verdict("f", "a", 0.51, {"a": 0.51, "b": 0.49})
         clear = Verdict("f", "a", 0.95, {"a": 0.95, "b": 0.05})
         assert close.margin == pytest.approx(0.02)
@@ -76,8 +68,7 @@ class TestTruncation:
         assert text == "short" and not cut
 
     def test_a_long_context_keeps_the_end_and_says_so(self):
-        """The question and the material it is about are at the end; the
-        preamble is what can go."""
+        """The question and the material it is about are at the end; the preamble is what can go."""
         from mimir.decide import MAX_CONTEXT_CHARS
 
         text, cut = clip("A" * 100 + "B" * MAX_CONTEXT_CHARS)
@@ -95,8 +86,7 @@ class TestTruncation:
 
 class TestItSitsBelowTheFacts:
     def test_a_scored_belief_cannot_outrank_an_observed_one(self):
-        """A model that is right ninety percent of the time must not overrule a
-        check that is right every time."""
+        """A model that is right ninety percent of the time must not overrule a check that is right every time."""
         from mimir.agent.select import Candidate
 
         observed, believed = Candidate(0, "a", "/x"), Candidate(1, "b", "/x")
@@ -117,8 +107,7 @@ class TestItSitsBelowTheFacts:
         assert complete.score > incomplete.score
 
     def test_an_unjudged_candidate_is_not_penalised(self):
-        """No decision model means fall back to what came before, not treat
-        every candidate as having failed."""
+        """No decision model means fall back to what came before, not treat every candidate as having failed."""
         from mimir.agent.select import Candidate
 
         judged, unjudged = Candidate(0, "a", "/x"), Candidate(1, "b", "/x")
@@ -129,9 +118,7 @@ class TestItSitsBelowTheFacts:
 
 
 class TestTheKevContract:
-    """Written against the published API rather than guessed at. The first
-    version invented a /decide endpoint and a flat schema; Kev takes a state
-    and a map of questions typed noul, choice or score."""
+    """Written against the published API rather than guessed at."""
 
     def test_a_two_option_field_becomes_a_noul_question(self):
         from mimir.decide.backends import _criteria, _is_boolean

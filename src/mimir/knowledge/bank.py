@@ -1,25 +1,4 @@
-"""The working set: what MIMIR currently has in mind, and what it has let go.
-
-The knowledge store holds everything ever learned and the index can retrieve
-any of it. Neither has a notion of what is *currently relevant*, so every turn
-starts from the same cold state and pays the same retrieval cost, and a note
-recalled forty times ranks exactly like one recalled once by accident.
-
-This is the layer between them. A recalled document is activated; activation
-decays with time and is reinforced by use; below a threshold it leaves the
-working set and goes back to being merely stored. Nothing is deleted, because
-forgetting where you put something is not the same as destroying it.
-
-The decay is a rule, not a model. Activation is hits against an exponential
-half-life, which is the standard forgetting curve and has the property that
-matters here: two recalls a minute apart are worth much less than two a week
-apart, so a loop that reads the same note six times in one turn does not
-thereby make it permanent.
-
-One thing this deliberately does not do is put its contents into a prompt.
-Recall reaches the model through the search_memory tool, because prompt text
-added to a turn on this hardware costs tool-call adherence, not just tokens.
-"""
+"""The working set: what MIMIR currently has in mind, and what it has let go."""
 
 from __future__ import annotations
 
@@ -61,15 +40,13 @@ CREATE INDEX IF NOT EXISTS work_project ON work(project);
 """
 
 HALF_LIFE_S = 6 * 3600.0
-"""Six hours. Long enough to survive a working session, short enough that
-yesterday's investigation is not still shaping today's."""
+"""Six hours."""
 
 ACTIVE_THRESHOLD = 0.25
 """Below this a document has left the working set. It stays in the store."""
 
 MAX_WORKING_SET = 40
-"""A cap as well as a threshold. Whatever the arithmetic says, a working set
-larger than this is not a working set."""
+"""A cap as well as a threshold."""
 
 
 @dataclass(frozen=True)
@@ -91,12 +68,7 @@ class Recalled:
 
 
 def _activation(hits: int, last_recall: float, now: float | None = None) -> float:
-    """Hits against an exponential half-life.
-
-    Repeated recall raises it and time lowers it, so what survives is what has
-    been useful more than once and recently. A single accidental hit decays
-    below the threshold within a couple of half-lives on its own.
-    """
+    """Hits against an exponential half-life."""
     now = now if now is not None else time.time()
     elapsed = max(0.0, now - last_recall)
     return hits * math.exp(-elapsed * math.log(2) / HALF_LIFE_S)
@@ -175,12 +147,7 @@ class MemoryBank:
         return out[:limit]
 
     def forget(self, *, now: float | None = None) -> int:
-        """Drop what has decayed out of the working set.
-
-        The row goes, not the document. Losing the note that something was once
-        relevant is the point; losing the note itself would be destruction, and
-        this layer has no business doing that.
-        """
+        """Drop what has decayed out of the working set."""
         now = now if now is not None else time.time()
         stale = [
             row["doc_id"]
@@ -197,12 +164,7 @@ class MemoryBank:
     # -- the ledger ------------------------------------------------------
 
     def rebuild_ledger(self) -> int:
-        """Index what the stored memory says was done, by project.
-
-        Read from the frontmatter the notes already carry rather than inferred
-        from their prose: a ledger built by asking a model what happened would
-        be a summary of a summary, and there would be no way to check it.
-        """
+        """Index what the stored memory says was done, by project."""
         from mimir.knowledge.store import KnowledgeStore
 
         store = KnowledgeStore(settings=self.settings)

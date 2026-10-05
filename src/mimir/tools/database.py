@@ -1,47 +1,4 @@
-"""Database helpers (ADR 9.4, safety model ADR 13).
-
-Five helpers, matching ADR 9.4: schema inspection, read-only query, explain,
-mutation preparation, and execution of a prepared mutation. ADR 9.4 requires that
-"Database mutation should use explicit transactions and preview where possible",
-which is what :func:`prepare_database_mutation` enforces before anything runs.
-
-How a query is made safe
-------------------------
-Three independent layers, in order of how much they can be fooled:
-
-1. :func:`mimir.safety.risk.classify_sql` classifies the statement. Anything
-   above R1 is refused by :func:`run_readonly_query`. This is a parser and a
-   parser can be tricked.
-2. The session runs with ``default_transaction_read_only=on``, delivered through
-   the libpq ``options`` connection parameter. PostgreSQL then refuses any write
-   inside that transaction regardless of how the statement was spelled.
-3. ``--single-transaction`` wraps the whole input in one BEGIN/COMMIT, so with
-   layer 2 in force the transaction is genuinely a read-only transaction and
-   ``ON_ERROR_STOP`` rolls it back on the first error.
-
-The BEGIN/COMMIT is supplied by psql rather than spliced into the SQL text on
-purpose. Prepending ``BEGIN READ ONLY;`` to the statement would change what the
-classifier sees (it would read a multi-statement script whose first statement is
-unrecognised) and would misreport the risk of an ordinary SELECT.
-
-Credentials
------------
-No helper here accepts, stores, or logs a password. ADR NG3: "MIMIR is not a
-credential vault. It should use existing local authentication systems." Provide
-credentials through the usual libpq channels instead: ``PGPASSFILE`` (``~/.pgpass``),
-``PGSERVICE`` (``~/.pg_service.conf``), ``PGPASSWORD`` in the ambient environment,
-a peer/trust socket, or a local port opened by StrongDM. A ``password=`` value or
-a URI carrying user info is rejected outright rather than passed through.
-
-Connection resolution order: explicit ``host``/``port``, then the local endpoint
-discovered from ``sdm status`` when ``resource`` is given, then whatever libpq
-picks up from the environment.
-
-Every invocation is argv-only, never a shell string, and is spawned through
-:class:`mimir.tools.exec.CommandExecutor` so policy, approval, redaction, and
-audit apply. The statement itself travels on stdin, which keeps SQL punctuation
-out of argv and lets the classifier see the statement rather than a wrapper.
-"""
+"""Database helpers (ADR 9.4, safety model ADR 13)."""
 
 from __future__ import annotations
 
@@ -71,16 +28,14 @@ from mimir.tools.exec import CommandExecutor, get_executor
 
 log = get_logger(__name__)
 
-#: ASCII unit and record separators. Using control characters rather than a
-#: printable delimiter means a value containing commas, pipes, or newlines still
-#: round-trips through the unaligned output format.
+# : ASCII unit and record separators.
 FIELD_SEP = "\x1f"
 RECORD_SEP = "\x1e"
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]{0,62}$")
 _PATTERN_RE = re.compile(r"^[A-Za-z0-9_%.\-]{1,128}$")
 
-#: Anything that looks like an inline credential. Refused, never forwarded.
+# : Anything that looks like an inline credential.
 _CREDENTIAL_RE = re.compile(r"(?i)password\s*=|://[^/\s]*:[^/@\s]*@")
 
 _COMMAND_TAG_RE = re.compile(
@@ -90,8 +45,6 @@ _COMMAND_TAG_RE = re.compile(
 )
 
 #: Simple single-table forms whose WHERE clause can be reused for a row preview.
-#: Deliberately narrow: anything with a subquery, a join, or RETURNING is left
-#: without a preview rather than previewed wrongly.
 _SIMPLE_DELETE_RE = re.compile(
     r"^\s*delete\s+from\s+(?P<table>[A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)?)"
     r"\s+where\s+(?P<where>.+?)\s*;?\s*$",
@@ -105,8 +58,6 @@ _SIMPLE_UPDATE_RE = re.compile(
 _PREVIEW_BLOCKERS = re.compile(r"(?i)\b(select|join|returning|using|from)\b")
 
 
-# --------------------------------------------------------------------------
-# Connection target
 # --------------------------------------------------------------------------
 
 
@@ -158,12 +109,7 @@ def _quote_conninfo(value: str) -> str:
 
 
 def _conninfo(settings: Settings, target: DatabaseTarget, *, read_only: bool) -> str:
-    """Build the libpq conninfo string carried in argv.
-
-    The statement timeout travels as a backend option on the connection itself,
-    so it applies to every statement of every invocation and is visible in the
-    argv shown at approval time.
-    """
+    """Build the libpq conninfo string carried in argv."""
     options = [f"-c statement_timeout={settings.database_tool.statement_timeout_ms}"]
     if read_only:
         options.append("-c default_transaction_read_only=on")
@@ -182,11 +128,7 @@ def _conninfo(settings: Settings, target: DatabaseTarget, *, read_only: bool) ->
 
 
 async def _resolve_target(ctx: ToolContext, target: DatabaseTarget) -> DatabaseTarget:
-    """Fill in host/port from the SDM listing when only a resource was given.
-
-    This is the ADR 5.4 handoff: the resource is resolved and its local endpoint
-    discovered, not assumed.
-    """
+    """Fill in host/port from the SDM listing when only a resource was given."""
     _reject_credentials(target)
     if target.host or not target.resource:
         return target
@@ -215,19 +157,12 @@ def _target_context(target: DatabaseTarget) -> TargetContext:
 
 
 # --------------------------------------------------------------------------
-# psql invocation
-# --------------------------------------------------------------------------
 
 
 def _psql_argv(
     settings: Settings, target: DatabaseTarget, *, read_only: bool, structured: bool
 ) -> list[str]:
-    """Build the psql argv.
-
-    Long option names are used throughout. ``-A`` in particular must be avoided:
-    the shared policy rules treat a bare ``-A`` as a wildcard-all flag and would
-    escalate an otherwise ordinary statement.
-    """
+    """Build the psql argv."""
     argv = [
         settings.database_tool.psql_path,
         "--no-psqlrc",
@@ -361,8 +296,6 @@ def _pattern(value: str, *, label: str) -> str:
     return value
 
 
-# --------------------------------------------------------------------------
-# Tools (ADR 9.4)
 # --------------------------------------------------------------------------
 
 
@@ -616,9 +549,7 @@ async def explain_query(args: ExplainQueryInput, ctx: ToolContext) -> ToolResult
 
     lowered = query.lower()
     if args.analyze and not lowered.startswith(("select", "with", "table", "values")):
-        # ANALYZE executes the statement. The read-only transaction would block a
-        # write anyway, but failing here gives a clear reason instead of a
-        # PostgreSQL error.
+        # ANALYZE executes the statement.
         raise ToolError(
             "EXPLAIN ANALYZE executes the statement, so it is only allowed for "
             "SELECT/WITH queries. Use analyze=false, or prepare_database_mutation.",
@@ -695,17 +626,12 @@ class PreparedMutation(BaseModel):
     executed_at: float | None = None
 
 
-#: Prepared plans awaiting execution. Local-first and process-scoped: a plan does
-#: not survive a restart, which is the safe default for a pending mutation.
+# : Prepared plans awaiting execution.
 _PLANS: dict[str, PreparedMutation] = {}
 
 
 def _preview_count_query(statement: str) -> tuple[str, str] | tuple[None, str]:
-    """Derive a `SELECT count(*)` with the same WHERE clause, when that is sound.
-
-    Returns (query, note) or (None, reason). Anything with a join, subquery, or
-    RETURNING gets no preview rather than a misleading one.
-    """
+    """Derive a `SELECT count(*)` with the same WHERE clause, when that is sound."""
     text = statement.strip()
     for pattern, verb in ((_SIMPLE_DELETE_RE, "DELETE"), (_SIMPLE_UPDATE_RE, "UPDATE")):
         match = pattern.match(text)

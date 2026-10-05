@@ -1,12 +1,4 @@
-"""Terminal rendering (ADR 14.2).
-
-The CLI UX requirements are explicit: stream responses, render commands clearly,
-show tool calls, show output, allow approve/reject/edit, show current context,
-stay copy friendly, and never hide failures.
-
-That last one shapes this module. Errors are rendered in full, tool failures are
-shown rather than swallowed, and a low-confidence answer is labelled as such.
-"""
+"""Terminal rendering (ADR 14.2)."""
 
 from __future__ import annotations
 
@@ -142,11 +134,7 @@ def render_evidence(items: list[Evidence], limit: int = 12) -> Table:
 
 
 def render_answer(answer: FinalAnswer, confidence: float) -> Group:
-    """Evidence-first layout: conclusion, then what supports it, then what does not.
-
-    The separation of observed from inferred from unverified is the ADR 2 and
-    21.3 requirement, so it is structural here rather than left to prose.
-    """
+    """Evidence-first layout: conclusion, then what supports it, then what does not."""
     blocks: list[Any] = [Markdown(answer.answer)]
 
     if answer.observed_facts:
@@ -173,9 +161,7 @@ def render_answer(answer: FinalAnswer, confidence: float) -> Group:
         blocks.append(_bullets(answer.citations[:12], "dim"))
 
     label, style = confidence_label(confidence)
-    # Shown as a score, not a probability. Measured AUC against correctness is
-    # 0.558 and ECE 0.472, so the magnitude carries no likelihood meaning and
-    # calling it "confidence: 0.13" invites the operator to read 13%.
+    # Shown as a score, not a probability.
     blocks.append(Text(f"\nsupport score: {confidence:.2f} ({label})", style=style))
     probability = getattr(answer, "probability", None)
     if probability is not None:
@@ -190,12 +176,7 @@ def render_answer(answer: FinalAnswer, confidence: float) -> Group:
 
 
 def confidence_label(confidence: float) -> tuple[str, str]:
-    """Advice bands for the raw support score.
-
-    Deliberately phrased as guidance about evidence rather than as a chance of
-    being right, because the score does not rank correctness well enough to
-    justify the latter.
-    """
+    """Advice bands for the raw support score."""
     if confidence >= 0.75:
         return "well supported", "green"
     if confidence >= 0.5:

@@ -1,13 +1,4 @@
-"""Terminal surface for the coding loop.
-
-The investigation view prints four one-line events and then nothing for
-minutes. That is tolerable for a batch answer and not for work you are
-supervising: you cannot tell a slow step from a stuck one, and by the time
-output appears the decision that mattered is already made.
-
-So this renders as it happens. Text streams, each tool call appears when it
-starts rather than when it finishes, and an edit shows its diff inline.
-"""
+"""Terminal surface for the coding loop."""
 
 from __future__ import annotations
 
@@ -50,12 +41,7 @@ def _tool_style(tool: str) -> str:
 
 
 class Surface:
-    """Where a turn's lines go.
-
-    The renderers used to print straight to the console, which meant the only
-    possible layout was one column. Handing them finished lines instead is what
-    lets the same code feed a live panel beside a narrower transcript.
-    """
+    """Where a turn's lines go."""
 
     def __init__(self, width: int) -> None:
         self.width = width
@@ -91,26 +77,13 @@ class BufferSurface(Surface):
 
 
 def fit(text: str, width: int) -> str:
-    """Clip to one line rather than letting it wrap.
-
-    A wrapped diff line is worse than a clipped one: the continuation lands in
-    the left gutter where the line numbers are, so it reads as another line of
-    code. The same is true of a tool summary, which becomes two lines of which
-    the second has no context.
-    """
+    """Clip to one line rather than letting it wrap."""
     text = text.replace("\t", "    ").rstrip()
     return text if len(text) <= width else text[: max(1, width - 1)] + "…"
 
 
 class StreamWriter:
-    """Writes streamed model text with a hanging indent.
-
-    Rich wraps each ``print`` independently, and a stream arrives in fragments
-    that are not lines, so letting it wrap puts the continuation of every
-    sentence at column zero and destroys the gutter that separates prose from
-    tool calls. Tracking the column here is the only way to wrap text that
-    arrives a few characters at a time.
-    """
+    """Writes streamed model text with a hanging indent."""
 
     def __init__(self, surface: Surface, indent: str = INDENT) -> None:
         self.surface = surface
@@ -125,7 +98,6 @@ class StreamWriter:
     def write(self, text: str) -> None:
         self._pending += text
         # Hold back the trailing partial word: it may still grow, and wrapping
-        # on a fragment breaks words in half.
         cut = max(self._pending.rfind(" "), self._pending.rfind("\n"))
         if cut < 0:
             return
@@ -153,8 +125,7 @@ class StreamWriter:
                 self._word(token)
 
     def _word(self, word: str) -> None:
-        # A token longer than the line has no break point of its own. Models
-        # emit these constantly: absolute paths, dotted symbols, hashes.
+        # A token longer than the line has no break point of its own.
         while len(word) > self.width:
             if self.column:
                 self._break(1)
@@ -177,7 +148,6 @@ class StreamWriter:
             self._flush()
             count -= 1
         # A model that emits four newlines should not push the tool call it is
-        # about to make off the screen.
         for _ in range(min(count, 1 - self.blanks)):
             self.surface.line(Text())
             self.blanks += 1
@@ -230,11 +200,7 @@ def render_tool_end(surface: Surface, event: AgentEvent) -> None:
 
 
 def render_edit_diff(surface: Surface, result: ToolResult) -> None:
-    """Show what the edit changed, at the line numbers it changed.
-
-    The tool result already carries both sides, so this is a display of what
-    happened rather than a re-read of the file that might disagree with it.
-    """
+    """Show what the edit changed, at the line numbers it changed."""
     old = str(result.data.get("old_string", ""))
     new = str(result.data.get("new_string", ""))
     start = int(result.data.get("line", 1) or 1)
@@ -289,11 +255,7 @@ def render_timeline(console: Console, entries: Sequence[TimelineEntry]) -> None:
 
 PANEL_WIDTH = 34
 MIN_WIDTH_FOR_PANEL = 104
-"""Below this the panel would leave the transcript too narrow to read.
-
-A diff line and a wrapped sentence both need room, and taking a third of a
-90 column terminal to show what was looked up makes the thing being looked up
-unreadable. Narrow terminals get the transcript and /why."""
+"""Below this the panel would leave the transcript too narrow to read."""
 
 
 class TimelinePanel:
@@ -309,7 +271,6 @@ class TimelinePanel:
     def render(self, height: int) -> Panel:
         body = Text()
         # Newest last, and the tail is what is kept, because the step being
-        # worked on now is the one worth seeing.
         room = self.width - 4
         shown = self.entries[-max(1, height // 2) :]
         for entry in shown:
@@ -332,11 +293,7 @@ class TimelinePanel:
 
 
 class AgentView:
-    """One agent loop, one conversation, one renderer.
-
-    Shared by the coding and operations loops: what differs between them is
-    the tool surface and the prompt, not how a turn should look on screen.
-    """
+    """One agent loop, one conversation, one renderer."""
 
     def __init__(
         self,
@@ -366,12 +323,7 @@ class AgentView:
         return f"mimir({self.task})> " if self.task else "mimir> "
 
     async def turn(self, instruction: str) -> None:
-        """Run one instruction, rendering as it goes.
-
-        Ctrl-C cancels the turn rather than the process. A long tool call
-        already running is allowed to finish, because killing a test run
-        mid-write leaves the worktree in a state nobody asked for.
-        """
+        """Run one instruction, rendering as it goes."""
         console = self.console
         console.print()
         side = self.panel and console.width >= MIN_WIDTH_FOR_PANEL
@@ -421,14 +373,7 @@ class AgentView:
         await self._consume(instruction, surface, stream, lambda: None)
 
     async def _turn_with_panel(self, instruction: str) -> None:
-        """Transcript left, trail right, both updating as the turn runs.
-
-        The live region cannot scroll, so the transcript tails: only the last
-        screenful is on show while the turn runs. That is the cost of seeing
-        the trail build, and it is why the whole transcript is printed again
-        underneath when the turn ends, into the terminal's own scrollback where
-        it can be read properly.
-        """
+        """Transcript left, trail right, both updating as the turn runs."""
         console = self.console
         body_width = console.width - PANEL_WIDTH - 2
         surface = BufferSurface(body_width)
@@ -437,8 +382,6 @@ class AgentView:
 
         def frame():
             # The region grows with the work rather than opening at full
-            # height. A tall empty box at the top of a turn says the tool is
-            # waiting for something, which is the opposite of what is true.
             rows = max(4, min(ceiling, max(len(surface.lines), len(self.timeline) * 2)))
             lines = surface.tail(rows)
             partial = stream.partial()
@@ -466,7 +409,6 @@ class AgentView:
             return
 
         # Printed above the counts, not below them, because it changes how the
-        # answer should be read and the counts do not.
         grounding = getattr(outcome, "grounding", None)
         if grounding is not None and not grounding.ok:
             self.console.print()
@@ -498,15 +440,7 @@ def _wrap(text: str, width: int) -> list[str]:
 
 
 def _warn_if_dirty(console: Console, root: Path) -> None:
-    """Say when the new worktree is missing work that is in the checkout.
-
-    A worktree branches from HEAD, so uncommitted files are simply not in it.
-    Asked to change one of them, the model finds nothing, casts around, and
-    edits the nearest plausible file instead. That happened on the first real
-    run of this loop. The cause is two commands away from obvious and the
-    symptom looks like the model inventing a filename, so it is said out loud
-    rather than left to be rediscovered.
-    """
+    """Say when the new worktree is missing work that is in the checkout."""
     import subprocess
 
     try:
@@ -571,13 +505,7 @@ async def run_best_of(
     repo: str | None = None,
     test_command: str = "",
 ) -> Any:
-    """Try the task several times in separate worktrees and keep the best.
-
-    Each attempt gets its own worktree so they cannot see each other, and the
-    losers are discarded. Sampling needs temperature above zero or the attempts
-    are one attempt repeated, which is the mistake that invalidated the first
-    measurement of this.
-    """
+    """Try the task several times in separate worktrees and keep the best."""
     from mimir.agent.select import best_of
 
     console.print(
@@ -609,11 +537,7 @@ async def run_best_of(
 
 
 def _discard_losers(runner: Any, views: list[Any], winner: Any) -> None:
-    """Delete the worktrees that were not chosen.
-
-    Leaving them would fill the home directory with abandoned attempts, and
-    keeping the wrong one around is how the wrong one gets reviewed.
-    """
+    """Delete the worktrees that were not chosen."""
     from mimir.tools.repo import get_repository_directory
     from mimir.worktree import WorktreeManager
 
@@ -635,12 +559,7 @@ def start_coding_session(
     task: str,
     repo: str | None = None,
 ) -> AgentView:
-    """Open or reopen a task worktree and bind an agent to it.
-
-    Reopening is the common case and must not be destructive: a worktree that
-    already exists is picked up with its changes intact, because the second
-    thing anyone does after a coding turn is start another one.
-    """
+    """Open or reopen a task worktree and bind an agent to it."""
     from mimir.agent.loop import CodingAgent
     from mimir.tools.repo import get_repository_directory
     from mimir.worktree import WorktreeError, WorktreeManager

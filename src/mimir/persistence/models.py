@@ -1,20 +1,4 @@
-"""SQLAlchemy ORM models for the MIMIR store (ADR 19.3).
-
-One table per record class listed in ADR 19.3. The schema is deliberately split:
-fields that anything queries, filters, or sorts on (``session_id``,
-``created_at``, ``risk``, ``outcome``, ``exit_code``, ``source_type``,
-``confidence``) are real typed columns, while the rest of each pydantic payload
-rides along in a JSON column. That keeps the tables narrow without losing
-information on the way back out.
-
-Large bodies are never stored here. Full command output and fetched pages live
-in the artifact store (:mod:`mimir.tools.artifacts`) and the rows below carry
-only an ``artifact_ref``.
-
-The same metadata works on SQLite (ADR 19.1) and PostgreSQL (ADR 19.2). JSON
-columns use a PostgreSQL ``JSONB`` variant so the mature deployment gets a
-queryable, indexable representation for free.
-"""
+"""SQLAlchemy ORM models for the MIMIR store (ADR 19.3)."""
 
 from __future__ import annotations
 
@@ -35,7 +19,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Importing the dialect type does not import psycopg, so this stays safe on a
-# SQLite-only install where the postgres extra was never selected.
 JSONType = JSON().with_variant(JSONB, "postgresql")
 
 _ID = String(64)
@@ -48,14 +31,7 @@ class Base(DeclarativeBase):
 
 
 class SessionRow(Base):
-    """An investigation session (ADR 19.3 sessions).
-
-    ``state_json`` holds the residual :class:`~mimir.models.state.InvestigationState`
-    fields that have no table of their own: environment, plan, hypotheses,
-    reports, final answer, outputs, and metadata. Everything with a table is
-    stripped out before the blob is written so there is exactly one home for
-    each fact.
-    """
+    """An investigation session (ADR 19.3 sessions)."""
 
     __tablename__ = "sessions"
 
@@ -77,9 +53,7 @@ class SessionRow(Base):
     error: Mapped[str | None] = mapped_column(Text, default=None)
 
     tags: Mapped[list[str]] = mapped_column(JSONType, default=list)
-    # Denormalised lowercase "|tag|tag|" mirror of ``tags``. JSON containment
-    # syntax differs between SQLite and PostgreSQL, so tag search uses a portable
-    # LIKE against this column instead of dialect-specific JSON operators.
+    # Denormalised lowercase "|tag|tag|" mirror of ``tags``.
     tags_text: Mapped[str] = mapped_column(_MED, index=True, default="")
 
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
@@ -105,14 +79,7 @@ class MessageRow(Base):
 
 
 class GraphCheckpointRow(Base):
-    """Metadata only (ADR 19.3 graph checkpoints).
-
-    LangGraph owns and migrates its own checkpoint tables, so duplicating the
-    payload here would just create a second source of truth that drifts. This
-    table records which LangGraph thread belongs to which MIMIR session, and
-    which checkpointer backend wrote it, so ``mimir session resume`` can find the
-    thread again (ADR 14.1).
-    """
+    """Metadata only (ADR 19.3 graph checkpoints)."""
 
     __tablename__ = "graph_checkpoints"
     __table_args__ = (
@@ -152,7 +119,6 @@ class CommandRow(Base):
     created_at: Mapped[float] = mapped_column(Float, index=True, default=0.0)
 
     # Denormalised out of the assessment because the safety review and the audit
-    # UI filter on exactly these three.
     risk: Mapped[str | None] = mapped_column(String(8), index=True, default=None)
     requires_approval: Mapped[bool] = mapped_column(Boolean, default=True)
     forbidden: Mapped[bool] = mapped_column(Boolean, index=True, default=False)
@@ -163,11 +129,7 @@ class CommandRow(Base):
 
 
 class ExecutionRow(Base):
-    """What actually ran. Append-only audit trail (ADR 19.3, 13).
-
-    See :class:`~mimir.persistence.repositories.ExecutionRepository` for why no
-    update or delete method exists.
-    """
+    """What actually ran."""
 
     __tablename__ = "executions"
     __table_args__ = (Index("ix_executions_session_started", "session_id", "started_at"),)
@@ -198,11 +160,7 @@ class ExecutionRow(Base):
 
 
 class ApprovalRow(Base):
-    """Approval request and its decision in one row (ADR 13, 15).
-
-    Request and decision are 1:1 and always read together, so splitting them
-    would only add a join to every approval query.
-    """
+    """Approval request and its decision in one row (ADR 13, 15)."""
 
     __tablename__ = "approvals"
 
@@ -229,12 +187,7 @@ class ApprovalRow(Base):
 
 
 class EvidenceRow(Base):
-    """Evidence item (ADR 11.4, 12).
-
-    ``evidence_id`` is a content hash, so the same item can legitimately appear
-    in two sessions. The surrogate ``row_id`` plus a uniqueness constraint on
-    (session, evidence) keeps both copies without collisions.
-    """
+    """Evidence item (ADR 11.4, 12)."""
 
     __tablename__ = "evidence"
     __table_args__ = (
@@ -365,11 +318,7 @@ class ModelCallRow(Base):
     __tablename__ = "model_calls"
     __table_args__ = (
         Index("ix_model_calls_alias_created", "alias", "created_at"),
-        # Identity comes from the router, not from a timestamp. Two calls can
-        # start within the same float tick, and inferring identity from time
-        # produces duplicate telemetry that is indistinguishable from real
-        # retries. save_state may run more than once for a session, so this is
-        # what makes re-persisting a no-op instead of a doubling.
+        # Identity comes from the router, not from a timestamp.
         Index("uq_model_calls_invocation", "session_id", "invocation_id", unique=True),
     )
 
@@ -429,16 +378,13 @@ class EvalResultRow(Base):
     score: Mapped[float] = mapped_column(Float, index=True, default=0.0)
     duration_s: Mapped[float] = mapped_column(Float, default=0.0)
     # Eval sessions are pruned on their own schedule, so this is an unenforced
-    # soft reference rather than a foreign key: losing the session must not
-    # cascade into losing the eval history.
     session_id: Mapped[str | None] = mapped_column(_ID, index=True, default=None)
     expected: Mapped[str] = mapped_column(Text, default="")
     actual: Mapped[str] = mapped_column(Text, default="")
     detail_json: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
 
 
-#: Child tables of ``sessions``, in delete order (leaves first). Used by
-#: retention pruning so each table can be counted and reported.
+# : Child tables of ``sessions``, in delete order (leaves first).
 SESSION_CHILD_TABLES: tuple[type[Base], ...] = (
     CitationRow,
     EvidenceRow,

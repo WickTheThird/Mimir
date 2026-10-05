@@ -1,24 +1,4 @@
-"""K1 parallel search helper (ADR 8 K1, 5).
-
-One tool fans a set of queries out across repositories, knowledge/incident
-memory, and the web at the same time and returns a single compact ranked list.
-The point is round-trip reduction: the model asks once instead of issuing one
-tool call per repository per query and then paying context for every full
-result payload (ADR 8 "reduce model round trips and context use").
-
-Three design rules follow from that:
-
-* This module never reimplements a search. It delegates to whatever repository
-  and memory helpers are registered and normalises their output. Lookups go
-  through :data:`mimir.tools.base.REGISTRY` at call time, so there is no import
-  cycle and the helper works with whichever tool modules actually loaded.
-* Delegation is schema-driven. Helper input models differ (``query`` versus
-  ``pattern``, ``limit`` versus ``max_results``), so arguments are mapped onto
-  whatever field names the target helper declares. A helper with a required
-  field we cannot fill is reported as a per-source error rather than guessed at.
-* A failing source degrades the result set, it does not fail the call. Errors
-  come back alongside results so the caller can see what was not searched.
-"""
+"""K1 parallel search helper (ADR 8 K1, 5)."""
 
 from __future__ import annotations
 
@@ -39,7 +19,7 @@ log = get_logger(__name__)
 
 SourceName = Literal["repos", "memory", "web"]
 
-#: Helpers to try per logical source, best first. The first registered name wins.
+# : Helpers to try per logical source, best first.
 SOURCE_TOOL_CANDIDATES: dict[str, tuple[str, ...]] = {
     "repos": (
         "search_repository",
@@ -60,8 +40,7 @@ SOURCE_TOOL_CANDIDATES: dict[str, tuple[str, ...]] = {
     "web": ("web_search",),
 }
 
-#: Baseline weight per source, mirroring the ADR 11.4 trust ladder. Repository
-#: and memory hits outrank web hits at equal textual relevance.
+# : Baseline weight per source, mirroring the ADR 11.4 trust ladder.
 SOURCE_WEIGHT: dict[str, float] = {"repos": 1.0, "memory": 0.8, "web": 0.5}
 
 _QUERY_FIELDS = ("query", "pattern", "q", "text", "term", "search", "question", "keywords")
@@ -69,7 +48,6 @@ _LIMIT_FIELDS = ("max_results", "limit", "top_k", "k", "max_matches", "n", "coun
 _REPO_FIELDS = ("repos", "repositories", "repo", "repository", "repo_names", "names")
 _PATH_FIELDS = ("paths", "path_globs", "globs", "include", "path")
 #: Helpers that take a regex by default are switched to literal matching, since
-#: a fan-out query is prose and would otherwise fail regex compilation.
 _LITERAL_FIELDS = ("fixed_string", "literal", "fixed", "plain_text")
 
 _LOCATOR_KEYS = (
@@ -141,8 +119,7 @@ def _terms(text: str) -> set[str]:
 
 
 def _relevance(query: str, *parts: str) -> float:
-    """Fraction of query terms present in the hit. Cheap, and good enough for
-    ordering a merged list whose sources each used their own scoring scale."""
+    """Fraction of query terms present in the hit."""
     wanted = _terms(query)
     if not wanted:
         return 0.0
@@ -159,12 +136,7 @@ def _first_key(row: dict[str, Any], keys: tuple[str, ...]) -> Any:
 
 
 def _registry(ctx: ToolContext) -> Any:
-    """The registry this fan-out must resolve through.
-
-    Falling back to the global REGISTRY is correct for normal use but wrong
-    whenever the caller supplied a filtered one: reaching past the filter is how
-    web search ran inside an offline evaluation.
-    """
+    """The registry this fan-out must resolve through."""
     return getattr(ctx, "registry", None) or REGISTRY
 
 
@@ -190,11 +162,7 @@ def _build_args(
     paths: list[str] | None,
     literal: bool,
 ) -> dict[str, Any]:
-    """Map generic parameters onto the target helper's own field names.
-
-    Raises ``ValueError`` when the helper requires something we cannot supply,
-    which is reported as a per-source error instead of a crash.
-    """
+    """Map generic parameters onto the target helper's own field names."""
     fields = spec.input_model.model_fields
     args: dict[str, Any] = {}
     filled: set[str] = set()
@@ -257,12 +225,7 @@ def _from_evidence(item: Evidence, source: str, tool_name: str, query: str) -> S
 
 
 def _normalise(result: ToolResult, source: str, tool_name: str, query: str) -> list[SearchResult]:
-    """Turn any helper's output into comparable hits.
-
-    Evidence is preferred because it is the one typed, guaranteed shape in the
-    tool contract. ``data`` lists are the fallback for helpers that return rows
-    without minting evidence for each one.
-    """
+    """Turn any helper's output into comparable hits."""
     hits: list[SearchResult] = []
     for item in result.evidence:
         hits.append(_from_evidence(item, source, tool_name, query))
@@ -333,11 +296,7 @@ def _dedup_key(hit: SearchResult) -> tuple[str, str]:
 
 
 def rank_and_dedup(hits: list[SearchResult], limit: int) -> list[SearchResult]:
-    """Merge scores per unique locator and return the strongest hits first.
-
-    A locator found by more than one query is evidence of relevance, so its
-    scores are combined rather than discarded.
-    """
+    """Merge scores per unique locator and return the strongest hits first."""
     merged: dict[tuple[str, str], SearchResult] = {}
     for hit in hits:
         key = _dedup_key(hit)

@@ -1,19 +1,4 @@
-"""K2 browser / reader helper (ADR 8 K2, 5.7, 13.5).
-
-A uniform reader over local Markdown, source files, YAML/JSON manifests, and
-stored artifacts (including pages fetched by the web helpers).
-
-The whole purpose of K2 is to "return only relevant excerpts to control context
-growth", so the ranking and trimming here is the feature rather than a
-convenience: a document is split into sections, the sections are scored against
-the caller's query, and only the best ones are returned, under a hard byte cap.
-``outline_document`` exists so a caller can look at the structure and pick a
-section before paying context for any of its content.
-
-Everything returned is third-party text, so it goes through
-:func:`mimir.safety.injection.wrap_untrusted` with the source type that matches
-where it came from, and secrets are redacted on the way out (ADR 13.4, 13.5).
-"""
+"""K2 browser / reader helper (ADR 8 K2, 5.7, 13.5)."""
 
 from __future__ import annotations
 
@@ -37,8 +22,7 @@ from mimir.tools.base import Capability, ToolContext, ToolError, ToolResult, too
 
 log = get_logger(__name__)
 
-#: Default excerpt budget. Small on purpose: the caller can raise it or ask for
-#: a specific section once the outline shows what is worth reading.
+# : Default excerpt budget.
 DEFAULT_MAX_BYTES = 12000
 HARD_MAX_BYTES = 200_000
 
@@ -120,8 +104,6 @@ class DocumentSource:
     truncated: bool = False
 
 
-# ---------------------------------------------------------------------------
-# Source resolution
 # ---------------------------------------------------------------------------
 
 
@@ -229,16 +211,10 @@ def _resolve_source(
 
 
 # ---------------------------------------------------------------------------
-# Sectioning
-# ---------------------------------------------------------------------------
 
 
 def _markdown_sections(text: str) -> list[Section]:
-    """Split on ATX headings, keeping the full heading path for each section.
-
-    Underlined reStructuredText / Setext headings are recognised too, since the
-    ADR itself is written that way.
-    """
+    """Split on ATX headings, keeping the full heading path for each section."""
     lines = text.splitlines()
     starts: list[tuple[int, int, str]] = []  # (line index, level, heading)
     for index, line in enumerate(lines):
@@ -438,8 +414,6 @@ def split_sections(source: DocumentSource) -> list[Section]:
 
 
 # ---------------------------------------------------------------------------
-# Ranking and trimming
-# ---------------------------------------------------------------------------
 
 
 def _terms(text: str) -> list[str]:
@@ -447,11 +421,7 @@ def _terms(text: str) -> list[str]:
 
 
 def score_sections(sections: list[Section], query: str) -> list[Section]:
-    """Score each section against the query.
-
-    Heading matches count triple: in a document with headings, the heading is
-    the strongest signal that the section is about the thing being asked for.
-    """
+    """Score each section against the query."""
     wanted = set(_terms(query))
     if not wanted:
         for section in sections:
@@ -479,10 +449,7 @@ def score_sections(sections: list[Section], query: str) -> list[Section]:
 def select_sections(
     sections: list[Section], *, max_bytes: int, max_sections: int, query: str
 ) -> tuple[list[Section], bool]:
-    """Take the best sections that fit in the budget, in document order.
-
-    Returns the selection plus whether anything was left out.
-    """
+    """Take the best sections that fit in the budget, in document order."""
     if query:
         ordered = sorted(sections, key=lambda s: (-s.score, s.start_line))
         ordered = [s for s in ordered if s.score > 0] or ordered[:1]
@@ -581,8 +548,6 @@ def _evidence_for(
     )
 
 
-# ---------------------------------------------------------------------------
-# Tools
 # ---------------------------------------------------------------------------
 
 

@@ -1,9 +1,4 @@
-"""Triage tests.
-
-The asymmetry under test: failing to divert a greeting wastes a minute; wrongly
-diverting a real question is a refusal to work. Every rule is biased toward
-investigating, and most of these tests check that bias holds.
-"""
+"""Triage tests."""
 
 from __future__ import annotations
 
@@ -79,10 +74,7 @@ class TestBiasTowardInvestigating:
 
 class TestCorpusIsUntouched:
     def test_no_corpus_case_is_ever_diverted(self):
-        """The property that lets triage ship without confounding a running
-        experiment: it can only fire on inputs that are not questions, and
-        every corpus case is a question.
-        """
+        """The property that lets triage ship without confounding a running experiment: it can only fire on inputs that are not questions, and every..."""
         from mimir.eval.harness import EvalHarness
 
         prompts = [c.prompt for c in EvalHarness.load_corpus() if getattr(c, "prompt", "")]
@@ -92,10 +84,7 @@ class TestCorpusIsUntouched:
 
 
 class TestContrastivePairs:
-    """Each pair differs in one fact and the correct answers differ with it, so
-    a model keying on the shape of the question answers both the same way and
-    gets exactly one right. That reads as fifty percent accuracy and zero
-    percent consistency, and only the second number says which it was."""
+    """Each pair differs in one fact and the correct answers differ with it, so a model keying on the shape of the question answers both the sam..."""
 
     def _corpus(self):
         from mimir.eval.harness import EvalHarness
@@ -110,8 +99,7 @@ class TestContrastivePairs:
         assert not {p: n for p, n in counts.items() if n != 2}
 
     def test_the_twins_differ_in_what_they_expect(self):
-        """A pair whose members expect the same thing is two copies of one
-        case, and tests nothing about reading the evidence."""
+        """A pair whose members expect the same thing is two copies of one case, and tests nothing about reading the evidence."""
         pairs: dict[str, list] = {}
         for case in self._corpus():
             if case.pair:
@@ -128,9 +116,7 @@ class TestContrastivePairs:
         assert len(ids) == len(set(ids))
 
     def test_consistency_is_none_rather_than_zero_without_pairs(self):
-        """No pairs answered consistently and no pairs to answer are different
-        results, and a caller that cannot tell them apart will report the
-        second as the first."""
+        """No pairs answered consistently and no pairs to answer are different results, and a caller that cannot tell them apart will report the sec..."""
         from mimir.eval.harness import CaseKind, CaseResult, EvalReport
 
         report = EvalReport()

@@ -1,9 +1,4 @@
-"""Coding loop tests.
-
-The loop is the one place in MIMIR where a model's output changes files, so
-these pin the boundaries rather than the prose: what the model is allowed to
-see, what it is never asked to supply, and what happens when it is wrong.
-"""
+"""Coding loop tests."""
 
 from __future__ import annotations
 
@@ -66,9 +61,7 @@ def _agent(turns, registry=None, root="/tmp/wt"):
         repo="billing",
         view="fix-thing-worktree",
         worktree_root=Path(root),
-        # These cover the streaming path deliberately. The constrained path has
-        # its own tests, and both have to keep working: a runtime without
-        # grammar support falls back to streaming.
+        # These cover the streaming path deliberately.
         constrained=False,
     )
     return agent, model, router
@@ -97,8 +90,7 @@ class TestBoundArguments:
         assert bound["repo"] == "billing", "worktree tools derive the path from the repo"
 
     def test_a_read_is_bound_to_the_worktree_not_the_checkout(self):
-        """The failure this prevents: editing a file and then reading back the
-        version without the edit, which looks exactly like a hallucination."""
+        """The failure this prevents: editing a file and then reading back the version without the edit, which looks exactly like a hallucination."""
         agent, _, _ = _agent([])
         assert agent.bind("read_file_range", {"path": "a.py"})["repo"] == (
             "fix-thing-worktree"
@@ -108,10 +100,7 @@ class TestBoundArguments:
         )
 
     def test_which_tools_get_the_source_repo_is_derived_not_listed(self):
-        """It was a hand-maintained frozenset until a new worktree tool was
-        added and not put in it. Every call it made resolved against the
-        worktree as if that were the source repo, so it reported the worktree
-        did not exist while every other tool worked on it."""
+        """It was a hand-maintained frozenset until a new worktree tool was added and not put in it."""
         agent, _, _ = _agent([])
         for name in ("edit_worktree_file", "insert_worktree_lines",
                      "write_worktree_file", "run_worktree_tests"):
@@ -151,8 +140,7 @@ class TestTheLoop:
         assert "3 steps" in events[-1].error
 
     def test_the_conversation_survives_the_turn(self):
-        """A follow-up that re-reads every file already read is most of what
-        makes a local model feel unusable."""
+        """A follow-up that re-reads every file already read is most of what makes a local model feel unusable."""
         agent, _, _ = _agent([("one", []), ("two", [])])
         asyncio.run(_drain(agent, "first"))
         asyncio.run(_drain(agent, "second"))
@@ -173,9 +161,7 @@ class TestTheLoop:
 
 class TestTelemetry:
     def test_every_streamed_step_is_recorded_as_an_invocation(self):
-        """The invariant that found the empty model_calls table: invocations
-        observed equals records written. A new caller does not get an exemption
-        because it streams."""
+        """The invariant that found the empty model_calls table: invocations observed equals records written."""
         call = ToolCall(name="list_repositories", arguments={})
         agent, _, router = _agent([("x", [call]), ("done", [])])
         asyncio.run(_drain(agent))
@@ -202,8 +188,7 @@ class TestToolSurface:
 
 class TestTimeline:
     def test_an_empty_result_carries_the_constraint_that_emptied_it(self):
-        """Shown without its glob, a search that matched nothing reads as a
-        broken tool, and someone goes looking for the defect."""
+        """Shown without its glob, a search that matched nothing reads as a broken tool, and someone goes looking for the defect."""
         entry = TimelineEntry.of(
             1,
             "search_repository",
@@ -281,8 +266,7 @@ class TestEditTool:
     def test_an_ambiguous_span_is_refused_rather_than_guessed(
         self, monkeypatch, worktree, tmp_path
     ):
-        """Two matches means the model does not know which one it means.
-        Editing the first on its behalf edits the wrong line."""
+        """Two matches means the model does not know which one it means."""
         result = self._edit(monkeypatch, worktree, tmp_path, path="src/a.py",
                             old_string="    return 1", new_string="    return 2")
         assert not result.ok
@@ -303,8 +287,7 @@ class TestEditTool:
 
 
 class TestRendering:
-    """The prompt is where this is used, so how it looks is part of whether it
-    works. Every case here is one that was actually wrong at 100 columns."""
+    """The prompt is where this is used, so how it looks is part of whether it works."""
 
     def _console(self, width=100):
         import io
@@ -322,8 +305,7 @@ class TestRendering:
         return console.export_text().splitlines()
 
     def test_streamed_prose_wraps_with_a_hanging_indent(self):
-        """Rich wraps each print independently and a stream arrives in
-        fragments, so letting it wrap put every continuation at column zero."""
+        """Rich wraps each print independently and a stream arrives in fragments, so letting it wrap put every continuation at column zero."""
         from mimir.cli.coding import StreamWriter
 
         console = self._console(72)
@@ -361,8 +343,7 @@ class TestRendering:
         assert "\n\n\n" not in text
 
     def test_a_diff_line_is_clipped_not_wrapped(self):
-        """A wrapped diff line lands in the gutter where the line numbers are,
-        so it reads as another line of code."""
+        """A wrapped diff line lands in the gutter where the line numbers are, so it reads as another line of code."""
         from mimir.cli.coding import render_edit_diff
 
         console = self._console(80)
@@ -453,12 +434,7 @@ class TestRendering:
 
 
 class TestDirectRouting:
-    """Which requests skip the council.
-
-    The asymmetry from the triage module applies: sending an investigation to
-    the retrieval loop under-answers it, so every doubtful case goes to the
-    council.
-    """
+    """Which requests skip the council."""
 
     def _kind(self, text):
         from mimir.graph.triage import triage
@@ -484,9 +460,7 @@ class TestDirectRouting:
         assert self._kind("the payments namespace") == "investigate", "no action"
 
     def test_a_kind_followed_by_any_word_is_not_a_resource_reference(self):
-        """This matched "checkout service. The" in a corpus case about reading
-        supplied logs, which would have routed a reasoning question to the
-        retrieval loop."""
+        """This matched "checkout service."""
         assert self._kind(
             "These logs are from the checkout service. The caller gives up after "
             "almost exactly 30 seconds every time. Which side gave up first?"
@@ -504,16 +478,13 @@ class TestOpsSurface:
         assert "search_memory" in OPS_TOOLS
 
     def test_listing_every_namespace_is_not_offered(self):
-        """The run this loop replaces listed two hundred namespaces twice while
-        looking for one the operator had already named."""
+        """The run this loop replaces listed two hundred namespaces twice while looking for one the operator had already named."""
         from mimir.agent.ops import OPS_TOOLS
 
         assert "list_namespaces" not in OPS_TOOLS
 
     def test_the_operator_context_is_a_default_not_an_override(self):
-        """The opposite of the coding loop. The operator may be asking about a
-        namespace other than the one the prompt is set to, and rewriting the
-        argument would answer a question nobody asked."""
+        """The opposite of the coding loop."""
         from mimir.agent.ops import OpsAgent
         from mimir.models.state import EnvironmentContext
         from mimir.tools.base import ToolContext, load_all_tools
@@ -535,9 +506,7 @@ class TestLogTargetForm:
     """The form both operators and models actually write."""
 
     def test_namespace_slash_pod_is_refused_with_the_correction(self):
-        """kubectl read the first segment as a resource kind, said no such kind
-        exists, and ran against whatever namespace the kubeconfig had bound to
-        the context. The namespace never arrived and nothing said so."""
+        """kubectl read the first segment as a resource kind, said no such kind exists, and ran against whatever namespace the kubeconfig had bound..."""
         from mimir.tools.base import ToolContext, load_all_tools
 
         registry = load_all_tools()
@@ -561,14 +530,7 @@ class TestLogTargetForm:
 
 
 class TestGrounding:
-    """Names in an answer that were never observed.
-
-    Written from a real run: asked for a workload that does not exist, the
-    model correctly reported its absence and then listed the workloads that
-    were present, and seventeen of those names were invented. They were
-    plausible, matched the namespace's naming convention, and appeared in no
-    tool result.
-    """
+    """Names in an answer that were never observed."""
 
     def _check(self, answer, observed, asked=""):
         from mimir.verify.grounding import check
@@ -584,9 +546,7 @@ class TestGrounding:
         assert result.ungrounded == ["messaging-squad-internal-api-84"]
 
     def test_a_name_the_operator_used_is_not_an_invention(self):
-        """Repeating back a workload the operator named, which turns out not to
-        exist, is not hallucinating at them. Flagging it would train the reader
-        to ignore the warning."""
+        """Repeating back a workload the operator named, which turns out not to exist, is not hallucinating at them."""
         result = self._check(
             "There is no messaging-whatapp-service here.",
             "workloads: messaging-router-abc",
@@ -595,8 +555,7 @@ class TestGrounding:
         assert result.ok
 
     def test_ordinary_english_is_not_an_identifier(self):
-        """A gate that fires on the words this project writes about itself is a
-        gate that gets switched off."""
+        """A gate that fires on the words this project writes about itself is a gate that gets switched off."""
         result = self._check(
             "The check is read-only and fails closed, which is up-to-date behaviour.",
             "",
@@ -615,9 +574,7 @@ class TestGrounding:
 
 class TestScopeDoesNotDrift:
     def test_an_omitted_namespace_reuses_the_one_the_turn_was_using(self):
-        """A real run searched three names in messaging-squad, omitted the
-        namespace on the next three calls, and silently searched perfectscale,
-        because that is what the kubeconfig binds to that context."""
+        """A real run searched three names in messaging-squad, omitted the namespace on the next three calls, and silently searched perfectscale, be..."""
         from mimir.agent.ops import OpsAgent
         from mimir.tools.base import ToolContext, load_all_tools
 
@@ -655,9 +612,7 @@ class TestGroundingSegmentRule:
         return check(answer, observed)
 
     def test_two_segment_service_names_are_checked(self):
-        """Three segments was the first cut and let five invented workload
-        names through in a real run, because service names are routinely two
-        words."""
+        """Three segments was the first cut and let five invented workload names through in a real run, because service names are routinely two words."""
         assert self._check("Present: messaging-sms, messaging-webhooks.").ungrounded == [
             "messaging-sms",
             "messaging-webhooks",
@@ -669,9 +624,7 @@ class TestGroundingSegmentRule:
         ).checked == 0
 
     def test_a_long_name_is_checked_even_when_it_starts_with_a_modifier(self):
-        """Skipping a four segment name because it begins with a word like
-        "read" would lose the check on the long generated names it exists to
-        catch."""
+        """Skipping a four segment name because it begins with a word like "read" would lose the check on the long generated names it exists to catch."""
         assert self._check("read-replica-shard-04 is up").ungrounded == [
             "read-replica-shard-04"
         ]
@@ -698,8 +651,7 @@ class TestSidePanel:
         return console, AgentView(console, _panel_agent(), task="t")
 
     def test_a_narrow_terminal_gets_the_transcript_undivided(self):
-        """A third of a 90 column terminal spent on what was looked up makes
-        the thing being looked up unreadable."""
+        """A third of a 90 column terminal spent on what was looked up makes the thing being looked up unreadable."""
         from mimir.cli.coding import MIN_WIDTH_FOR_PANEL
 
         console, view = self._view(MIN_WIDTH_FOR_PANEL - 1)
@@ -716,8 +668,7 @@ class TestSidePanel:
         assert "search_repository" in text
 
     def test_the_full_transcript_reaches_scrollback_either_way(self):
-        """The live region cannot scroll, so it tails. Printing the transcript
-        again underneath is what makes a long turn readable afterwards."""
+        """The live region cannot scroll, so it tails."""
         console, view = self._view(130)
         asyncio.run(view.turn("go"))
         lines = console.export_text().splitlines()
@@ -759,9 +710,7 @@ def _panel_agent():
 
 
 class TestToolCallsWrittenAsProse:
-    """Local models drop out of the tool-call channel and write the call into
-    their reply instead. The loop saw a turn with no tool calls, concluded the
-    work was finished, and reported success after doing nothing."""
+    """Local models drop out of the tool-call channel and write the call into their reply instead."""
 
     def test_it_is_corrected_rather_than_accepted_as_an_answer(self):
         prose = "<function=get_logs>\n<parameter=target>api</parameter>\n</function>"
@@ -802,9 +751,7 @@ class TestStatedScopeOutranksDrift:
         )
 
     def test_the_namespace_in_the_instruction_is_the_fallback(self):
-        """One call naming "default" made every later omission mean default
-        too, so a request scoped to messaging-squad finished by reporting on a
-        namespace nobody asked about."""
+        """One call naming "default" made every later omission mean default too, so a request scoped to messaging-squad finished by reporting on a n..."""
         agent = self._agent()
         agent.note_instruction("logs for -n messaging-squad whatapp on a ch1 cluster")
         agent.bind("list_workloads", {"namespace": "default"})
@@ -830,15 +777,10 @@ class TestStatedScopeOutranksDrift:
 
 
 class TestGroundTruthIsEverythingRead:
-    """Two false positives from one live run, both erosive.
-
-    A check that cries wolf is one people switch off, so both are worth more
-    than the invention they would otherwise have caught.
-    """
+    """Two false positives from one live run, both erosive."""
 
     def test_a_quote_from_a_truncated_result_is_not_an_invention(self):
-        """The model sees a trimmed render; checking its answer against that
-        trimmed copy flags whatever it quoted from the part that got cut."""
+        """The model sees a trimmed render; checking its answer against that trimmed copy flags whatever it quoted from the part that got cut."""
         from mimir.agent.loop import _all_text
         from mimir.verify.grounding import check
 
@@ -865,14 +807,7 @@ class TestGroundTruthIsEverythingRead:
 
 
 class TestEditToleratesHowTheFileWasShown:
-    """The first real coding run spent eleven steps failing the same edit.
-
-    read_file_range returns "   312  def all(self):" and edit_worktree_file
-    demanded byte-exact text, so the model had to strip a six-space-padded line
-    number off every line and reproduce the indentation underneath perfectly. A
-    30B model does not. The reading tool and the editing tool disagreed about
-    what a line looks like, and that was mine, not the model's.
-    """
+    """The first real coding run spent eleven steps failing the same edit."""
 
     HAYSTACK = (
         "class A:\n"
@@ -906,8 +841,7 @@ class TestEditToleratesHowTheFileWasShown:
         assert self._find("def nope(self):\n    return 0") is None
 
     def test_an_ambiguous_loose_match_is_refused(self):
-        """Two candidates means the model does not know which it means, and
-        resolving it here would edit the wrong one."""
+        """Two candidates means the model does not know which it means, and resolving it here would edit the wrong one."""
         from mimir.tools.code import find_span
 
         haystack = "def a():\n    pass\n\ndef b():\n    pass\n"
@@ -920,8 +854,7 @@ class TestEditToleratesHowTheFileWasShown:
         assert strip_line_numbers("404  not found\nx = 1") == "404  not found\nx = 1"
 
     def test_a_failed_match_says_what_is_actually_there(self):
-        """"does not appear" told the model nothing it could act on, and it
-        retried the same edit with cosmetic changes four times."""
+        """"does not appear" told the model nothing it could act on, and it retried the same edit with cosmetic changes four times."""
         from mimir.tools.code import _nearby
 
         message = _nearby(self.HAYSTACK, "    def all(self):\n        return 2")
@@ -930,8 +863,7 @@ class TestEditToleratesHowTheFileWasShown:
 
 
 class TestRepeatedCallsEndTheTurn:
-    """A model that runs the same call again has stopped making progress, and
-    under a constrained decoder it cannot wander into prose to say so."""
+    """A model that runs the same call again has stopped making progress, and under a constrained decoder it cannot wander into prose to say so."""
 
     def _call(self):
         from mimir.llm.base import ToolCall
@@ -969,14 +901,7 @@ class TestRepeatedCallsEndTheTurn:
 
 
 class TestAToolThatKeepsFailingIsWithdrawn:
-    """edit_worktree_file needs the existing text reproduced exactly. Asked to
-    add a method, the model chose it three times with thirty, thirty-seven and
-    forty lines of old_string, and reproducing forty lines byte-exactly inside
-    a JSON string does not happen. It never fell back to insert_worktree_lines,
-    which needs no existing text at all.
-
-    Saying so in the tool description did not work. Removing the branch does.
-    """
+    """edit_worktree_file needs the existing text reproduced exactly."""
 
     def test_it_stays_available_while_it_is_working(self):
         agent, _, _ = _agent([])

@@ -1,13 +1,4 @@
-"""In-process telemetry (ADR 20).
-
-MIMIR is a single-user local service, so this is a lightweight in-memory
-collector rather than a Prometheus exporter. It records the things ADR 20 lists
-and exposes them through ``GET /metrics`` and ``mimir doctor``.
-
-Counters are process-lifetime. Nothing here is persisted, because the durable
-audit trail lives in the database and the artifact store; these numbers exist to
-answer "is it behaving" during a session.
-"""
+"""In-process telemetry (ADR 20)."""
 
 from __future__ import annotations
 

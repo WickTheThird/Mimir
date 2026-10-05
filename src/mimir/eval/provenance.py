@@ -1,16 +1,4 @@
-"""Run provenance (ADR-002 section 5).
-
-A stored run is only reproducible if you can tell what produced it. "qwen2.5:32b"
-is not an identity: the tag is mutable, the same tag can point at a different
-digest or quantisation weeks later, and a comparison against an older run then
-silently stops being a comparison.
-
-So every run records the exact artifacts involved: model digest and
-quantisation, runtime version, generation parameters, a hash of the corpus, a
-hash of the prompts, and the MIMIR commit. If a field cannot be resolved it is
-recorded as unknown rather than omitted, and :func:`comparable` reports why two
-runs cannot be honestly compared.
-"""
+"""Run provenance (ADR-002 section 5)."""
 
 from __future__ import annotations
 
@@ -43,31 +31,17 @@ class ModelIdentity:
     """The configured window. What MIMIR asked for."""
 
     served_context: int = 0
-    """The window the runtime is actually serving, read back from the runtime.
-
-    Recorded separately because Ollama's OpenAI shim discards ``num_ctx`` and
-    serves each model at its own default. qwen3-coder:30b defaults to 262144,
-    so a run configured for 32768 was served eight times that, allocated a
-    24.5 GB KV cache, and recorded the configured value as fact. A setting the
-    runtime ignores is worse than no setting, because it is written down.
-    """
+    """The window the runtime is actually serving, read back from the runtime."""
 
     context_mismatch: bool = False
     temperature: float = 0.0
     seed: int | None = None
     resolved: bool = False
-    """False when the runtime could not be queried, so digest and quantisation
-    are unknown and any comparison involving this run is weaker."""
+    """False when the runtime could not be queried, so digest and quantisation are unknown and any comparison involving this run is weaker."""
 
 
 PROVENANCE_SCHEMA_VERSION = 2
-"""Bumped when the shape changes.
-
-Version 1 was a flat dict whose containment fields were written at a different
-nesting level than the comparison function read, so contamination checks
-silently no-opped. A version number lets a reader tell whether a stored run
-predates the fix instead of guessing from which keys happen to be present.
-"""
+"""Bumped when the shape changes."""
 
 MANDATORY_FIELDS = (
     "source.commit",
@@ -77,13 +51,7 @@ MANDATORY_FIELDS = (
     "evaluation.enabled_tools_hash",
     "runtime.version",
 )
-"""Fields without which two runs cannot be honestly compared.
-
-An absent field is not treated as matching an absent field. Two runs that both
-recorded nothing are not thereby equivalent, and the empty-string comparison
-that made them look equivalent is what let an unpopulated tool hash disable the
-capability check entirely.
-"""
+"""Fields without which two runs cannot be honestly compared."""
 
 
 @dataclass
@@ -99,12 +67,7 @@ class Provenance:
     mimir_commit: str = ""
     mimir_dirty: bool = False
     mimir_diff_hash: str = ""
-    """Hash of the uncommitted diff plus untracked file contents.
-
-    A dirty run is not reproducible either way, but two dirty runs from
-    different working states are not the same experiment. Without this they both
-    record "dirty" and look interchangeable.
-    """
+    """Hash of the uncommitted diff plus untracked file contents."""
     offline: bool = True
     settings_digest: str = ""
     enabled_tools: list[str] = field(default_factory=list)
@@ -115,21 +78,10 @@ class Provenance:
     contaminated_reason: str = ""
     captured_at: float = 0.0
     source_changed_during_run: bool = False
-    """True when the working tree moved between the start and end snapshots.
-
-    Provenance used to be collected only at persistence time, so anything the
-    operator did while a run was in flight was recorded as the state that
-    produced it. A run whose source changed underneath it is not reproducible
-    and is not a valid controlled comparison, whichever snapshot you believe.
-    """
+    """True when the working tree moved between the start and end snapshots."""
 
     def to_dict(self) -> dict[str, Any]:
-        """Nested, versioned, and self-describing.
-
-        Every field a comparison needs lives under one root, so a caller cannot
-        hand ``comparable()`` a sub-dict that happens to be missing half of
-        them.
-        """
+        """Nested, versioned, and self-describing."""
         return {
             "schema_version": PROVENANCE_SCHEMA_VERSION,
             "captured_at": self.captured_at,
@@ -164,8 +116,7 @@ class Provenance:
 
 
 def _sha256_of_files(paths: list[Path]) -> str:
-    """Stable hash over file contents, ordered by path so it does not depend on
-    filesystem enumeration order."""
+    """Stable hash over file contents, ordered by path so it does not depend on filesystem enumeration order."""
     digest = hashlib.sha256()
     for path in sorted(paths, key=lambda p: str(p)):
         try:
@@ -193,11 +144,7 @@ def corpus_fingerprint(corpus_dir: Path | None = None) -> tuple[str, list[str], 
 
 
 def prompts_fingerprint() -> str:
-    """Hash the specialist prompts and the capability tables.
-
-    A prompt edit changes behaviour as surely as a model swap does, and a
-    comparison across a prompt change is not a model comparison.
-    """
+    """Hash the specialist prompts and the capability tables."""
     root = Path(__file__).resolve().parents[1]
     return _sha256_of_files(
         [root / "council" / "prompts.py", root / "council" / "specialists.py"]
@@ -228,15 +175,7 @@ def _git(root: Path, *args: str, timeout: float = 20.0) -> str:
 
 
 def git_commit(repo: Path | None = None) -> tuple[str, bool, str]:
-    """Current commit, whether the tree is dirty, and a hash of the dirty state.
-
-    A dirty tree means the run cannot be reproduced from the commit alone. The
-    diff hash does not fix that, but it distinguishes two different uncommitted
-    states rather than labelling both "dirty" and treating them as equivalent.
-
-    Untracked file contents are included, because a run whose behaviour depends
-    on a file that was never added is exactly the case a bare `git diff` misses.
-    """
+    """Current commit, whether the tree is dirty, and a hash of the dirty state."""
     root = repo or Path(__file__).resolve().parents[3]
     commit = _git(root, "rev-parse", "HEAD").strip()
     status = _git(root, "status", "--porcelain")
@@ -260,10 +199,7 @@ def git_commit(repo: Path | None = None) -> tuple[str, bool, str]:
 
 
 def resolve_model(alias: str, settings: Settings | None = None) -> ModelIdentity:
-    """Ask the runtime what it is actually serving.
-
-    The configured tag is what was requested; the digest is what will run.
-    """
+    """Ask the runtime what it is actually serving."""
     active = settings or get_settings()
     profile = active.models.profiles.get(alias)
     if profile is None:
@@ -279,7 +215,6 @@ def resolve_model(alias: str, settings: Settings | None = None) -> ModelIdentity
     )
     if profile.runtime not in ("ollama", "openai_compat", "llamacpp", "litellm"):
         # An echo or MLX profile has no queryable digest; mark it resolved so a
-        # deterministic test run is not reported as unreproducible.
         identity.resolved = profile.runtime == "echo"
         return identity
 
@@ -304,9 +239,7 @@ def resolve_model(alias: str, settings: Settings | None = None) -> ModelIdentity
                             break
             identity.resolved = True
 
-        # Read back what the runtime is actually serving. /api/ps reports the
-        # live context of a loaded model; a model that is not resident reports
-        # nothing, which is not a mismatch, only an unknown.
+        # Read back what the runtime is actually serving.
         try:
             running = httpx.get(f"{root}/api/ps", timeout=8.0)
             if running.status_code == 200:
@@ -398,17 +331,7 @@ def _incomplete(run: dict[str, Any]) -> list[str]:
 
 
 def comparable(left: dict[str, Any], right: dict[str, Any]) -> list[str]:
-    """Reasons two runs cannot be honestly compared.
-
-    An empty list means the only deliberate difference is the thing under test.
-
-    Fails closed. An older run stored under schema version 1, or a run missing a
-    mandatory field, is refused rather than compared on whatever fields happen
-    to line up. The previous version compared the two sides field by field, so
-    two runs that had both recorded nothing agreed on nothing and reported no
-    confounds, which is how an unpopulated tool hash silently disabled the
-    capability check.
-    """
+    """Reasons two runs cannot be honestly compared."""
     problems: list[str] = []
     if not left or not right:
         return ["one of the runs has no recorded provenance"]
@@ -430,8 +353,7 @@ def comparable(left: dict[str, Any], right: dict[str, Any]) -> list[str]:
     if problems:
         return problems
 
-    # Contamination is decisive. Everything below describes how two runs differ,
-    # and none of it matters if one did not measure what it claims to have.
+    # Contamination is decisive.
     for side, run in (("baseline", left), ("candidate", right)):
         evaluation = run.get("evaluation") or {}
         if evaluation.get("contaminated"):
@@ -497,13 +419,7 @@ def comparable(left: dict[str, Any], right: dict[str, Any]) -> list[str]:
 
 
 def source_moved(start: Provenance, end: Provenance) -> bool:
-    """Did the working tree change while the run was in flight?
-
-    Compares the commit and the diff hash, not just the dirty flag. Editing a
-    file and reverting it leaves dirty False at both ends but is still a source
-    change; comparing the diff hash catches an edit that was made and undone
-    around a run.
-    """
+    """Did the working tree change while the run was in flight?"""
     return (
         start.mimir_commit != end.mimir_commit
         or start.mimir_dirty != end.mimir_dirty

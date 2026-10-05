@@ -1,15 +1,4 @@
-"""FastAPI application (ADR 6.2 C1, 15, 16).
-
-Two surfaces on one process, deliberately separated:
-
-* ``/v1/*``  the OpenAI-compatible inference facade. Authenticated, and the only
-  thing intended to be reachable through Cloudflare Tunnel (ADR 16.5).
-* ``/api/*`` the local control plane for the CLI and web UI. Loopback only.
-
-The separation is enforced per route by the dependency in
-:mod:`mimir.api.auth`, not by deployment configuration alone, so a misconfigured
-tunnel cannot expose privileged helpers by accident.
-"""
+"""FastAPI application (ADR 6.2 C1, 15, 16)."""
 
 from __future__ import annotations
 

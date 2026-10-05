@@ -1,14 +1,4 @@
-"""The council (ADR 7).
-
-Each specialist is the same machine with different wiring: a narrow system
-prompt, a restricted tool set, a bounded tool-calling loop, and a structured
-report. That uniformity is what makes the council auditable rather than a
-group-chat gimmick (ADR 7 preamble).
-
-The loop is deliberately small and explicit rather than delegated to a framework
-agent, because the ADR requires visibility into tool calls, evidence capture,
-and per-specialist context limits.
-"""
+"""The council (ADR 7)."""
 
 from __future__ import annotations
 
@@ -43,8 +33,6 @@ log = get_logger(__name__)
 
 
 #: Generic helpers (parallel search, document reader) that every specialist may
-#: use. They gather nothing on their own; they fan out to the capability-specific
-#: tools, which apply their own restrictions.
 _COMMON = (Capability.INTERNAL,)
 
 #: Which capabilities each specialist may touch (ADR 7: "Restricted tool access").
@@ -86,8 +74,7 @@ SPECIALIST_CAPABILITIES: dict[SpecialistName, tuple[Capability, ...]] = {
     ),
     SpecialistName.WEB_RESEARCHER: (Capability.WEB, Capability.MEMORY, *_COMMON),
     SpecialistName.MEMORY_CURATOR: (Capability.MEMORY, *_COMMON),
-    # The safety reviewer reads and reasons. It gets no execution capability at
-    # all, so a compromised reviewer cannot run the thing it was asked to judge.
+    # The safety reviewer reads and reasons.
     SpecialistName.SAFETY_REVIEWER: (Capability.MEMORY,),
     SpecialistName.SYNTHESIS: (),
 }
@@ -106,8 +93,7 @@ SPECIALIST_TASK_CLASS: dict[SpecialistName, str] = {
     SpecialistName.SYNTHESIS: TaskClass.FINAL_SYNTHESIS,
 }
 
-#: Highest risk a specialist's tools may carry. Mutation never happens inside a
-#: specialist loop; it goes through prepare/approve/execute (ADR 5.5, 13).
+# : Highest risk a specialist's tools may carry.
 SPECIALIST_MAX_RISK: dict[SpecialistName, RiskClass] = {
     SpecialistName.COORDINATOR: RiskClass.R1,
     SpecialistName.REPOSITORY_EXPLORER: RiskClass.R1,
@@ -162,11 +148,7 @@ class Specialist:
     # -- tools -----------------------------------------------------------
 
     def available_tools(self, allowed_names: Sequence[str] | None = None) -> list[ToolSpec[Any]]:
-        """Tools this specialist may call, optionally narrowed by a skill.
-
-        A skill can only ever narrow the set. It cannot widen it, because the
-        intersection is taken against the specialist's own capability list.
-        """
+        """Tools this specialist may call, optionally narrowed by a skill."""
         specs = self.registry.select(
             specialist=self.name,
             capabilities=SPECIALIST_CAPABILITIES.get(self.name, ()),
@@ -225,14 +207,6 @@ class Specialist:
         final_text = ""
 
         # Gathering and concluding are different phases and must not share a
-        # budget. The previous version gave the whole iteration budget to
-        # gathering, so a specialist that used its tool calls had nothing left
-        # to write an answer with, and died reporting that it never concluded.
-        #
-        # Measured: on qwen3-coder:30b, 16 of 19 corpus failures were this one
-        # path. On qwen2.5:7b only 4 of 18, because a weaker model calls fewer
-        # tools and falls out of the loop early. Better tool adherence made the
-        # bug bite harder, so the constrained-decoding win was feeding it.
         concluded = False
         for _iteration in range(self.budget.max_iterations):
             if time.perf_counter() - started > self.budget.wall_clock_s:
@@ -317,23 +291,7 @@ class Specialist:
         final_text: str,
         tool_calls_used: int,
     ) -> tuple[str, str | None]:
-        """One closing turn with no tools offered, to get an actual answer.
-
-        A turn that cannot call tools is a turn that must answer. Offering
-        schemas the budget can no longer honour is what produced the
-        non-termination: the model kept calling, every call was dropped for
-        lack of budget, and each dropped call cost an iteration until the loop
-        died with nothing written.
-
-        This turn is deliberately outside the iteration budget. It makes no
-        tool calls, so it cannot loop, and charging it to a budget that
-        gathering has already spent is what left nothing to conclude with.
-
-        A failure here is reported rather than swallowed. A specialist that
-        gathered evidence and could not write it up is a different and less
-        alarming thing than one that never looked, and the two must not
-        produce the same empty report.
-        """
+        """One closing turn with no tools offered, to get an actual answer."""
         messages = [
             *messages,
             LLMMessage.user(
@@ -367,7 +325,6 @@ class Specialist:
         spec = by_name.get(call.name)
         if spec is None:
             # A hallucinated or out-of-remit tool name is a routine local-model
-            # failure. Name the allowed set so the next turn can correct itself.
             allowed = ", ".join(sorted(by_name)) or "none"
             return ToolResult.failure(
                 call.name,
@@ -388,8 +345,7 @@ class Specialist:
         extra_context: str = "",
         memory_context: str = "",
     ) -> Any:
-        """One-shot structured output with no tools. Used by the Coordinator and
-        by Synthesis, which reason over material rather than gathering it."""
+        """One-shot structured output with no tools."""
         system = specialist_system_prompt(
             self.name,
             environment_lines=state.environment.render_lines(),
@@ -434,11 +390,7 @@ _HEDGES = (
 
 
 def _estimate_confidence(text: str, evidence: list[Evidence], error: str | None) -> float:
-    """A crude prior, refined later by the graph.
-
-    Deliberately pessimistic: an answer with no evidence behind it should not
-    present as confident just because the model wrote fluently.
-    """
+    """A crude prior, refined later by the graph."""
     if error:
         return 0.2
     if not evidence:

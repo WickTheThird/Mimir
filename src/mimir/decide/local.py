@@ -1,28 +1,4 @@
-"""Closed-set decisions from the generative model that is already loaded.
-
-Kev is the right tool for this and Kev is not running. The client in
-``backends.py`` is complete and tested against a server that has never been
-stood up, so the decision layer has sat dormant and every decision in MIMIR
-has stayed where it was: inside a generative model that was asked an
-open-ended question and trusted to answer in a closed set.
-
-This is the bridge. It implements the same :class:`Decider` protocol, so
-call sites written against it swap to ``KevDecider`` by changing config and
-nothing else.
-
-What it is not: a System One model. Kev encodes the context once and scores
-every option against it, which is cheap and calibrated by construction. This
-sends the whole prompt per field and reads one constrained token back. It is
-slower, and its probability is a softmax over the first token rather than a
-trained score, so it must not be read as a calibrated likelihood.
-
-What it does give, today and with no new infrastructure, is the guarantee
-that actually matters at the call sites: **nothing can come back that was not
-offered.** Constrained decoding measured 100% adherence at every model size
-tested here, against a native slope from 80% down to 33%. A closed set that
-is closed by construction is the property the callers need; calibration is
-what Kev adds later.
-"""
+"""Closed-set decisions from the generative model that is already loaded."""
 
 from __future__ import annotations
 
@@ -36,12 +12,7 @@ log = get_logger(__name__)
 
 
 def _schema(fields: list[Choice]) -> dict[str, Any]:
-    """One object with one enum-constrained property per field.
-
-    Every field is decided in a single call. Splitting them would multiply
-    the prompt cost by the number of questions and let the answers drift
-    apart, since each call would see the context fresh.
-    """
+    """One object with one enum-constrained property per field."""
     return {
         "type": "object",
         "properties": {
@@ -108,9 +79,7 @@ class LocalDecider:
                 purpose="decide",
             )
         except ModelError as exc:
-            # An unavailable decider is not a negative verdict. Returning
-            # nothing makes every caller fall back to what it did before,
-            # which is the contract NoDecider sets.
+            # An unavailable decider is not a negative verdict.
             log.warning("decider_call_failed", error=exc.message)
             return {}
 
@@ -124,9 +93,7 @@ class LocalDecider:
         for field in fields:
             choice = payload.get(field.name)
             if choice not in field.options:
-                # The schema should make this impossible. If it happens the
-                # constraint was not applied, and a silent default here would
-                # look exactly like a real decision.
+                # The schema should make this impossible.
                 log.warning(
                     "decider_off_menu", field=field.name, got=str(choice)[:80]
                 )
@@ -135,8 +102,6 @@ class LocalDecider:
                 field=field.name,
                 choice=choice,
                 # Not a calibrated probability and flagged as such, so a
-                # caller applying a threshold sees an uncalibrated verdict
-                # rather than a confident-looking zero.
                 probability=0.0,
                 distribution={},
                 truncated=truncated,

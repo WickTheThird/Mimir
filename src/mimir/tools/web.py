@@ -1,25 +1,4 @@
-"""Web search and browsing helpers (ADR 9.6, 5.7, 17).
-
-The web surface is the only place where MIMIR pulls in content it did not
-produce and cannot vouch for, so this module is written defensively:
-
-* Every fetched body is fenced by :func:`mimir.safety.injection.wrap_untrusted`
-  as ``SourceType.WEB`` before it can reach the model (ADR 5.7, 13.5).
-* Every fetch runs the injection scanner; a suspicious page keeps its content
-  but its :class:`~mimir.models.evidence.Evidence` confidence is downgraded.
-* Every successful fetch is announced to ``hooks.on_web_ingest`` and a hook may
-  refuse the ingest.
-* Every URL, including each redirect hop, is resolved through DNS and rejected
-  when it lands on loopback, private, link-local, or cloud-metadata space.
-  MIMIR runs on an operator laptop with VPN reach into internal systems, so a
-  hostile search result must never be able to steer a fetch at an internal
-  endpoint.
-* robots.txt and a small per-domain rate limiter are honoured (ADR 17.2).
-
-Web evidence is deliberately the lowest-trust source type in the ADR 11.4
-ladder and always carries a retrieval timestamp plus a freshness marker so it
-stays distinguishable from local operational evidence (ADR 17.1 step 9).
-"""
+"""Web search and browsing helpers (ADR 9.6, 5.7, 17)."""
 
 from __future__ import annotations
 
@@ -47,15 +26,13 @@ from mimir.tools.base import Capability, ToolContext, ToolError, ToolResult, too
 
 log = get_logger(__name__)
 
-#: Hard ceiling on redirect hops. Each hop is re-validated against the SSRF
-#: guard, so this only bounds work, not safety.
+# : Hard ceiling on redirect hops.
 MAX_REDIRECTS = 5
 
 #: Minimum gap between two requests to the same host (ADR 17.2 rate limits).
 DEFAULT_MIN_REQUEST_INTERVAL_S = 1.0
 
-#: Excerpt returned inline by ``web_open``. The full document lives in the
-#: artifact store and is reachable by ``document_ref``.
+# : Excerpt returned inline by ``web_open``.
 DEFAULT_EXCERPT_CHARS = 4000
 
 ARTIFACT_KIND_DOCUMENT = "web_document"
@@ -80,12 +57,8 @@ _WORD_RE = re.compile(r"[a-z0-9_]{3,}")
 
 
 # ---------------------------------------------------------------------------
-# SSRF guard
-# ---------------------------------------------------------------------------
 
-#: Ranges named explicitly in the threat model. ``ipaddress`` already flags most
-#: of these, but naming them keeps the intent auditable and covers the EC2/GCP
-#: metadata address that attackers reach for first.
+# : Ranges named explicitly in the threat model.
 BLOCKED_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("10.0.0.0/8"),
@@ -129,11 +102,7 @@ def _classify_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str 
 
 
 async def _resolve_host(host: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
-    """Resolve a hostname to every address it advertises.
-
-    Every answer is checked, not just the first: a DNS-rebinding style entry
-    that mixes one public and one private A record must still be refused.
-    """
+    """Resolve a hostname to every address it advertises."""
     try:
         return [ipaddress.ip_address(host.strip("[]"))]
     except ValueError:
@@ -187,8 +156,6 @@ async def assert_url_allowed(url: str, web: WebConfig) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Rate limiting, robots.txt, response cache
-# ---------------------------------------------------------------------------
 
 
 class DomainRateLimiter:
@@ -235,8 +202,7 @@ class RobotsCache:
         else:
             parser = cached[1]
         if parser is None:
-            # Unreachable or unparseable robots.txt is treated as no rules. A
-            # site that cannot serve robots.txt should not become unreadable.
+            # Unreachable or unparseable robots.txt is treated as no rules.
             return True
         return parser.can_fetch(user_agent, url)
 
@@ -318,8 +284,6 @@ def reset_web_caches() -> None:
     _RATE_LIMITER._last.clear()
 
 
-# ---------------------------------------------------------------------------
-# Search backends
 # ---------------------------------------------------------------------------
 
 
@@ -569,8 +533,6 @@ class SearxngBackend:
             params["time_range"] = time_range
         headers = {"Accept": "application/json", "User-Agent": self.web.user_agent}
         # A self-hosted instance is normally on loopback, so the SSRF guard is
-        # deliberately not applied to the search endpoint itself. It still
-        # applies to every result URL that gets opened.
         payload = await _search_api_get(f"{base}/search", params, headers, self.web, self.name)
         rows = (payload.get("results") or [])[:max_results]
         hits = [
@@ -681,8 +643,6 @@ async def _search_api_post(
 
 
 # ---------------------------------------------------------------------------
-# HTML to readable text
-# ---------------------------------------------------------------------------
 
 
 def _strip_tags(html: str) -> str:
@@ -694,11 +654,7 @@ def _collapse_blank_lines(text: str) -> str:
 
 
 def html_to_markdown(html: str, base_url: str) -> tuple[str, str, list[dict[str, str]]]:
-    """Return ``(markdown, title, links)`` for a page.
-
-    Chrome, navigation, and script content are removed first so the artifact
-    holds the article rather than the site furniture.
-    """
+    """Return ``(markdown, title, links)`` for a page."""
     from bs4 import BeautifulSoup
     from markdownify import markdownify
 
@@ -739,8 +695,6 @@ def html_to_markdown(html: str, base_url: str) -> tuple[str, str, list[dict[str,
 
 
 # ---------------------------------------------------------------------------
-# Guarded fetch
-# ---------------------------------------------------------------------------
 
 
 def _decode(body: bytes, content_type: str) -> str:
@@ -754,12 +708,7 @@ def _decode(body: bytes, content_type: str) -> str:
 
 
 async def fetch_url(url: str, settings: Settings, *, use_cache: bool = True) -> FetchedPage:
-    """Fetch a URL through every guard. Raises :class:`ToolError` on refusal.
-
-    Redirects are followed manually so that the SSRF guard, the blocklist, the
-    robots check, and the rate limiter run again on every hop. ``httpx``'s own
-    ``follow_redirects`` would hide the intermediate hosts.
-    """
+    """Fetch a URL through every guard."""
     web = settings.web
     if not web.enabled:
         raise ToolError("web access is disabled: set web.enabled to true", code="web_disabled")
@@ -857,8 +806,6 @@ async def fetch_url(url: str, settings: Settings, *, use_cache: bool = True) -> 
 
 
 # ---------------------------------------------------------------------------
-# Evidence helpers
-# ---------------------------------------------------------------------------
 
 _CONFIDENCE_BY_SEVERITY = {
     InjectionSeverity.NONE: 0.6,
@@ -890,11 +837,7 @@ def web_evidence(
     collected_by: str = "web",
     structured: dict[str, Any] | None = None,
 ) -> Evidence:
-    """Build a WEB evidence item with citation, freshness, and a scan-aware score.
-
-    ``SourceType.WEB`` is what keeps this distinguishable from local
-    operational evidence during ranking and synthesis (ADR 5.7, 17.1 step 9).
-    """
+    """Build a WEB evidence item with citation, freshness, and a scan-aware score."""
     severity = report.severity if report else InjectionSeverity.NONE
     confidence = _CONFIDENCE_BY_SEVERITY.get(severity, 0.6)
     tags = ["web"]
@@ -991,8 +934,6 @@ def _require_document(ctx: ToolContext, ref: str) -> tuple[str, dict[str, Any]]:
     return artifact.read(), artifact.metadata
 
 
-# ---------------------------------------------------------------------------
-# Tools (ADR 9.6)
 # ---------------------------------------------------------------------------
 
 

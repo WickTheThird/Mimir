@@ -1,22 +1,4 @@
-"""Hybrid memory retrieval with trust ordering (ADR 11.4, 11.5, G5, R2).
-
-Retrieval runs in four passes:
-
-1. Candidate generation. Keyword search over FTS5 and, when an embedder is
-   available, a cosine pass over the stored vectors. Scores from each are
-   normalised into ``0..1`` and blended.
-2. Trust adjustment. Each candidate's layer maps to a
-   :class:`~mimir.models.evidence.SourceType`, and the ADR 11.4 ladder in
-   :data:`~mimir.models.evidence.TRUST_ORDER` scales the score. A runbook
-   outranks an imported ChatGPT note at equal textual relevance.
-3. Freshness adjustment. ADR R2 says the mitigation for stale memory is visible
-   freshness metadata, not suppression, so a stale document is still returned:
-   it carries ``stale=True``, a visible marker, and a reduced score.
-4. Conflict detection. ADR 11.5 requires that conflicting memories be retained
-   as conflicts until resolved, so when one document supersedes another, or two
-   documents declare each other contradictory, or two documents cover the same
-   service and topic, both are returned with a conflict marker attached.
-"""
+"""Hybrid memory retrieval with trust ordering (ADR 11.4, 11.5, G5, R2)."""
 
 from __future__ import annotations
 
@@ -46,8 +28,7 @@ log = get_logger(__name__)
 
 DEFAULT_KEYWORD_WEIGHT = 0.6
 DEFAULT_SEMANTIC_WEIGHT = 0.4
-#: How far down the ladder each trust rung costs. Rung 0 keeps a full score,
-#: model knowledge at rung 8 keeps 0.44 of it.
+# : How far down the ladder each trust rung costs.
 TRUST_STEP = 0.07
 TRUST_FLOOR = 0.4
 
@@ -403,11 +384,7 @@ class MemoryRetriever:
     # -- ADR 11.5 conflict retention -------------------------------------
 
     def detect_conflicts(self, documents: list[MemoryDocument]) -> list[MemoryConflict]:
-        """Find disagreements among the retrieved set and keep both sides.
-
-        Nothing here picks a winner. The ADR is explicit that conflicting
-        memories are retained as conflicts until a human resolves them.
-        """
+        """Find disagreements among the retrieved set and keep both sides."""
         conflicts: list[MemoryConflict] = []
         seen: set[tuple[str, str]] = set()
 

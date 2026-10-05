@@ -1,10 +1,4 @@
-"""Artifact store for large tool output (ADR 5.1 step 6, R7 context explosion).
-
-Full command output, fetched web pages, and log dumps are written to disk and
-referenced by an opaque ``input_ref``. Only compact summaries go into the model
-context; helpers such as ``filter_logs`` operate on the stored artifact by
-reference.
-"""
+"""Artifact store for large tool output (ADR 5.1 step 6, R7 context explosion)."""
 
 from __future__ import annotations
 

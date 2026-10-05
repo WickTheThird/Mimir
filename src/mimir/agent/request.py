@@ -1,21 +1,4 @@
-"""What the operator asked for, extracted by rule.
-
-A request like "the last 10 logs of any messaging outbound pod inside dev in a
-cluster with ch1" already contains every parameter the work needs: the name
-fragment, the cluster fragment, the environment, the action and the line count.
-Leaving a model to notice all five and carry them through six tool calls is
-asking it to be reliable at the one thing it is least reliable at, and when it
-drops one the failure is silent: the call still succeeds, against the wrong
-scope, and the answer reads as if it were about the right one.
-
-So the parameters are taken out of the sentence here, by rules, and bound onto
-the calls. No model reads this module and none can override what it finds. The
-model is left to decide the order of the work, which is the part that genuinely
-needs judgement.
-
-Everything is optional and absence is explicit. A parser that guesses when it
-is unsure would reintroduce exactly the silent wrongness it exists to remove.
-"""
+"""What the operator asked for, extracted by rule."""
 
 from __future__ import annotations
 
@@ -56,9 +39,7 @@ ACTIONS = {
 
 # -- patterns ----------------------------------------------------------------
 
-# Order matters. "in the payments namespace over the last 2 hours" matches
-# "namespace <word>" as "namespace over", so the form where the name precedes
-# the noun has to be tried first.
+# Order matters.
 _NAMESPACE = (
     re.compile(r"(?:-n|--namespace)\s+([a-z0-9][\w.-]*)", re.IGNORECASE),
     re.compile(r"\b([a-z0-9][\w.-]*)\s+namespace\b", re.IGNORECASE),
@@ -74,16 +55,13 @@ _CONTEXT_FRAGMENT = (
         r"(?:the\s+)?['\"]?([a-z0-9][\w.-]*)['\"]?",
         re.IGNORECASE,
     ),
-    # "ch1 cluster", "the ch1 dev cluster". Two words are allowed before the
-    # noun because "the ch1 dev cluster" puts the environment nearest to it,
-    # and taking only the adjacent word yields "dev", which names no cluster.
+    # "ch1 cluster", "the ch1 dev cluster".
     re.compile(
         r"\b([a-z0-9][\w.-]*)(?:\s+([a-z0-9][\w.-]*))?\s+clusters?\b", re.IGNORECASE
     ),
 )
 
-# A count, not a duration. "the last 2 hours" is a window and reading it as
-# two lines would silently answer a different question.
+# A count, not a duration.
 _TAIL = re.compile(
     r"\b(?:last|latest|final|most\s+recent|top)\s+(\d{1,5})\b"
     r"(?!\s*(?:m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|weeks?)\b)"
@@ -102,7 +80,6 @@ _SINCE_UNIT = {"m": "m", "min": "m", "mins": "m", "minute": "m", "minutes": "m",
                "d": "d", "day": "d", "days": "d"}
 
 #: Words that never belong to a workload name or a scope, even in the right
-#: grammatical position.
 _NOT_A_NAME = frozenset(ENVIRONMENTS) | {
     "cluster", "clusters", "namespace", "namespaces", "context", "contexts",
     "over", "under", "the", "a", "an", "and", "or", "of", "in", "on", "at",
@@ -154,12 +131,7 @@ class ParsedRequest:
 
 
 def _first(patterns, text: str) -> str:
-    """The first group of the first match whose value is a real name.
-
-    Every group of every match is considered rather than only the first,
-    because a phrase like "the ch1 dev cluster" matches with the environment in
-    the adjacent position and the cluster fragment one word further out.
-    """
+    """The first group of the first match whose value is a real name."""
     for pattern in patterns:
         for match in pattern.finditer(text):
             for value in match.groups():
@@ -169,14 +141,7 @@ def _first(patterns, text: str) -> str:
 
 
 def _name_fragments(text: str) -> list[str]:
-    """Name fragments, most specific first.
-
-    Taken from the words immediately before a kind noun: in "any messaging
-    outbound pod", the kind noun is "pod" and the words before it that are not
-    qualifiers are "messaging" and "outbound". Joined they give the name as it
-    is written in the estate, and taken singly they give something to widen to
-    when the join matches nothing.
-    """
+    """Name fragments, most specific first."""
     lowered = text.lower()
     out: list[str] = []
     for match in re.finditer(r"\b(" + "|".join(KIND_NOUNS) + r")\b", lowered):
@@ -193,12 +158,9 @@ def _name_fragments(text: str) -> list[str]:
         if len(words) > 1:
             out.append("-".join(words))
         # The last word is the distinctive one far more often than the first:
-        # "messaging outbound" widens to "outbound", not to "messaging", which
-        # is a prefix of forty other things.
         out.append(words[-1])
 
     # A name written as kind/name, and a hyphenated token anywhere, are names
-    # as written and beat anything reconstructed from prose.
     explicit = [
         match.group(1)
         for match in re.finditer(

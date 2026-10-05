@@ -1,9 +1,4 @@
-"""Shared FastAPI dependencies.
-
-The runner is a process-wide singleton so that an approval raised by an
-investigation started on one request can be resolved by a different request. A
-per-request runner would strand every approval.
-"""
+"""Shared FastAPI dependencies."""
 
 from __future__ import annotations
 

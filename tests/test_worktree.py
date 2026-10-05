@@ -1,8 +1,4 @@
-"""Task worktree tests.
-
-The property under test is containment. Everything else is convenience; if a
-write can escape the worktree, ADR-002's reversibility guarantee is void.
-"""
+"""Task worktree tests."""
 
 from __future__ import annotations
 
@@ -40,8 +36,7 @@ class TestContainment:
             resolve_inside(tmp_path, "/etc/passwd")
 
     def test_a_symlink_pointing_out_is_refused(self, tmp_path):
-        """A boundary compared as a string prefix is crossed by a symlink.
-        Resolution happens before the check for exactly this reason."""
+        """A boundary compared as a string prefix is crossed by a symlink."""
         outside = tmp_path.parent / "outside"
         outside.mkdir(exist_ok=True)
         root = tmp_path / "wt"
@@ -116,8 +111,7 @@ class TestSlug:
 
 class TestCredentialScrub:
     def test_credentials_are_removed_by_name_and_by_shape(self):
-        """Listing every credential variable is impossible; matching the shape
-        catches the ones nobody thought of."""
+        """Listing every credential variable is impossible; matching the shape catches the ones nobody thought of."""
         from mimir.tools.code import _CREDENTIAL_MARKERS, _CREDENTIAL_VARS
 
         assert "KUBECONFIG" in _CREDENTIAL_VARS
@@ -131,10 +125,7 @@ class TestCredentialScrub:
 
 
 class TestAnOrphanedBranchIsReattached:
-    """An interrupted run leaves the branch behind when its worktree is
-    removed, and the name is then blocked forever with "a branch named X
-    already exists". Refusing makes the operator clean up after a crash they
-    did not cause."""
+    """An interrupted run leaves the branch behind when its worktree is removed, and the name is then blocked forever with "a branch named X alr..."""
 
     def test_creating_over_an_orphaned_branch_recovers(self, tmp_path):
         import subprocess

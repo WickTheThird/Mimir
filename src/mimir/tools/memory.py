@@ -1,18 +1,4 @@
-"""Memory tools (ADR 11, G5).
-
-The agent-facing surface over :mod:`mimir.knowledge`. Two properties matter here
-more than convenience:
-
-* Retrieved notes carry their freshness and verification status into the model
-  context. A stale runbook is returned and labelled stale, not hidden, because
-  ADR R2's mitigation is visible metadata rather than suppression.
-* Nothing is promoted into trusted memory by a tool call. ``propose_memory_note``
-  creates a proposal; ``promote_memory_note`` refuses to write to ``stable/`` or
-  ``runbooks/`` without an explicit approval flag (ADR 11.6, NG4).
-
-Memory documents are locally authored, but they are still content that ends up
-in a prompt, so their bodies are wrapped as untrusted data (ADR 13.5).
-"""
+"""Memory tools (ADR 11, G5)."""
 
 from __future__ import annotations
 
@@ -57,8 +43,6 @@ def _result_payload(result: RetrievalResult, max_chars: int) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Retrieval
-# ---------------------------------------------------------------------------
 
 
 class SearchMemoryInput(BaseModel):
@@ -82,12 +66,7 @@ class SearchMemoryInput(BaseModel):
 
 
 def _activate(ctx: ToolContext, query: str, chunks) -> None:
-    """Recall is what raises a note's activation.
-
-    Done here rather than in the bank so that only a real retrieval counts. A
-    bank that activated on its own bookkeeping would keep whatever it happened
-    to inspect, which is the opposite of a working set.
-    """
+    """Recall is what raises a note's activation."""
     if not chunks:
         return
     try:
@@ -291,8 +270,6 @@ async def list_memory(args: ListMemoryInput, ctx: ToolContext) -> ToolResult:
 
 
 # ---------------------------------------------------------------------------
-# Promotion (ADR 11.6)
-# ---------------------------------------------------------------------------
 
 
 class ProposeNoteInput(BaseModel):
@@ -413,7 +390,6 @@ async def promote_memory_note(args: PromoteNoteInput, ctx: ToolContext) -> ToolR
             },
         )
     # A new document changes what retrieval should see, so refresh the index now
-    # rather than leaving the next search to miss it.
     get_knowledge_index(ctx.settings).reindex()
     return ToolResult(
         ok=True,
@@ -527,8 +503,6 @@ async def find_similar_incidents(args: SimilarIncidentInput, ctx: ToolContext) -
     )
 
 
-# ---------------------------------------------------------------------------
-# Maintenance
 # ---------------------------------------------------------------------------
 
 

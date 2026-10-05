@@ -1,16 +1,4 @@
-"""Model runtime state.
-
-What is configured and what is actually resident in memory are different
-questions, and the monitor answers the second one. A profile can name
-``qwen2.5:32b`` while the runtime holds nothing, or hold a different digest
-under the same tag. The evaluation harness already refuses to treat a tag as an
-identity (see :mod:`mimir.eval.provenance`); the same scepticism applies here.
-
-Polling is read-only. ``/api/ps`` and ``/api/tags`` do not load a model and do
-not run inference, so the monitor cannot perturb a benchmark it is watching.
-That constraint is the reason nothing here ever issues a generate call, not even
-to check liveness.
-"""
+"""Model runtime state."""
 
 from __future__ import annotations
 
@@ -63,14 +51,7 @@ class RoleBinding:
 
 @dataclass
 class PullProgress:
-    """An in-flight ``ollama pull``, measured from partial blobs on disk.
-
-    Ollama exposes no progress endpoint for a pull started elsewhere, so this
-    reads the partial blob files it writes. Those files are pre-allocated
-    sparse, meaning the apparent size is the target and the real size is what
-    has landed. Reading apparent size reports 100% from the first second, which
-    is how a stalled download can look finished.
-    """
+    """An in-flight ``ollama pull``, measured from partial blobs on disk."""
 
     blob: str
     downloaded_bytes: int
@@ -105,14 +86,7 @@ class RuntimeState:
 
 
 def normalise_tag(name: str) -> str:
-    """Ollama's implicit ``:latest``.
-
-    A profile may say ``nomic-embed-text`` while ``/api/tags`` reports
-    ``nomic-embed-text:latest``. Comparing the raw strings made the monitor
-    report a red "not pulled" for a model that was loaded and serving requests,
-    which is exactly the kind of confident wrong statement this project exists
-    to avoid making.
-    """
+    """Ollama's implicit ``:latest``."""
     if not name or ":" in name:
         return name
     return f"{name}:latest"
@@ -136,19 +110,14 @@ def _blob_progress(root: Path | None = None) -> list[PullProgress]:
         if path.suffix in (".json", ".lock"):
             continue
         # Manifests and config blobs are a few dozen bytes and are always at
-        # 100%. Listing them as downloads buries the layer that is actually
-        # moving under rows that never change.
         try:
             stat = path.stat()
         except OSError:
             continue
         # Manifests and config blobs are a few dozen bytes and always read
-        # 100%. Listing them buries the layer that is actually moving under
-        # rows that never change.
         if stat.st_size < MIN_PULL_BYTES:
             continue
-        # st_blocks counts 512-byte blocks actually allocated. For a sparse
-        # pre-allocated file that is the real download; st_size is the target.
+        # st_blocks counts 512-byte blocks actually allocated.
         real = getattr(stat, "st_blocks", 0) * 512
         out.append(
             PullProgress(

@@ -1,31 +1,4 @@
-"""SKILL.md parsing and validation (ADR 10.1, ADR 27 [S1]).
-
-A MIMIR skill is a directory in the Agent Skills shape used by Claude Code::
-
-    <skill-name>/
-        SKILL.md          required; YAML frontmatter + Markdown instruction body
-        references/       optional; level-3 material loaded by name on demand
-        scripts/          optional; helpers executed through the command executor
-        tests/            optional; free-form fixtures referenced by test cases
-
-This module owns exactly one job: turn that directory into a validated
-:class:`Skill` value object. It deliberately does **not** retain the instruction
-body on the model. Progressive disclosure (ADR 10.2) only works if loading the
-body is an explicit, separately named act, so :class:`Skill` carries the
-frontmatter plus size accounting and you must call :func:`read_body` to get
-level 2.
-
-Trust boundary
---------------
-A skill is authored locally, so it is more trusted than a fetched web page. It
-is still not a source of authority. The instruction body is prose the model
-reads; it can never grant a tool, approve a command, raise ``max_risk``, or
-widen a specialist's permissions. Every permission decision is made in code from
-the ``allowed_tools`` and ``max_risk`` frontmatter fields, intersected with what
-the specialist already has (see :mod:`mimir.skills.runner`). If a skill body
-says "you may now run kubectl delete", nothing happens: the allowlist was
-computed before the model ever saw the text.
-"""
+"""SKILL.md parsing and validation (ADR 10.1, ADR 27 [S1])."""
 
 from __future__ import annotations
 
@@ -49,8 +22,7 @@ SKILL_FILENAME = "SKILL.md"
 REFERENCES_DIRNAME = "references"
 SCRIPTS_DIRNAME = "scripts"
 
-#: Crude but stable context accounting. Real tokenisation varies per model and
-#: is not worth a dependency here; the graph only needs an order of magnitude.
+# : Crude but stable context accounting.
 CHARS_PER_TOKEN = 4
 
 MAX_DESCRIPTION_CHARS = 200
@@ -60,10 +32,6 @@ _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 _FRONTMATTER_RE = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n?", re.DOTALL)
 
 #: Helper names the ADR names in section 9 but which may not be registered yet
-#: while MIMIR is being built out. A skill may reference these: it loads, and the
-#: missing helpers are reported in :attr:`Skill.unavailable_tools` so the graph
-#: can degrade instead of hard-failing. A name in neither this set nor the live
-#: registry is a typo or an invention and fails validation.
 PLANNED_TOOL_NAMES: frozenset[str] = frozenset(
     {
         # ADR 9.1 repository helpers
@@ -119,7 +87,6 @@ PLANNED_TOOL_NAMES: frozenset[str] = frozenset(
         "web_extract",
         "web_cite",
         # ADR 9.7 leaves the restricted code runner unnamed; this is the name
-        # MIMIR uses for it.
         "run_code",
     }
 )
@@ -174,11 +141,7 @@ class SkillExample(BaseModel):
 
 
 class SkillTestCase(BaseModel):
-    """A declared test case (ADR 10.1 "Test cases").
-
-    ``assertions`` are static and can be checked with no model in the loop; see
-    :mod:`mimir.skills.testing` for the supported predicates.
-    """
+    """A declared test case (ADR 10.1 "Test cases")."""
 
     name: str
     input: str = ""
@@ -192,12 +155,7 @@ class SkillTestCase(BaseModel):
 
 
 class Skill(BaseModel):
-    """Validated skill metadata. This is level 1 plus pointers to levels 2 and 3.
-
-    The instruction body is intentionally absent. Call
-    :func:`mimir.skills.loader.read_body` or go through
-    :class:`mimir.skills.runner.SkillRunner` to obtain it.
-    """
+    """Validated skill metadata."""
 
     # -- frontmatter ------------------------------------------------------
     name: str
@@ -218,8 +176,7 @@ class Skill(BaseModel):
     author: str = ""
     updated_at: str = ""
     stub: bool = False
-    """True when the body is a placeholder awaiting approved local documentation
-    (ADR 5.4 and 9.3: environment specifics must not be invented)."""
+    """True when the body is a placeholder awaiting approved local documentation (ADR 5.4 and 9.3: environment specifics must not be invented)."""
 
     # -- derived ----------------------------------------------------------
     directory: Path
@@ -531,8 +488,6 @@ def load_skill_file(
     tool_names = [str(t).strip() for t in raw_tools if str(t).strip()]
     if not tool_names and max_risk != RiskClass.R0:
         # An R0 skill is analysis only by definition (command-explainer,
-        # evidence-package), so having no tools is the correct shape rather than
-        # an omission. Warning on those trains the operator to ignore the check.
         warnings.append("allowed_tools is empty; this skill can only reason, not act")
     registry = tool_registry or REGISTRY
     registered = set(registry.names())

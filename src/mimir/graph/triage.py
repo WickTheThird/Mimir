@@ -1,24 +1,4 @@
-"""Deterministic triage before the council runs.
-
-MIMIR had no cheap path. Every input traversed context resolution, memory
-recall, an LLM classification, skill selection, two or more specialists,
-verification, safety review and synthesis. Typing ``hello`` at the prompt was
-classified as ``command_construction``, assigned to the Kubernetes
-investigator, and took over a minute.
-
-That is the memo's governing rule violated in its most literal form: do not
-make every query traverse the whole model, all stored memory, all tools, and
-all specialists. A greeting needs none of them.
-
-This module answers one question mechanically, with no model call: is this
-input something to investigate at all? It is the cheapest possible instance of
-compiled procedure versus deliberative search.
-
-**The asymmetry is deliberate.** Failing to triage a greeting wastes a minute
-and some heat. Wrongly triaging a real question means refusing to work, which
-is far worse. So every rule here is narrow, anchored, and biased toward
-investigating. When in doubt, run the council.
-"""
+"""Deterministic triage before the council runs."""
 
 from __future__ import annotations
 
@@ -40,7 +20,6 @@ _SMALL_TALK = re.compile(
 )
 
 # Anything naming a concrete artefact is a real request regardless of how short
-# it looks. This is checked first and overrides every pattern above.
 _CONCRETE = re.compile(
     r"""(
         [\w./-]+\.(?:py|ts|tsx|js|go|rs|java|rb|sql|ya?ml|toml|json|md)
@@ -55,14 +34,6 @@ _CONCRETE = re.compile(
 
 
 # A request to comment on material already in the prompt, or to weigh causes,
-# wants the council even when it names a target. The asymmetry from this
-# module's docstring applies: sending an investigation to the retrieval loop
-# under-answers it, which is worse than sending an instruction to the council
-# and being slow.
-# A request to change something never goes to the retrieval loop, whatever
-# else it looks like. "restart the api deployment" parses as an action against
-# a named target, and the loop reads. Mutation belongs to the council, which
-# has the prepare, approve and execute path.
 _MUTATION = re.compile(
     r"""\b(
         restart|rollout|scale|delete|remove|drain|cordon|uncordon|evict|
@@ -88,14 +59,7 @@ class Triage(StrEnum):
     """Default. Run the council."""
 
     DIRECT = "direct"
-    """An instruction whose target the operator already named.
-
-    "get the last 10 logs from the whatsapp pods in messaging-squad on a ch1
-    dev cluster" states the namespace, the workload, the cluster filter, the
-    action and the line count. There is nothing left to deliberate: it wants
-    carrying out, not investigating. Routed to the operations loop, which reads
-    what was named and shows what came back.
-    """
+    """An instruction whose target the operator already named."""
 
     GREETING = "greeting"
     CAPABILITY = "capability"
@@ -113,15 +77,7 @@ class TriageResult:
 
     @property
     def cheap(self) -> bool:
-        """Whether the graph can be skipped entirely and a reply returned.
-
-        DIRECT is deliberately not cheap. It is a routing hint for the prompt,
-        which runs the retrieval loop instead of the graph; the graph itself
-        must treat it exactly like INVESTIGATE. Marking it cheap short
-        circuited the coordinate node into returning a canned reply that does
-        not exist for this verdict, and it would have changed what the
-        evaluation corpus measures.
-        """
+        """Whether the graph can be skipped entirely and a reply returned."""
         return self.kind not in (Triage.INVESTIGATE, Triage.DIRECT)
 
 
@@ -145,22 +101,7 @@ _REPLIES = {
 
 
 def _direct_or_investigate(text: str) -> Triage:
-    """Both halves are required, and either doubt sends it to the council.
-
-    The halves come from the same parser the loop binds from, rather than from
-    a second set of patterns kept in step by hand: an action the operator asked
-    for, and something concrete to point it at. An action alone ("check the
-    logs") names no target; a target alone ("the payments namespace") names no
-    action. Even the pair goes to the council when a deliberative word is
-    present, because "why are the whatsapp pods restarting" names both and is
-    still a question about cause.
-
-    The first version of this used its own regex for the target and required a
-    namespace flag or a hyphenated name, so "the last 10 logs of any messaging
-    outbound pod in a cluster with ch1" fell through to the council, which
-    listed 211 namespaces, invented a pod to exec into, never read a log line,
-    and reported that no such pod existed. Two were running.
-    """
+    """Both halves are required, and either doubt sends it to the council."""
     if _DELIBERATIVE.search(text) or _MUTATION.search(text):
         return Triage.INVESTIGATE
 
@@ -179,24 +120,16 @@ def _direct_or_investigate(text: str) -> Triage:
 
 
 def triage(question: str) -> TriageResult:
-    """Decide whether this input needs an investigation at all.
-
-    Bounded on purpose: only inputs that are *entirely* conversational are
-    diverted, and only when they name nothing concrete. ``hello`` is a greeting;
-    ``hello, why is the api pod restarting`` is a question.
-    """
+    """Decide whether this input needs an investigation at all."""
     text = (question or "").strip()
     if not text:
         return TriageResult(Triage.EMPTY, _REPLIES[Triage.EMPTY])
 
-    # A real request can be short and can open with a pleasantry. Anything
-    # naming a file, command, resource or operational noun is investigated,
-    # whatever else it looks like.
+    # A real request can be short and can open with a pleasantry.
     if _CONCRETE.search(text):
         return TriageResult(_direct_or_investigate(text))
 
     # Length bound: a long message is doing more than saying hello, even if it
-    # happens to start with a greeting word.
     if len(text) > 64:
         return TriageResult(Triage.INVESTIGATE)
 

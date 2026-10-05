@@ -1,20 +1,4 @@
-"""Model routing and structured output (ADR 18.4).
-
-Routing lets a fast model answer command-completion requests while a larger one
-runs deep investigation (ADR R6 latency mitigation). It is optional by design:
-if every task class points at the same alias, this collapses to a single model.
-
-:class:`ModelRouter` also owns structured output, because getting a local model
-to emit valid JSON reliably needs more than passing ``response_format``:
-
-1. ask with a JSON schema when the runtime supports it,
-2. otherwise ask for JSON mode with the schema restated in the prompt,
-3. extract the first JSON object from a chatty reply,
-4. repair common local-model failures (fenced blocks, trailing commas, single
-   quotes, a schema echoed instead of an instance),
-5. retry once with the validation error fed back,
-6. fail loudly rather than returning a half-parsed object.
-"""
+"""Model routing and structured output (ADR 18.4)."""
 
 from __future__ import annotations
 
@@ -45,12 +29,7 @@ log = get_logger(__name__)
 
 
 def _specialist_from_purpose(purpose: str) -> str:
-    """Extract the specialist from a purpose string like 'specialist:log_analyst'.
-
-    Purpose is free text used for logging. Parsing it is what lets telemetry be
-    grouped by specialist without threading another parameter through every
-    call site.
-    """
+    """Extract the specialist from a purpose string like 'specialist:log_analyst'."""
     if not purpose.startswith("specialist:"):
         return ""
     return purpose.split(":", 2)[1]
@@ -82,18 +61,7 @@ class StructuredOutputError(ModelError):
 
 
 def _native_messages(messages: Sequence[LLMMessage]) -> list[dict[str, Any]]:
-    """Serialise for the runtime's own chat API rather than the OpenAI one.
-
-    The two disagree about tool turns. The OpenAI shape carries tool_call_id on
-    a tool result and a tool_calls array on the assistant turn that caused it;
-    the native endpoint rejects the request outright. A first constrained call
-    therefore worked and the second, which was the first one that had a tool
-    result in its history, returned 400.
-
-    Under constrained decoding the assistant's move is already a JSON object,
-    so it is carried as content, and a tool result is a tool turn with text.
-    No structure is lost because none of it was in the tool-call channel.
-    """
+    """Serialise for the runtime's own chat API rather than the OpenAI one."""
     out: list[dict[str, Any]] = []
     for message in messages:
         role = message.role.value
@@ -118,12 +86,7 @@ class ModelRouter:
         self._models: dict[str, ChatModel] = {}
         self.call_log: list[ModelCallRecord] = []
         self.invocations_attempted = 0
-        """Every runtime call this router has issued, including retried ones.
-
-        This is the left-hand side of the telemetry invariant: it is incremented
-        at the call site itself, so it cannot drift from reality the way a count
-        derived from the log could. len(call_log) must equal it.
-        """
+        """Every runtime call this router has issued, including retried ones."""
         self._digests: dict[str, str] = {}
 
     # -- resolution ------------------------------------------------------
@@ -155,12 +118,7 @@ class ModelRouter:
         return self.get(self.alias_for_task(task_class))
 
     def digest_for(self, alias: str) -> str:
-        """Resolve and cache the served digest for an alias.
-
-        Resolved once per process, not per call: the digest cannot change under
-        a running runtime without a reload, and querying it on every invocation
-        would add a network round trip to every model call.
-        """
+        """Resolve and cache the served digest for an alias."""
         if alias not in self._digests:
             try:
                 from mimir.eval.provenance import resolve_model
@@ -198,7 +156,6 @@ class ModelRouter:
             )
 
         # Shared by every attempt, so a record can always be attributed to the
-        # role and specialist that caused it rather than to an anonymous alias.
         common = {
             "runtime": model.profile.runtime if hasattr(model, "profile") else "",
             "digest": self.digest_for(model.alias),
@@ -212,9 +169,7 @@ class ModelRouter:
 
         last_error: ModelError | None = None
         for attempt in range(retries + 1):
-            # One record per attempt. A retried call really is two invocations
-            # of the runtime and costs two invocations of compute; collapsing
-            # them understates load and makes the retry rate unmeasurable.
+            # One record per attempt.
             started = time.time()
             self.invocations_attempted += 1
             try:
@@ -268,14 +223,7 @@ class ModelRouter:
         temperature: float = 0.0,
         tool_calls_before: int = 0,
     ) -> tuple[str, str]:
-        """One call whose output must satisfy ``schema``.
-
-        Goes through the runtime's native endpoint because that is where the
-        grammar constraint lives; the OpenAI-compatible surface does not carry
-        it. Recorded here rather than at the call site so a constrained
-        invocation counts exactly like any other, which is the invariant that
-        found the empty model_calls table.
-        """
+        """One call whose output must satisfy ``schema``."""
         import httpx
 
         from mimir.llm.base import ModelCallRecord
@@ -286,12 +234,7 @@ class ModelRouter:
         if not base:
             raise ModelError("constrained decoding needs a runtime base url")
 
-        # The profile's own output budget, not a number chosen here. A
-        # constrained tool call carries its arguments inline, and a coding
-        # tool's arguments are whole blocks of code: a 900 token cap truncated
-        # them mid-string, the JSON no longer parsed, and the turn ended having
-        # changed nothing. Operations calls carry short strings and never hit
-        # it, which is why the two loops behaved differently.
+        # The profile's own output budget, not a number chosen here.
         budget = max_tokens or getattr(profile, "max_output_tokens", 0) or 4096
 
         payload = {
@@ -418,12 +361,7 @@ class ModelRouter:
     # -- lifecycle -------------------------------------------------------
 
     async def health_report(self) -> dict[str, tuple[bool, str]]:
-        """Probe every configured profile in the way it is actually used.
-
-        An embedding model cannot answer a chat request, so probing it with one
-        reports a healthy runtime as broken. The alias the routing table points
-        at for embeddings is the authoritative signal for which probe to send.
-        """
+        """Probe every configured profile in the way it is actually used."""
         embedding_alias = self.settings.models.routing.embedding
         out: dict[str, tuple[bool, str]] = {}
         for alias in self.settings.models.profiles:
@@ -480,8 +418,6 @@ def extract_json(text: str) -> Any:
             return parsed
 
     # Last resort: a model that was "thinking in Python" emits a dict literal with
-    # single quotes, which is not JSON. literal_eval parses only literals, so it
-    # cannot execute anything from the model output.
     for candidate in candidates:
         try:
             parsed = ast.literal_eval(_balanced_slice_raw(candidate.strip()) or candidate.strip())

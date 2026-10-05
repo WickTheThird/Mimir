@@ -31,8 +31,7 @@ class TestSignature:
         assert not from_text(INNOCENT).is_storm
 
     def test_every_gap_in_the_list_is_read(self):
-        """A non-greedy pattern read "1s, 2s and 4s" as two gaps. The verdict
-        was right anyway, which is how a parsing bug survives a passing test."""
+        """A non-greedy pattern read "1s, 2s and 4s" as two gaps."""
         assert from_text(STORM).gaps == [1.0, 2.0, 4.0]
 
     def test_evenly_spaced_repeats_are_not_backoff(self):
@@ -42,8 +41,7 @@ class TestSignature:
         ).is_storm
 
     def test_two_attempts_are_never_enough(self):
-        """A single gap cannot fail to be consistent with doubling, so a
-        two-attempt threshold would pass on any pair of lines in any log."""
+        """A single gap cannot fail to be consistent with doubling, so a two-attempt threshold would pass on any pair of lines in any log."""
         assert MIN_ATTEMPTS >= 3
         assert not from_timestamps([0.0, 1.0]).is_storm
 
@@ -98,8 +96,7 @@ class TestDemotion:
         assert moved == 0
 
     def test_the_gate_never_promotes_on_a_match(self):
-        """A present signature is consistent with retries causing the
-        incident. It does not establish it."""
+        """A present signature is consistent with retries causing the incident."""
         answer = self._answer("A batch job opened 400 connections.", ["batch job"])
         answer, moved = demote_unsupported_retry(answer, from_text(STORM))
         assert moved == 0

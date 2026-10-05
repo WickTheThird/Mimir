@@ -1,10 +1,4 @@
-"""Command proposal, risk classification, and execution records (ADR 13).
-
-The model never executes anything directly. It produces a
-:class:`ProposedCommand`; deterministic policy code in :mod:`mimir.safety`
-attaches a :class:`RiskAssessment`; the executor turns an approved proposal into
-an :class:`ExecutionRecord`.
-"""
+"""Command proposal, risk classification, and execution records (ADR 13)."""
 
 from __future__ import annotations
 
@@ -75,9 +69,7 @@ class TargetContext(BaseModel):
     targets: list[str] = Field(default_factory=list)
 
     def render_pairs(self) -> list[tuple[str, str]]:
-        """Label/value pairs. Renderers must not split a formatted line on the
-        first space: labels contain spaces ("target objects"), so doing that
-        turns one field into two and mangles the display."""
+        """Label/value pairs."""
         pairs = [
             ("cluster/context", self.cluster_context),
             ("namespace", self.namespace),

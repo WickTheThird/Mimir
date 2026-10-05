@@ -1,18 +1,4 @@
-"""The coding agent's system prompt.
-
-Kept short, though not for the reason first written here.
-
-The original note said this was paid on every step of every turn, because
-MIMIR was assumed to be prefill-bound. Measured, that is false: the runtime
-caches the prefix, so a first step costs 1.91s of prefill and every later step
-in the same conversation costs 0.10s, eighteen times less, replicated over
-three cold starts.
-
-So a long system prompt is paid once per conversation, not per step, and the
-reason to keep it short is not cost. It is that instructions compete for
-attention with the request, and that on this model added prompt text has
-repeatedly cost tool-call adherence rather than tokens.
-"""
+"""The coding agent's system prompt."""
 
 from __future__ import annotations
 

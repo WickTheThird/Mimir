@@ -1,14 +1,4 @@
-"""Code mutation inside a task worktree (ADR-002 section 3).
-
-MIMIR never writes to the operator's working tree. Every tool here operates on
-a git worktree created for one task, so an abandoned or wrong change is undone
-by deleting a directory rather than by reverse-engineering what was touched.
-
-Risk follows ADR-002 section 4.2, and the escalation that is easiest to miss is
-encoded literally: writing a file inside the worktree is R1, but *running* the
-repository's tests is R2, because it executes arbitrary code from that
-repository including whatever MIMIR just wrote.
-"""
+"""Code mutation inside a task worktree (ADR-002 section 3)."""
 
 from __future__ import annotations
 
@@ -41,8 +31,7 @@ _CREDENTIAL_VARS = frozenset({
 })
 
 _CREDENTIAL_MARKERS = ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "APIKEY", "API_KEY")
-"""Matched against the variable name. Catches the ones nobody thought to list,
-which is most of them in any real shell."""
+"""Matched against the variable name."""
 
 
 def _manager(ctx: ToolContext) -> WorktreeManager:
@@ -63,13 +52,7 @@ def _wrap(exc: WorktreeError) -> ToolError:
 def _verify(ctx: ToolContext, root: Path, relative: str, *, updated: str,
             original: str | None, baseline=None, baseline_lint=None,
             was_formatted: bool = False):
-    """Check a written file, and revert it if it cannot be read.
-
-    Every write goes through this. The model is asked to know the language, the
-    framework and the codebase at once; a small model gets one of them wrong
-    regularly, and the edit then stays, looks plausible in a diff, and is found
-    by whoever runs the code. None of the three needs a model to check.
-    """
+    """Check a written file, and revert it if it cannot be read."""
     from mimir.verify.change import verify_change
 
     try:
@@ -87,17 +70,7 @@ _LINE_PREFIX = re.compile(r"^\s*\d+\s{2}", re.MULTILINE)
 
 
 def strip_line_numbers(text: str) -> str:
-    """Remove the gutter read_file_range puts on every line.
-
-    The reading tool returns "   312  def all(self):" and the editing tool
-    demanded byte-exact text, so the model had to strip six-space-padded line
-    numbers off every line and reproduce the indentation underneath perfectly.
-    A 30B model does not, and the first real coding run spent eleven steps
-    failing the same edit and changed nothing.
-
-    Only stripped when every non-empty line carries a prefix, so a genuine line
-    of code that happens to begin with digits is left alone.
-    """
+    """Remove the gutter read_file_range puts on every line."""
     lines = [line for line in text.splitlines() if line.strip()]
     if len(lines) >= 2 and all(_LINE_PREFIX.match(line) for line in lines):
         return "\n".join(_LINE_PREFIX.sub("", line) for line in text.splitlines())
@@ -105,17 +78,7 @@ def strip_line_numbers(text: str) -> str:
 
 
 def find_span(haystack: str, needle: str) -> tuple[str, str] | None:
-    """Locate ``needle`` in ``haystack``, tolerating how it was transcribed.
-
-    Exact first. Then the same text with the reading tool's line numbers
-    removed. Then ignoring leading whitespace on each line, which is where a
-    model reproducing an indented block most often differs, and only when that
-    identifies exactly one place: an ambiguous loose match is the model not
-    knowing which occurrence it means, and resolving it here would edit the
-    wrong one.
-
-    Returns the text to replace as it actually appears, and how it was found.
-    """
+    """Locate ``needle`` in ``haystack``, tolerating how it was transcribed."""
     if haystack.count(needle) == 1:
         return needle, "exact"
 
@@ -148,22 +111,7 @@ def find_span(haystack: str, needle: str) -> tuple[str, str] | None:
 
 
 def _resolve_interpreter(command: str, repo_root: Path) -> str:
-    """Point a bare python at one that exists and has the project's packages.
-
-    A worktree has no virtualenv, and on this machine there is no plain
-    "python" on PATH at all, so every test command the model wrote exited 127.
-    It could not verify its own change, so it never learned the change had
-    worked, and spent the rest of the turn poking at the file.
-
-    The project's own interpreter is preferred over the one MIMIR runs under,
-    because that is the one with the repository's test dependencies.
-
-    shutil.which is deliberately not consulted. On this machine it answers
-    /Users/x/.pyenv/shims/python, a shim that exists as a file and fails when
-    run with "pyenv: python: command not found". Checking that something exists
-    is not checking that it works, and a real interpreter is better than a
-    resolvable name either way.
-    """
+    """Point a bare python at one that exists and has the project's packages."""
     head, _, tail = command.strip().partition(" ")
     if head not in ("python", "python3"):
         return command
@@ -201,18 +149,7 @@ def _indent_of(line: str) -> str:
 
 
 def _at_depth(lines: list[str], after_line: int, content: str) -> str:
-    """Re-indent an inserted block to the depth the file uses there.
-
-    The model decides what to insert and where. It should not also have to
-    decide how deep, and when it did, three runs in a row produced a file that
-    no longer parsed. The position already determines the answer.
-
-    For a block that opens a definition, the depth comes from the nearest
-    preceding definition, which is what makes a method land beside its siblings
-    rather than inside the body of the one above it. Otherwise it comes from the
-    nearest preceding non-blank line. Relative indentation inside the block is
-    preserved either way.
-    """
+    """Re-indent an inserted block to the depth the file uses there."""
     body = content.splitlines()
     first = next((line for line in body if line.strip()), "")
     if not first:
@@ -244,18 +181,7 @@ def _at_depth(lines: list[str], after_line: int, content: str) -> str:
 
 
 def _drop_repeated_context(body: str, lines: list[str], after_line: int) -> str:
-    """Remove lines the insert would duplicate from its own surroundings.
-
-    Models include the code around the insertion point in what they insert,
-    apparently to show where it goes. Twice in six runs: once a section
-    comment, which was untidy, and once an entire method, which left the
-    original's tail orphaned and its definition duplicated.
-
-    The longest run that repeats is what gets dropped, not the first line that
-    happens to match, because the damaging case is several lines long and a
-    one-line comparison walks straight past it. Only runs touching the seam
-    count, so a genuine second call to the same function further down survives.
-    """
+    """Remove lines the insert would duplicate from its own surroundings."""
     block = body.splitlines()
     meaningful = [i for i, line in enumerate(block) if line.strip()]
     if not meaningful:
@@ -288,12 +214,7 @@ def _drop_repeated_context(body: str, lines: list[str], after_line: int) -> str:
 
 
 def _context_around(original: str, line: int, span: int = 4) -> str:
-    """Show the real lines around a position, with their real indentation.
-
-    A revert that says only "does not parse" gives the model nothing to correct
-    against, and it retries the same shape. Showing the file is what lets it
-    see the indentation it got wrong.
-    """
+    """Show the real lines around a position, with their real indentation."""
     lines = original.splitlines()
     start = max(0, line - span)
     shown = [
@@ -304,10 +225,7 @@ def _context_around(original: str, line: int, span: int = 4) -> str:
 
 
 def _nearby(original: str, wanted: str) -> str:
-    """Show what is actually there, so a retry has something to aim at.
-
-    "does not appear" told the model nothing it could act on, and it retried
-    the same edit with cosmetic changes four times."""
+    """Show what is actually there, so a retry has something to aim at."""
     first = next((line.strip() for line in strip_line_numbers(wanted).splitlines()
                   if line.strip()), "")
     if not first:
@@ -558,19 +476,7 @@ class EditInput(BaseModel):
     tags=("repository", "worktree", "write"),
 )
 async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
-    """Exact-span replacement.
-
-    The whole-file write is the wrong primitive for editing. A model asked to
-    reproduce a 400 line file to change two of them will drop something, and
-    the drop is invisible: the file is syntactically fine and the diff looks
-    plausible. Requiring the old text makes the model state what it believes is
-    there, so a stale belief fails loudly instead of overwriting the file with
-    it.
-
-    A match count that is not exactly one is refused rather than resolved by
-    picking the first. Ambiguity here is the model not knowing which occurrence
-    it means, and guessing on its behalf edits the wrong line.
-    """
+    """Exact-span replacement."""
     root = await _repo_root(ctx, args.repo)
 
     def work() -> ToolResult:
@@ -614,8 +520,6 @@ async def edit_worktree_file(args: EditInput, ctx: ToolContext) -> ToolResult:
         new_text = args.new_string
         if how == "indentation ignored":
             # Re-indent the replacement to the indentation actually in the
-            # file, or a matched-but-differently-indented block would be
-            # replaced with text at the model's guessed indentation.
             new_text = _reindent(actual, args.new_string)
 
         updated = original.replace(actual, new_text, 1)
@@ -695,17 +599,7 @@ class InsertInput(BaseModel):
     tags=("repository", "worktree", "write"),
 )
 async def insert_worktree_lines(args: InsertInput, ctx: ToolContext) -> ToolResult:
-    """Add lines at a position, rather than by matching what is already there.
-
-    Both edit failures in the first real coding runs were about reproducing
-    existing text: first its line-number gutter, then its indentation. Adding a
-    method needs neither. The line number is already in front of the model,
-    because that is how the file was shown to it, and the only thing it has to
-    get right is the code it is actually writing.
-
-    The syntax gate still runs, so an insert at the wrong depth is reverted
-    rather than left in place.
-    """
+    """Add lines at a position, rather than by matching what is already there."""
     root = await _repo_root(ctx, args.repo)
 
     def work() -> ToolResult:
@@ -735,9 +629,6 @@ async def insert_worktree_lines(args: InsertInput, ctx: ToolContext) -> ToolResu
         body = _drop_repeated_context(body, lines, args.after_line)
         if not body.strip():
             # Everything asked for is already there, so nothing was inserted.
-            # Reporting that as a success is what let a loop insert the same
-            # method four times: each no-op looked like progress, and only the
-            # repeat guard eventually stopped it.
             raise ToolError(
                 f"nothing was inserted: those lines are already in {args.path} "
                 f"at line {args.after_line + 1}. The change is done.",
@@ -746,8 +637,6 @@ async def insert_worktree_lines(args: InsertInput, ctx: ToolContext) -> ToolResu
         if not body.endswith("\n"):
             body += "\n"
         # A blank line before an inserted block when it follows code, because
-        # every style this is likely to meet wants one and the model routinely
-        # omits it.
         preceding = lines[args.after_line - 1] if args.after_line else ""
         if preceding.strip() and not body.startswith("\n"):
             body = "\n" + body
@@ -849,12 +738,7 @@ async def run_worktree_tests(args: TestInput, ctx: ToolContext) -> ToolResult:
             wt = _manager(ctx).find(root, args.task)
         except WorktreeError as exc:
             raise _wrap(exc) from exc
-        # Scrubbed, not stripped. ADR-002 4.1 requires that test code cannot
-        # reach the operator's kubeconfig, SDM session or cloud credentials.
-        # An earlier version rebuilt PATH from scratch, which also removed the
-        # project's own toolchain and made every test command exit 127 - the
-        # environment was safe and useless. Credentials are removed by name and
-        # by shape; everything else the repository needs to build is kept.
+        # Scrubbed, not stripped.
         env = {
             key: value
             for key, value in os.environ.items()

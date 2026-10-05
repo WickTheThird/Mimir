@@ -1,16 +1,4 @@
-"""Where a typed decision actually gets scored.
-
-Three shapes exist in the open implementations and MIMIR should not care which
-is installed. Nimble runs in-process on Apple Silicon through MLX and wants
-about eighteen gigabytes; Kev ships a local HTTP server and comes as small as
-0.8B; Von is 395M on CPU. The differences are memory and accuracy, not
-interface, so the backend is configuration.
-
-That matters for more than tidiness. A decision model small enough to run
-beside the generative one, or on a machine that cannot hold a generative one at
-all, is the difference between MIMIR needing a workstation and MIMIR running on
-whatever is spare.
-"""
+"""Where a typed decision actually gets scored."""
 
 from __future__ import annotations
 
@@ -26,17 +14,7 @@ DEFAULT_TIMEOUT = 30.0
 
 
 class KevDecider:
-    """Kev's local System One server.
-
-    Written against the published API rather than guessed: POST /v1/systemone
-    with a state and a map of questions, each a noul, choice or score, and the
-    answers come back with probabilities and a confidence. Nothing is generated
-    and nothing is parsed out of prose.
-
-    Kev-0.8B is about three gigabytes, which is what makes this usable on a
-    machine that is also running a generative model and has sixteen gigabytes
-    in total.
-    """
+    """Kev's local System One server."""
 
     def __init__(
         self,
@@ -56,11 +34,7 @@ class KevDecider:
 
     @property
     def available(self) -> bool:
-        """Asked once per process, and never allowed to raise.
-
-        A decision server that is not running is a reason to fall back, not a
-        reason to fail a turn.
-        """
+        """Asked once per process, and never allowed to raise."""
         if self._checked is None:
             self._checked = self._probe()
         return self._checked
@@ -74,9 +48,6 @@ class KevDecider:
                 models = response.json().get("models") or []
                 temps = [float(m.get("temperature", 1.0)) for m in models]
                 # Kev stores a fitted temperature per checkpoint and applies
-                # it at load. 1.0 means raw logits: the Qwen3-revision
-                # checkpoints report it, and their probabilities are then
-                # not calibrated however confident they look.
                 self._calibrated = any(t != 1.0 for t in temps) if temps else False
             except (ValueError, TypeError, AttributeError):
                 self._calibrated = False
@@ -174,11 +145,7 @@ def _from_kev(
 def _verdicts(
     body: dict[str, Any], fields: list[Choice], truncated: bool
 ) -> dict[str, Verdict]:
-    """Read a distribution per field, refusing anything not offered.
-
-    A probability over an option that was never in the schema is not a decision
-    about this question, whatever it is. Dropping it is the only safe reading.
-    """
+    """Read a distribution per field, refusing anything not offered."""
     out: dict[str, Verdict] = {}
     for choice in fields:
         raw = (body.get(choice.name) or body.get("fields", {}).get(choice.name) or {})
@@ -206,11 +173,7 @@ def _verdicts(
 
 
 class NimbleDecider:
-    """Nimble in-process, through MLX on Apple Silicon.
-
-    Imported lazily and never at module scope: MLX is an optional dependency
-    and a machine without it must still be able to load this module.
-    """
+    """Nimble in-process, through MLX on Apple Silicon."""
 
     def __init__(self, model_path: str, *, adapter_path: str = "") -> None:
         self.model_path = model_path

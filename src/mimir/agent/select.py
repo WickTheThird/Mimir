@@ -1,20 +1,4 @@
-"""Sample the work more than once, and let the rules choose.
-
-Across twelve stored runs of the 52 case suite, 39 cases always pass, 13 are
-flaky and none fails structurally: every case has passed at least once. So
-pass@1 of 0.873 becomes 0.944 at three attempts and 0.964 at five, and the gap
-is not knowledge the model lacks, it is variance.
-
-Turning that into a real gain needs a selector, and the selector is the part
-that must not be a model. A judge that is wrong q of the time gives back
-roughly q of what sampling won, which is why this scores a candidate only on
-things that were observed: does it parse, does the linter say anything new, do
-the tests pass, did it change anything at all.
-
-The cost is lower than it looks. The k attempts share nothing with each other,
-but each is one conversation, and a conversation after its first step costs a
-tenth of that step because the prefix is cached.
-"""
+"""Sample the work more than once, and let the rules choose."""
 
 from __future__ import annotations
 
@@ -68,34 +52,16 @@ class Candidate:
 
     @property
     def score(self) -> tuple:
-        """Ordered by what was verified, not by how it reads.
-
-        Tests first because they are the strongest evidence available, then the
-        linter, then whether anything changed at all. Fewer lines breaks a tie:
-        between two attempts that both pass everything, the smaller diff is the
-        one that did what was asked and no more.
-        """
+        """Ordered by what was verified, not by how it reads."""
         return (
             self.usable,
             self.dead_definitions == 0,
             self.tests_passed,
             self.tests_ran,
             -self.lint_findings,
-            # Below every deterministic check, above diff size. A scored belief
-            # cannot overrule something observed, and it only ever breaks a tie
-            # the facts have already failed to break, which is exactly where
-            # the tie break was picking the smallest incomplete answer.
-            #
-            # Unjudged sits between judged-complete and judged-incomplete, not
-            # at the bottom. Mapping it to zero made "no decision model was
-            # running" score the same as "the model is confident this did not
-            # do the job", which is the failure shape this project keeps
-            # finding: absence of evidence reading as evidence of absence.
+            # Below every deterministic check, above diff size.
             self.satisfies if self.satisfies is not None else 0.5,
-            # Deletion before size. One attempt removed 248 lines and added 76
-            # while passing syntax, lint, tests and the definition check, and a
-            # single combined line count hid it: 324 changed looked like a
-            # large edit rather than a file being gutted.
+            # Deletion before size.
             -self.lines_removed,
             -self.lines_added,
         )
@@ -118,8 +84,6 @@ class Candidate:
             bits.append("tests pass" if self.tests_passed else "TESTS FAIL")
         elif self.tests_wanted:
             # Silence here would be the selector quietly demoting itself from
-            # deciding on tests to deciding on diff size, which is the whole
-            # fail-open shape this project exists to refuse.
             bits.append("TESTS DID NOT RUN")
         return f"#{self.index} " + ", ".join(bits)
 
@@ -146,12 +110,7 @@ def changed_files(root: Path) -> list[str]:
 
 
 def _line_counts(root: Path) -> tuple[int, int]:
-    """Added and removed, kept apart.
-
-    Summing them into one number made a change that deleted 248 lines and
-    added 76 report as "324 lines changed", which reads as a large edit rather
-    than as a file being gutted.
-    """
+    """Added and removed, kept apart."""
     added = removed = 0
     for line in _git(root, "diff", "--numstat").splitlines():
         parts = line.split()
@@ -191,8 +150,6 @@ def inspect(
         candidate.lint_findings += len(check_rules(rules, relative, text))
 
         # An attempt that added something nothing uses did not finish the job,
-        # and its diff is smaller than one that did, so without this the tie
-        # break actively prefers the incomplete answer.
         before = _original(candidate.root, relative)
         for issue in definitions.check(before, text):
             candidate.dead_definitions += 1
@@ -228,16 +185,8 @@ def _lint_count(root: Path, files: list[str]) -> int:
 
 
 def _run_tests(root: Path, command: str, repo_root: Path | None = None) -> tuple[bool, bool]:
-    """Whether the tests ran, and whether they passed.
-
-    The two are separate because a suite that could not start is not a suite
-    that failed, and scoring them the same would let an attempt that broke the
-    test runner outrank one that merely broke a test.
-    """
-    # The same interpreter resolution the test tool does. Two places run
-    # tests and only one of them resolved a bare python, so a selector given
-    # "python -m pytest" scored every candidate as TESTS DID NOT RUN and fell
-    # back to diff size without the tests ever executing.
+    """Whether the tests ran, and whether they passed."""
+    # The same interpreter resolution the test tool does.
     from mimir.tools.code import _resolve_interpreter
 
     resolved = _resolve_interpreter(command, repo_root or root)
@@ -256,19 +205,7 @@ def _run_tests(root: Path, command: str, repo_root: Path | None = None) -> tuple
 def judge_completeness(
     candidates: list[Candidate], instruction: str, settings: Any
 ) -> None:
-    """Ask a decision model whether each change did what was asked.
-
-    This is the one thing the deterministic checks cannot see. They establish
-    that a change parses, links up, lints and passes its tests, and four
-    attempts at one task satisfied all of that while two of them added a
-    constant and never used it. The completeness question is a classification
-    with a closed answer set, which is what a discriminative model is for.
-
-    It sits below every observed fact in the ordering and only ever breaks a
-    tie those facts left. A verdict the model is unsure about is discarded
-    rather than used, because a calibrated model's uncertainty is the reason to
-    have one.
-    """
+    """Ask a decision model whether each change did what was asked."""
     from mimir.decide import Choice, build_decider
 
     decider = build_decider(settings)
@@ -316,14 +253,7 @@ async def best_of(
     test_command: str = "",
     console: Any = None,
 ) -> tuple[Candidate | None, list[Candidate]]:
-    """Run the instruction ``k`` times and return the attempt the rules prefer.
-
-    ``make_view`` is called with an index and returns a view whose agent is
-    already bound to its own worktree, so the attempts cannot see each other.
-    Attempts run one after another rather than together: they share one
-    runtime, and running them concurrently makes each slower without making the
-    set faster.
-    """
+    """Run the instruction ``k`` times and return the attempt the rules prefer."""
     candidates: list[Candidate] = []
     for index in range(k):
         view = make_view(index)

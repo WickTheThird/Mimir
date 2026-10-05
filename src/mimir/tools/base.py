@@ -1,17 +1,4 @@
-"""Typed helper tool contract (ADR 9).
-
-The model never receives a single unrestricted shell tool. It receives a set of
-constrained helpers with typed inputs and structured outputs. This module
-defines that contract:
-
-* :class:`ToolSpec`   - name, description, JSON schema, risk, capability tag.
-* :class:`ToolResult` - structured output plus the evidence it produced.
-* :class:`ToolRegistry` - lookup, filtering by specialist, OpenAI schema export.
-* :func:`tool`        - decorator that derives a spec from a pydantic input model.
-
-Handlers are async and receive a :class:`ToolContext` carrying the session id,
-settings, artifact store, and approval callback.
-"""
+"""Typed helper tool contract (ADR 9)."""
 
 from __future__ import annotations
 
@@ -36,8 +23,7 @@ InputT = TypeVar("InputT", bound=BaseModel)
 
 
 class Capability(StrEnum):
-    """Coarse capability groups, used for policy and for the ADR 16.5 rule that
-    privileged surfaces stay loopback-only."""
+    """Coarse capability groups, used for policy and for the ADR 16.5 rule that privileged surfaces stay loopback-only."""
 
     REPOSITORY = "repository"
     CODE = "code"
@@ -54,13 +40,6 @@ class Capability(StrEnum):
 
 
 #: Capabilities that touch only local, immutable-during-a-run state and may
-#: therefore run in an offline evaluation. This is an ALLOWLIST on purpose: a new
-#: capability is unsafe until somebody argues otherwise, which is the opposite of
-#: the denylist that let web search into a supposedly offline benchmark.
-#:
-#: Deliberately excluded: WEB (mutable third-party state, and it transmits the
-#: prompt off the machine), KUBERNETES, SDM, DATABASE (live infrastructure),
-#: SHELL (arbitrary execution).
 OFFLINE_SAFE_CAPABILITIES: frozenset[Capability] = frozenset(
     {
         Capability.REPOSITORY,
@@ -86,11 +65,7 @@ PRIVILEGED_CAPABILITIES: frozenset[Capability] = frozenset(
 
 
 class ToolError(Exception):
-    """Raised by a handler when the call cannot be completed.
-
-    Carries a machine-readable code so the graph can decide whether to retry,
-    re-plan, or surface the failure to the user.
-    """
+    """Raised by a handler when the call cannot be completed."""
 
     def __init__(self, message: str, *, code: str = "tool_error", retryable: bool = False) -> None:
         super().__init__(message)
@@ -160,12 +135,7 @@ class ToolContext:
     environment: Any = None  # mimir.models.state.EnvironmentContext
     registry: Any = None  # mimir.tools.base.ToolRegistry
     entities: Any = None  # mimir.knowledge.entities.EntityStore
-    """The registry a dispatching tool must resolve through.
-
-    Tools that fan out to other tools (parallel_search) previously reached the
-    global REGISTRY at call time, which let them invoke helpers that had been
-    deliberately excluded from a filtered registry. Any tool that dispatches
-    must use this when it is set."""
+    """The registry a dispatching tool must resolve through."""
     extra: dict[str, Any] = field(default_factory=dict)
 
     def child(self, **overrides: Any) -> ToolContext:
@@ -202,31 +172,14 @@ class ToolSpec(Generic[InputT]):
     """Which specialists may call this. Empty means all of them."""
 
     superseded_by: tuple[str, ...] = ()
-    """Tools that do this job exactly, when they are available.
-
-    A superseded tool is hidden from selection whenever a replacement is
-    registered. Offering both an exact engine and an approximation of it costs
-    schema tokens on every call and invites the model to pick the worse one -
-    ``find_symbol`` is ripgrep plus a regex guessing at definitions, and
-    ``lsp_definition`` resolves the same question from a parse.
-
-    The tool stays callable directly; it is only removed from what the council
-    is offered.
-    """
+    """Tools that do this job exactly, when they are available."""
 
     mutating: bool = False
     requires_approval: bool = False
     long_running: bool = False
     tags: tuple[str, ...] = ()
     offline_safe: bool | None = None
-    """Whether this tool may run in an offline evaluation.
-
-    ``None`` derives from :data:`OFFLINE_SAFE_CAPABILITIES`, which is an
-    allowlist: anything not named there is unsafe. A denylist was tried first
-    and failed exactly as denylists do, by omitting a capability nobody
-    remembered to add.
-
-    Set explicitly only to make a tool MORE restricted than its capability."""
+    """Whether this tool may run in an offline evaluation."""
 
     @property
     def is_offline_safe(self) -> bool:
@@ -300,8 +253,6 @@ class ToolSpec(Generic[InputT]):
         if hooks is not None:
             result = await hooks.after_tool(self, parsed, result, ctx)
         # The entity store learns from every successful result (ADR-003 phase
-        # 4). It is a cache and must never fail a tool: observe() catches its
-        # own errors and logs them.
         entities = getattr(ctx, "entities", None)
         if entities is not None and result.ok:
             entities.observe(self.name, parsed, result)
@@ -344,13 +295,7 @@ class ToolRegistry:
         include_mutating: bool = True,
         max_risk: RiskClass | None = None,
     ) -> list[ToolSpec[Any]]:
-        # None means "no capability filter". An empty sequence means "no
-        # capabilities", which must yield nothing. Collapsing the two made an
-        # empty declaration read as unrestricted, so the synthesis specialist -
-        # which declares no capabilities at all - was exempt from capability
-        # filtering and offered logs and skills tools. It never called one, but
-        # a restriction that inverts when it is at its strictest is the same
-        # fail-open shape as an offline denylist that omitted the web.
+        # None means "no capability filter".
         caps = None if capabilities is None else set(capabilities)
         registered = {spec.name for spec in self.all()}
         wanted = set(names) if names else None
@@ -409,11 +354,7 @@ def tool(
     superseded_by: Sequence[str] = (),
     registry: ToolRegistry | None = None,
 ) -> Callable[[Handler], ToolSpec[Any]]:
-    """Register an async handler as a typed tool.
-
-    The handler signature must be ``async def h(args: SomeModel, ctx: ToolContext)``
-    where ``SomeModel`` is a pydantic model; the schema is derived from it.
-    """
+    """Register an async handler as a typed tool."""
 
     def decorator(handler: Handler) -> ToolSpec[Any]:
         hints = inspect.get_annotations(handler, eval_str=True)
@@ -475,9 +416,7 @@ def load_all_tools() -> ToolRegistry:
         except ImportError as exc:  # pragma: no cover - optional extras
             log.warning("tool_module_unavailable", module=module, error=str(exc))
 
-    # Language server tools are opt-out. They change the tool surface, and a
-    # run with a different surface is not comparable to one without it, so an
-    # experiment can turn them off to reproduce an earlier fingerprint exactly.
+    # Language server tools are opt-out.
     try:
         from mimir.config import get_settings
 

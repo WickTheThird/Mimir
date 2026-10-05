@@ -87,11 +87,7 @@ def test_merge_is_idempotent():
 
 
 async def test_full_investigation_runs_without_a_model_runtime(settings, echo_router):
-    """The whole graph must complete against the deterministic echo model.
-
-    This is the integration test: coordinator, skill selection, parallel
-    specialists, verification, safety review, synthesis, and memory curation.
-    """
+    """The whole graph must complete against the deterministic echo model."""
     runner = InvestigationRunner(settings=settings, router=echo_router)
     seen: dict[str, int] = {}
     async for event in runner.stream("why is checkout timing out against auth?"):
@@ -176,14 +172,7 @@ async def test_session_survives_a_resume(settings, echo_router):
 
 
 async def test_executed_commands_reach_the_audit_trail(settings, echo_router):
-    """Commands run by tools must land in the session, not only in the executor.
-
-    Typed helpers execute through the shared CommandExecutor and return a
-    ToolResult; the ExecutionRecord stays behind in the executor. Without an
-    explicit harvest the executions table stays empty forever, and "auditable
-    command execution" is nominal rather than real. That was the actual state
-    of the system until this was added.
-    """
+    """Commands run by tools must land in the session, not only in the executor."""
     from mimir.models.command import ProposedCommand
 
     runner = InvestigationRunner(settings=settings, router=echo_router)
@@ -200,11 +189,7 @@ async def test_executed_commands_reach_the_audit_trail(settings, echo_router):
 
 
 def test_eval_offline_registry_excludes_live_capabilities():
-    """A benchmark must not depend on live infrastructure state.
-
-    It also must not reach the operator's real clusters unattended, which is
-    what happened the first time model cases were scored.
-    """
+    """A benchmark must not depend on live infrastructure state."""
     from mimir.eval.harness import EvalHarness
     from mimir.tools.base import load_all_tools
 
@@ -221,12 +206,7 @@ def test_eval_offline_registry_excludes_live_capabilities():
 
 
 def test_failure_taxonomy_distinguishes_retrieval_from_synthesis():
-    """"Never looked" and "looked but did not cite" need different fixes.
-
-    One calls for better retrieval, the other for a synthesis gate. Conflating
-    them sends effort to the wrong layer, which is why they are separate
-    categories rather than one "citation problem".
-    """
+    """"Never looked" and "looked but did not cite" need different fixes."""
     from mimir.eval.harness import CaseKind, EvalCase, FailureCategory, classify_failure
     from mimir.models.evidence import Evidence, SourceType
     from mimir.models.specialist import FinalAnswer
@@ -263,11 +243,7 @@ def test_failure_taxonomy_flags_guessed_targets():
 
 
 def test_audit_gap_is_a_hard_gate():
-    """An audit gap must fail the run even when every case passed.
-
-    Commands that ran without being recorded is the exact defect that made the
-    audit trail nominal, and it is invisible in a pass rate.
-    """
+    """An audit gap must fail the run even when every case passed."""
     from mimir.eval.harness import CaseKind, CaseResult, EvalReport, FailureCategory
 
     report = EvalReport()
@@ -289,11 +265,7 @@ def test_audit_gap_is_a_hard_gate():
 
 
 def test_hidden_corpus_is_excluded_by_default(settings, tmp_path):
-    """A held-out set must not load unless asked for.
-
-    Tuning against the cases you also score on produces a number that measures
-    how well you tuned, not whether anything generalised.
-    """
+    """A held-out set must not load unless asked for."""
     from mimir.eval.harness import EvalHarness
 
     hidden = EvalHarness.hidden_corpus_dir(settings)
@@ -363,24 +335,17 @@ def test_provenance_reports_confounds_between_runs():
     )
 
     # A clean baseline against a dirty candidate is a source difference, and the
-    # message should say so rather than just labelling it "dirty".
     dirty = _provenance(**{"source.dirty": True, "source.diff_hash": "d1"})
     assert any("different working trees" in p for p in comparable(base, dirty))
 
     # Two runs from the SAME dirty tree are comparable to each other even though
-    # neither is reproducible from the commit. Collapsing both cases into one
-    # "dirty" verdict would hide that distinction.
     problems = comparable(dirty, _provenance(**{"source.dirty": True, "source.diff_hash": "d1"}))
     assert any("same dirty tree" in p for p in problems)
     assert not any("different working trees" in p for p in problems)
 
 
 def test_comparison_fails_closed_on_incomplete_provenance():
-    """Two runs that both recorded nothing are not thereby equivalent.
-
-    The previous version compared field to field, so an empty tool hash on both
-    sides compared equal and the capability check silently did nothing.
-    """
+    """Two runs that both recorded nothing are not thereby equivalent."""
     from mimir.eval.provenance import comparable
 
     base = _provenance()
@@ -403,8 +368,7 @@ def test_comparison_refuses_older_schema_versions():
 
 
 def test_source_changing_mid_run_invalidates_the_comparison():
-    """Provenance was collected at persistence time, so edits made while a run
-    was in flight were recorded as the state that produced it."""
+    """Provenance was collected at persistence time, so edits made while a run was in flight were recorded as the state that produced it."""
     from mimir.eval.provenance import comparable
 
     moved = _provenance(**{"source.changed_during_run": True})
@@ -418,18 +382,12 @@ def test_provenance_marks_unresolved_models():
     identity = resolve_model("deep")
     assert identity.name
     # With no runtime listening the digest cannot be known, and that must be
-    # visible rather than implied.
     if not identity.resolved:
         assert identity.digest == ""
 
 
 def test_offline_selection_is_an_allowlist_not_a_denylist():
-    """A new capability must be unsafe until classified.
-
-    The first implementation used a denylist naming kubernetes, sdm, and
-    database. It omitted web, and a supposedly offline benchmark sent evaluation
-    prompts to Google, Yandex, and Brave. An allowlist fails closed instead.
-    """
+    """A new capability must be unsafe until classified."""
     from mimir.eval.harness import EvalHarness
     from mimir.tools.base import Capability, load_all_tools
 
@@ -497,8 +455,7 @@ def test_external_calls_fail_the_gate():
 
 
 def test_dispatching_tools_cannot_resolve_past_a_filtered_registry():
-    """parallel_search fans out by name and previously used the global registry,
-    which let it reach tools deliberately excluded from a filtered one."""
+    """parallel_search fans out by name and previously used the global registry, which let it reach tools deliberately excluded from a filtered..."""
     from mimir.eval.harness import EvalHarness
     from mimir.tools.base import ToolContext
     from mimir.tools.search import _resolve_tool
@@ -510,14 +467,7 @@ def test_dispatching_tools_cannot_resolve_past_a_filtered_registry():
 
 
 def test_empty_capabilities_means_none_not_unrestricted():
-    """A restriction that inverts at its strictest setting is a fail-open.
-
-    `caps = set(capabilities) if capabilities else None` treated an empty
-    declaration as "no filter", so the synthesis specialist - which declares no
-    capabilities at all - was exempt from capability filtering and offered logs
-    and skills tools. It never called one, but the same shape produced the
-    offline denylist that omitted the web.
-    """
+    """A restriction that inverts at its strictest setting is a fail-open."""
     from mimir.tools.base import load_all_tools
 
     registry = load_all_tools()
@@ -536,13 +486,7 @@ def test_a_specialist_declaring_no_capabilities_is_offered_no_tools():
 
 
 def test_a_context_mismatch_refuses_the_comparison():
-    """A configured value the runtime ignored must not be reported as fact.
-
-    Ollama's OpenAI shim discards num_ctx and serves each model at its own
-    default. qwen3-coder:30b defaults to 262144, so a run configured for 32768
-    was served eight times that, allocated a 24.5 GB KV cache, ran at 4 tok/s,
-    and recorded 32768 as though it were true.
-    """
+    """A configured value the runtime ignored must not be reported as fact."""
     from mimir.eval.provenance import comparable
 
     clean = _provenance()
@@ -559,11 +503,7 @@ def test_a_context_mismatch_refuses_the_comparison():
 
 
 class TestSkillNarrowingPassesNames:
-    """A skill narrows a specialist's tool set by name. The call site handed
-    over ToolSpec objects instead, and available_tools puts what it is given
-    into a set, so every specialist step that a skill narrowed died with
-    "unhashable type: ToolSpec". ToolPermissions carries a names property for
-    exactly this."""
+    """A skill narrows a specialist's tool set by name."""
 
     def test_permissions_expose_names_as_well_as_specs(self):
         from mimir.models.specialist import SpecialistName
@@ -580,8 +520,7 @@ class TestSkillNarrowingPassesNames:
         assert set(permissions.names)
 
     def test_specs_themselves_cannot_go_into_a_set(self):
-        """Which is why passing them where names were wanted raised rather than
-        quietly narrowing to nothing."""
+        """Which is why passing them where names were wanted raised rather than quietly narrowing to nothing."""
         import pytest
 
         from mimir.tools.base import load_all_tools

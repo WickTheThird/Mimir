@@ -1,8 +1,4 @@
-"""Term association.
-
-Operators do not name things the way the estate does. Every case here is a
-phrasing from a real session.
-"""
+"""Term association."""
 
 from __future__ import annotations
 
@@ -31,15 +27,13 @@ class TestTermExtraction:
         assert "dev" not in terms
 
     def test_a_three_letter_name_is(self):
-        """"ch1" is how this operator names a pair of clusters. A rule that
-        cannot represent it misses the term they actually use."""
+        """"ch1" is how this operator names a pair of clusters."""
         assert "ch1" in terms_of("a dev cluster with ch1 inside of it")
 
 
 class TestNearMisses:
     def test_a_typo_resolves(self, glossary):
-        """The case this exists for. "whatapp" has never been seen and
-        messaging-whatsapp has, and the distance is one character."""
+        """The case this exists for."""
         _seed(glossary, ["messaging-whatsapp", "messaging-router"])
         near = [
             a for a in glossary.lookup("logs for messaging-whatapp please")
@@ -48,15 +42,12 @@ class TestNearMisses:
         assert [(a.term, a.name) for a in near] == [("whatapp", "messaging-whatsapp")]
 
     def test_a_coincidence_does_not(self, glossary):
-        """A similarity ratio alone cannot separate these: whatapp/whatsapp
-        scores 0.93, retry/registry 0.77, backoff/backoffice 0.82. Length is
-        what tells a typo from a different word."""
+        """A similarity ratio alone cannot separate these: whatapp/whatsapp scores 0.93, retry/registry 0.77, backoff/backoffice 0.82."""
         _seed(glossary, ["messaging-campaign-registry", "messaging-backoffice"])
         assert glossary.lookup("does the retry backoff still fail open") == []
 
     def test_a_word_meaning_many_things_means_nothing(self, glossary):
-        """"messaging" is a segment of six projects here. Offering all of them
-        is the list the model would have got anyway."""
+        """"messaging" is a segment of six projects here."""
         _seed(glossary, [f"messaging-{n}" for n in ("a1", "b2", "c3", "d4", "e5")])
         assert [a.term for a in glossary.lookup("the messaging thing")] == []
 
@@ -81,8 +72,7 @@ class TestLearning:
 
 class TestHint:
     def test_it_is_offered_as_a_lead_not_a_fact(self, glossary):
-        """The estate changes. A hint stated as a fact is a stale fact the
-        model will defend."""
+        """The estate changes."""
         _seed(glossary, ["messaging-whatsapp"])
         hint = glossary.hint("logs for whatapp")
         assert "whatapp = messaging-whatsapp" in hint
@@ -97,10 +87,7 @@ class TestHint:
 
 class TestLoopIntegration:
     def test_the_hint_goes_in_the_system_message_and_does_not_grow(self, tmp_path):
-        """The user turn is not a stable place for anything but the request.
-        Text added there made qwen3-coder stop emitting tool calls entirely, at
-        temperature zero, reproducibly, both before and after the instruction.
-        The system message is rebuilt each turn so it never accumulates."""
+        """The user turn is not a stable place for anything but the request."""
         import asyncio
 
         from tests.test_agent import _agent, _drain

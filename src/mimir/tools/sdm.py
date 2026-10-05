@@ -1,50 +1,4 @@
-"""StrongDM and container helpers (ADR 9.3, supporting the ADR 5.4 workflow).
-
-ADR 5.4 is explicit: "The exact SDM commands, resource naming, and access
-mechanisms are environment specific and must be learned from approved local
-documentation and curated skills. They are not invented in this ADR." Nothing in
-this module invents a subcommand. Only the stable, documented surface is used,
-and it was verified against the client installed on this machine.
-
-Verified surface
-----------------
-``sdm --version`` reported ``54.57.0``. From ``sdm --help`` and the per-command
-help pages:
-
-* ``sdm status`` - "list available resources and their connection status".
-  Options: ``--filter <expr>``, ``--filters-help``, ``--verbose/-v``.
-* ``sdm connect [--filter ...] name/ID [port]`` - "open port to resource".
-* ``sdm disconnect [--all] [--filter ...] name`` - "disconnect from a resource".
-
-``sdm ls`` is **not** a subcommand on this client (``sdm ls`` answers "No help
-topic for 'ls'"). :func:`list_sdm_resources` therefore runs ``sdm status``, which
-is the documented listing command, and applies filtering client-side plus the
-native ``--filter`` expression when one is supplied.
-
-When the local client is not authenticated, ``sdm status`` exits 9 and prints
-"You are not authenticated. Please login again." That is surfaced as a distinct
-error code; MIMIR never performs the login itself (ADR NG3).
-
-Resource to host/port mapping is **discovered**, never assumed. The listing is
-parsed with a header-driven table parser: the column names printed by the local
-client decide the fields, and any ``host:port`` shape found in a row is used as
-the local listen address. A client version that prints different columns is
-handled without a code change.
-
-Site-specific workflows stay out of this module
------------------------------------------------
-There are deliberately no ``kannel_*`` or ``tankers_*`` helpers here. Which
-resource fronts a Kannel bearerbox or a Tankers service, which container names to
-expect, and which inspection commands are meaningful are environment facts, not
-platform facts. They belong in curated skills and runbooks under
-``knowledge/skills`` and ``knowledge/runbooks/kannel`` /
-``knowledge/runbooks/tankers``, which compose the generic helpers below. Adding a
-``kannel_restart_bearerbox`` tool here would hard-code exactly the environment
-detail ADR 5.4 says must be learned.
-
-Every process is spawned through :class:`mimir.tools.exec.CommandExecutor`, so
-policy, approval, redaction, and audit apply uniformly.
-"""
+"""StrongDM and container helpers (ADR 9.3, supporting the ADR 5.4 workflow)."""
 
 from __future__ import annotations
 
@@ -74,8 +28,6 @@ from mimir.tools.exec import CommandExecutor, get_executor
 log = get_logger(__name__)
 
 #: Column headings seen across StrongDM client versions, mapped onto the fields
-#: :class:`SdmResource` exposes. Unknown columns are preserved in ``extra`` so a
-#: newer client that adds a column still round-trips its data.
 _HEADER_ALIASES: dict[str, str] = {
     "NAME": "name",
     "RESOURCE": "name",
@@ -95,8 +47,7 @@ _HEADER_ALIASES: dict[str, str] = {
     "ID": "id",
 }
 
-#: A ``host:port`` or bare ``:port`` shape anywhere in a row. This is how the
-#: local listen address is discovered rather than assumed.
+# : A ``host:port`` or bare ``:port`` shape anywhere in a row.
 _ADDRESS_RE = re.compile(r"([A-Za-z0-9_.\-]*):(\d{1,5})\b")
 
 _NOT_AUTHENTICATED_RE = re.compile(
@@ -107,8 +58,6 @@ _NOT_AUTHENTICATED_RE = re.compile(
 _MIN_ROW_CHARS = 2
 
 
-# --------------------------------------------------------------------------
-# Structured listing
 # --------------------------------------------------------------------------
 
 
@@ -144,7 +93,6 @@ class SdmResource(BaseModel):
 
         status = fields.get("status", "")
         # The address may live in its own column, in a dedicated port column, or
-        # inline in the status text depending on client version. Try each.
         host, port = _split_address(fields.get("address", ""))
         if port is None:
             host, port = _split_address(fields.get("port", ""))
@@ -195,17 +143,12 @@ def _looks_like_header(line: str) -> bool:
 
 def _slice_by_offsets(line: str, starts: list[int]) -> list[str]:
     # Column starts come from the header, so the first column always begins at 0
-    # and the last one runs to end of line however far a value overflows.
     bounds = [0, *starts[1:], len(line) + 1]
     return [line[bounds[i] : bounds[i + 1]].strip() for i in range(len(starts))]
 
 
 def parse_table(text: str) -> tuple[list[str], list[dict[str, str]]]:
-    """Parse a whitespace-aligned CLI table into (columns, rows).
-
-    Column names are taken from whatever header the local binary printed, which
-    is what keeps the resource mapping discovered rather than hard-coded.
-    """
+    """Parse a whitespace-aligned CLI table into (columns, rows)."""
     lines = [line for line in (text or "").splitlines() if line.strip()]
     header_index = next((i for i, line in enumerate(lines) if _looks_like_header(line)), None)
     if header_index is None:
@@ -236,8 +179,6 @@ def parse_sdm_status(text: str) -> list[SdmResource]:
 
 
 # --------------------------------------------------------------------------
-# Execution plumbing
-# --------------------------------------------------------------------------
 
 
 def _require_enabled(settings: Settings) -> None:
@@ -246,11 +187,7 @@ def _require_enabled(settings: Settings) -> None:
 
 
 def _check_resource_allowed(settings: Settings, name: str) -> None:
-    """Surface configuration allow/deny lists early.
-
-    The policy engine enforces the same lists at execution time; failing here
-    just means the model learns why before it builds a command.
-    """
+    """Surface configuration allow/deny lists early."""
     sdm = settings.sdm
     if any(re.search(pattern, name) for pattern in sdm.denied_resource_patterns):
         raise ToolError(
@@ -403,17 +340,10 @@ async def _resolve_one(ctx: ToolContext, name: str) -> tuple[SdmResource, list[S
 
 
 # --------------------------------------------------------------------------
-# Container plumbing
-# --------------------------------------------------------------------------
 
 
 def _container_env(resource: SdmResource | None, docker_host: str | None) -> dict[str, str]:
-    """Point the container CLI at the endpoint SDM is listening on.
-
-    Precedence: an explicit caller-supplied endpoint, then the local listen
-    address discovered from ``sdm status``, then the ambient environment (the
-    user's existing docker context). MIMIR does not invent a transport.
-    """
+    """Point the container CLI at the endpoint SDM is listening on."""
     if docker_host:
         return {"DOCKER_HOST": docker_host}
     if resource is not None and resource.port is not None:
@@ -464,9 +394,7 @@ def _parse_container_rows(stdout: str) -> list[dict[str, Any]]:
 
 
 def _summarise_inspect(document: dict[str, Any]) -> dict[str, Any]:
-    """Compact view of ``docker inspect``. Environment values are dropped on
-    purpose: they routinely carry credentials and only the key names are useful
-    for an investigation (ADR 13.4)."""
+    """Compact view of ``docker inspect``."""
     state = document.get("State") or {}
     config = document.get("Config") or {}
     host_config = document.get("HostConfig") or {}
@@ -499,8 +427,6 @@ def _summarise_inspect(document: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# --------------------------------------------------------------------------
-# Tools: SDM (ADR 9.3)
 # --------------------------------------------------------------------------
 
 
@@ -662,8 +588,7 @@ async def connect_sdm_resource(args: ConnectSdmResourceInput, ctx: ToolContext) 
     _require_enabled(ctx.settings)
     resource, _ = await _resolve_one(ctx, args.name)
 
-    # ADR 5.4 step 2: verify local SDM status before proposing a connect. A
-    # redundant connect is noise in the approval queue.
+    # ADR 5.4 step 2: verify local SDM status before proposing a connect.
     if resource.connected:
         return ToolResult(
             tool="connect_sdm_resource",
@@ -716,8 +641,6 @@ async def connect_sdm_resource(args: ConnectSdmResourceInput, ctx: ToolContext) 
     )
 
 
-# --------------------------------------------------------------------------
-# Tools: containers reached through a connected resource (ADR 9.3)
 # --------------------------------------------------------------------------
 
 
@@ -976,8 +899,7 @@ async def run_remote_readonly(args: RunRemoteReadonlyInput, ctx: ToolContext) ->
     if not payload:
         raise ToolError("command must not be empty", code="invalid_arguments")
 
-    # Deterministic gate, reusing the shared rules. This module does not carry a
-    # second opinion about what "read-only" means (ADR 13.1).
+    # Deterministic gate, reusing the shared rules.
     payload_risk, payload_reasons = classify_argv(payload)
     if payload_risk.rank > RiskClass.R1.rank:
         raise ToolError(

@@ -1,9 +1,4 @@
-"""The gates as the graph actually calls them.
-
-The gate functions have unit tests. This file covers the layer between them
-and the graph: which text each gate is shown, what lands in metadata, and
-whether they interfere with one another when several could fire.
-"""
+"""The gates as the graph actually calls them."""
 
 import pytest
 
@@ -38,8 +33,7 @@ def _session(request: str, excerpts=(), risks=(), freshness=Freshness.LIVE):
 class TestSufficiencyWiring:
     @pytest.mark.asyncio
     async def test_a_tool_failure_recorded_as_a_risk_reaches_the_gate(self):
-        """In production the failure is a recorded tool error, not prose in
-        the request. The gate must see the risks list."""
+        """In production the failure is a recorded tool error, not prose in the request."""
         session = _session(
             "is there a billing pod?",
             risks=["kubectl get pods: connection refused on all 3 contexts"],
@@ -52,8 +46,7 @@ class TestSufficiencyWiring:
 
     @pytest.mark.asyncio
     async def test_the_gate_records_what_it_saw_even_when_it_does_not_fire(self):
-        """A gate that only writes metadata when it acts cannot be
-        distinguished afterwards from one that never ran."""
+        """A gate that only writes metadata when it acts cannot be distinguished afterwards from one that never ran."""
         session = _session("is there a billing pod?")
         await _enforce_sufficiency(
             FinalAnswer(answer="The pod is running.", confidence=0.9), session
@@ -74,8 +67,7 @@ class TestSufficiencyWiring:
 class TestCurrencyWiring:
     @pytest.mark.asyncio
     async def test_stale_evidence_freshness_demotes_without_any_prose_marker(self):
-        """The structured verdict is the production signal. Nothing in the
-        request says anything about age."""
+        """The structured verdict is the production signal."""
         session = _session(
             "how many replicas does payments run?",
             excerpts=["payments replicas: 6"],
@@ -146,8 +138,7 @@ class TestGroundingWiring:
 class TestRetryWiring:
     @pytest.mark.asyncio
     async def test_an_answer_not_blaming_retries_costs_nothing_to_check(self):
-        """The gate returns before assembling observations, so the common
-        case does no work."""
+        """The gate returns before assembling observations, so the common case does no work."""
         session = _session("why is the pool exhausted?")
         _enforce_retry_signature(
             FinalAnswer(answer="A batch job opened 400 connections.", confidence=0.8),
@@ -185,9 +176,7 @@ class TestRetryWiring:
 class TestGatesTogether:
     @pytest.mark.asyncio
     async def test_a_sound_answer_passes_all_three_untouched(self):
-        """The gates must not tax the common case. If a correct answer loses
-        confidence by passing through them, the sweep will read as a
-        regression and the cause will not be obvious."""
+        """The gates must not tax the common case."""
         session = _session(
             "which pods are running in messaging-squad?",
             excerpts=["NAME  READY\nmessaging-router-6cf8  1/1  Running"],
@@ -218,9 +207,6 @@ class TestGatesTogether:
         answer = await _enforce_sufficiency(answer, session)
         answer = _enforce_grounding(answer, session)
         # Sufficiency replaces the prose, so the invented name is gone from the
-        # text before grounding reads it and there is nothing left to warn
-        # about there. The demotion still happened: both claims are in
-        # unverified, which is where a claim the evidence cannot carry belongs.
         assert "Unknown" in answer.answer
         assert "messaging-router-6cf8" not in answer.answer
         unverified = " ".join(answer.unverified)
@@ -323,8 +309,7 @@ class TestRetrievalDecision:
 
     @pytest.mark.asyncio
     async def test_the_decider_is_shown_recorded_failures_not_runbooks(self):
-        """The regex regression came from feeding retrieved documents to the
-        classifier. The decision model gets the request and the risks only."""
+        """The regex regression came from feeding retrieved documents to the classifier."""
         session = _session("Is there a billing pod?", excerpts=["Runbook: timeouts happen when..."],
                            risks=["kubernetes_investigator failed: iteration limit"])
         decider = FakeDecider("failed")
@@ -336,9 +321,7 @@ class TestRetrievalDecision:
 class TestOrderOfAuthority:
     @pytest.mark.asyncio
     async def test_an_explicit_statement_beats_a_wrong_decider(self):
-        """Kev read 'no listing was produced' as observed at p=0.58 on the
-        first measured run. The operator's explicit words are not a judgement
-        call and come first."""
+        """Kev read 'no listing was produced' as observed at p=0.58 on the first measured run."""
         session = _session(
             "All three clusters returned connection timeouts and no listing was "
             "produced. Is there a billing pod?"

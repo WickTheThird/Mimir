@@ -1,41 +1,4 @@
-"""Skill test-case runner (ADR 10.1 "Test cases").
-
-Two things happen here, and only the first needs a model.
-
-1. **Structural validation** - every case is checked against the skill package
-   itself: a case cannot expect a tool the skill is not allowed to use, a
-   reference it declares must exist, and its assertions must parse. This runs
-   offline and is what CI should gate on.
-2. **Static assertions** - a case may declare predicates that are decidable from
-   the skill package alone, for example "every kubectl command shown here must
-   carry --context". These are checked with no model in the loop.
-
-Anything that genuinely needs a model run (``expected_outputs``, and
-``expected_tools`` without a recorded transcript) is reported as SKIPPED rather
-than silently passing. Pass a :class:`SkillTranscript` from a real run to turn
-those into real checks.
-
-Supported assertion predicates, one per string, ``predicate: argument``:
-
-``contains``/``not_contains``
-    Substring of the instruction body, case-insensitive.
-``matches``/``not_matches``
-    Regular expression over the instruction body.
-``command_contains``
-    ``binary::fragment``. Every fenced code-block line invoking ``binary`` must
-    contain ``fragment``. Used to enforce ADR 13.3 disclosure in documented
-    command forms.
-``reference_exists``/``script_exists``
-    A declared level-3 file resolves on disk.
-``tool_allowed``/``tool_not_allowed``
-    The frontmatter allowlist does or does not contain a helper.
-``max_risk_at_most``
-    The skill's declared ceiling is at or below the given risk class.
-``specialist_is``
-    The skill runs in the named specialist subgraph (ADR 10.5).
-
-A bare string with no recognised prefix is treated as ``contains``.
-"""
+"""Skill test-case runner (ADR 10.1 "Test cases")."""
 
 from __future__ import annotations
 
@@ -255,7 +218,6 @@ def _check_case(
     checks: list[CheckResult] = []
 
     # Structural: a case that expects a tool outside the allowlist can never pass,
-    # so this is an authoring error rather than a test failure at run time.
     for tool_name in case.expected_tools:
         if tool_name not in skill.allowed_tools:
             checks.append(

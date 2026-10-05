@@ -1,13 +1,4 @@
-"""Interactive approval prompts for the CLI (ADR 13.3, 14.2).
-
-The broker raises an approval from deep inside a tool call. This module attaches
-a listener that renders the ADR 13.3 display and blocks for a decision, so the
-operator sees exactly what will run before saying yes.
-
-Approve, reject, and edit are all supported. An edited command is re-classified
-from scratch by the executor, so editing cannot be used to smuggle in a higher
-risk action than the one that was reviewed.
-"""
+"""Interactive approval prompts for the CLI (ADR 13.3, 14.2)."""
 
 from __future__ import annotations
 
@@ -31,8 +22,6 @@ def attach_cli_approvals(broker: ApprovalBroker, console: Console) -> None:
 
     async def listener(request: ApprovalRequest) -> None:
         # The prompt blocks on stdin, so it runs in a worker thread to keep the
-        # event loop free. Without this, streaming output and any concurrent
-        # specialist would stall behind the prompt.
         decision = await asyncio.to_thread(_prompt, console, request)
         status, argv, reason = decision
         await broker.resolve(
@@ -127,11 +116,7 @@ def _explain(console: Console, request: ApprovalRequest) -> None:
 
 
 class AutoRejectPolicy:
-    """Non-interactive fallback.
-
-    Used when stdin is not a TTY, for example in a pipeline. Refusing is the only
-    safe default: an approval that nobody can answer must not become a yes.
-    """
+    """Non-interactive fallback."""
 
     def __init__(self, broker: ApprovalBroker, console: Console | None = None) -> None:
         self.broker = broker

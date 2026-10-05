@@ -19,12 +19,7 @@ def _write(tmp_path, name, rows, **payload):
 
 
 def test_pending_cases_are_excluded_rather_than_counted_as_passes(tmp_path):
-    """A pending case leaves ``passed`` False but never ran.
-
-    Counting it gave the tier a case it did not attempt. Both tiers got the
-    same phantom rows, so the comparison looked consistent while every
-    reported total was larger than the run.
-    """
+    """A pending case leaves ``passed`` False but never ran."""
     rows = [
         {"case_id": "a", "passed": True, "pending": ""},
         {"case_id": "b", "passed": False, "pending": ""},
@@ -93,10 +88,7 @@ def test_pair_table_marks_a_pair_split_unless_both_sides_pass(tmp_path):
 
 
 def test_a_half_tested_pair_reads_not_applicable_rather_than_split(tmp_path):
-    """One side missing is an untested pair, not a failed one.
-
-    Scoring it as a split invents a failure the run never observed.
-    """
+    """One side missing is an untested pair, not a failed one."""
     rows = [{"case_id": "p-a", "passed": True, "pending": "", "pair": "p"}]
     tier = load(_write(tmp_path, "t.json", rows), "laptop", set())
     assert "n/a" in pair_table([tier])
@@ -163,10 +155,7 @@ def _run(tmp_path, name, verdicts):
 
 
 def test_stable_failures_caveats_when_there_are_too_few_runs(tmp_path):
-    """Two runs called three cases structural that a third run passed.
-
-    The list alone read as a finding. The caveat is the guard.
-    """
+    """Two runs called three cases structural that a third run passed."""
     a = _run(tmp_path, "a", {"1": False, "2": False, "3": False, "4": False, "5": False})
     b = _run(tmp_path, "b", {"1": False, "2": False, "3": False, "4": False, "5": False})
     failing, caveat = stable_failures([a, b])

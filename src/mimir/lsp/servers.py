@@ -1,10 +1,4 @@
-"""Which language server handles which language, and whether it is installed.
-
-Deliberately a table rather than discovery magic. A server that is not on PATH
-is reported as unavailable with the command that would provide it, because
-"LSP returned nothing" and "there is no LSP" are different answers and only one
-of them means the symbol does not exist.
-"""
+"""Which language server handles which language, and whether it is installed."""
 
 from __future__ import annotations
 
@@ -15,13 +9,7 @@ from pathlib import Path
 
 
 def _resolve(binary: str) -> str | None:
-    """Find a server binary on PATH, or in the interpreter's own bin directory.
-
-    MIMIR usually runs from a virtualenv, and a server installed with
-    ``uv pip install python-lsp-server`` lands in that venv's bin rather than
-    on PATH. Checking only PATH reported a server as missing while it sat
-    beside the running interpreter.
-    """
+    """Find a server binary on PATH, or in the interpreter's own bin directory."""
     found = shutil.which(binary)
     if found:
         return found
@@ -102,11 +90,7 @@ SERVERS: tuple[ServerSpec, ...] = (
 
 
 def server_for(path: str) -> ServerSpec | None:
-    """The first installed server claiming this file extension.
-
-    Ordering within a language is preference order: pyright before pylsp,
-    because pyright resolves types the others infer.
-    """
+    """The first installed server claiming this file extension."""
     suffix = "." + path.rsplit(".", 1)[-1] if "." in path else ""
     if not suffix:
         return None

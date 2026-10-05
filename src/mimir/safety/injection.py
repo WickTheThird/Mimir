@@ -1,20 +1,4 @@
-"""Prompt-injection resistance (ADR 13.5, R4).
-
-Repository files, logs, Markdown notes, and web pages are untrusted data. They
-must not be able to redefine policy, approve a command, grant tools, change a
-risk classification, or exfiltrate secrets.
-
-Two mechanisms:
-
-1. :func:`wrap_untrusted` puts retrieved content inside an explicitly labelled,
-   fenced block with a standing instruction that the content is data. Every
-   helper that returns third-party text uses it.
-2. :func:`scan` flags known injection shapes so the graph can surface them to
-   the user and lower the confidence of anything derived from that source.
-
-Neither mechanism is a guarantee. The real defence is that permissions live in
-:mod:`mimir.safety.policy`, which never reads model output.
-"""
+"""Prompt-injection resistance (ADR 13.5, R4)."""
 
 from __future__ import annotations
 
@@ -179,21 +163,14 @@ def wrap_untrusted(
     max_chars: int = MAX_WRAPPED_CHARS,
     note: str | None = None,
 ) -> str:
-    """Fence retrieved content as data and restate the standing rule.
-
-    The banner is deliberately repeated after the content as well: a long
-    document can otherwise push the framing out of the model's attention.
-    """
+    """Fence retrieved content as data and restate the standing rule."""
     kind = source_type.value if isinstance(source_type, SourceType) else str(source_type)
     body = content or ""
     truncated = False
     if len(body) > max_chars:
         body = body[:max_chars]
         truncated = True
-    # Neutralise a fence forged inside the content itself. Both the rule of
-    # equals signs AND the marker phrases have to be broken: content that
-    # contains the literal words "END UNTRUSTED ... CONTENT" can otherwise make
-    # a reader believe the fenced region ended early, even with the rule intact.
+    # Neutralise a fence forged inside the content itself.
     body = body.replace(_FENCE, "=" * 7 + "-")
     for marker in ("BEGIN UNTRUSTED", "END UNTRUSTED"):
         body = body.replace(marker, marker.replace("UNTRUSTED", "UNTRUST_ED"))

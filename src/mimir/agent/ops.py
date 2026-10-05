@@ -1,25 +1,4 @@
-"""The operations loop: read a cluster and answer with what it said.
-
-This exists because of a run that failed in a specific and instructive way.
-Asked for the last ten log lines from a pod in a named namespace in a cluster
-whose context contained "ch1", MIMIR planned a kubernetes investigation, ran
-two specialists for twelve tool calls, listed two hundred namespaces twice,
-retrieved thirty five pods, filtered none of them by name, never called
-get_logs, and then synthesised a confident conclusion that no matching pod
-existed.
-
-Every tool it needed was in its hand. list_workloads takes name_contains and
-it passed none; get_logs takes a pod name and it was never called. The council
-is not the wrong council here, it is the wrong machine: nothing in the request
-needed deliberation. The namespace was named, the cluster filter was named,
-the action was named, and the number of lines was named. That is an
-instruction, and an instruction wants a short loop that carries it out and
-shows what came back.
-
-So this is the same loop as the coding mode with a different surface, and the
-same reason for existing: the graph is for questions whose answer has to be
-argued for. A directive whose target is already named is not one of those.
-"""
+"""The operations loop: read a cluster and answer with what it said."""
 
 from __future__ import annotations
 
@@ -42,48 +21,10 @@ OPS_TOOLS: tuple[str, ...] = (
     # what happened last time
     "search_memory",
 )
-"""Eight tools, and the count is a budget rather than a preference.
-
-Adding a ninth broke tool calling outright. qwen3-coder:30b stopped emitting
-tool calls and wrote them into its prose instead, at temperature zero, and
-bisecting showed no single culprit: each field description was fine alone and
-the three together were not. It is cumulative schema volume, so the surface has
-a measured ceiling and a test that holds it there.
-
-What went to make room: get_rollout_status and get_resource_usage, which are
-specialised follow-ups rather than ways to find or read something, and
-find_similar_incidents, which overlaps search_memory. The council still has all
-three.
-
-list_namespaces was never here. The run this module was written for listed two
-hundred namespaces twice while looking for one the operator had already named.
-find_workloads answers that question in one call.
-"""
+"""Eight tools, and the count is a budget rather than a preference."""
 
 MAX_SCHEMA_CHARS = 11_500
-"""A budget, and the reason for it is not the one first written here.
-
-It was set from a single observation: one prompt at temperature zero produced a
-tool call at 11,050 characters of schema and not at 12,276, and that was
-recorded as a cliff. Measured properly, over fifteen distinct prompts per size,
-there is no cliff. There is a slope:
-
-    3,693 chars,  4 tools   80%
-    6,721 chars,  6 tools   67%
-   10,313 chars,  9 tools   53%
-   13,095 chars, 12 tools   47%
-   16,143 chars, 14 tools   40%
-   20,220 chars, 18 tools   33%
-
-That table is the native tool-call channel. Constrained against a schema, the
-same six sizes measure 100% each, because the decoder cannot emit anything
-else. The loop decodes constrained by default and the whole slope disappears.
-
-So this budget no longer protects adherence, and it is kept for the reason
-that survives: an unneeded tool still invites a worse choice, and choosing
-well is not something a grammar can enforce.
-
-mimir eval probe tool_adherence reproduces either table."""
+"""A budget, and the reason for it is not the one first written here."""
 
 SYSTEM = """\
 You are MIMIR reading a Kubernetes estate on behalf of an operator. Everything
@@ -125,8 +66,7 @@ plainly rather than describing what you would have found.
 """
 
 
-#: The tools that carry out each stated action. A turn whose action has been
-#: performed is a turn that is finished.
+# : The tools that carry out each stated action.
 _ACTION_TOOLS: dict[str, frozenset[str]] = {
     "logs": frozenset({"get_logs"}),
     "events": frozenset({"get_events"}),
@@ -167,34 +107,14 @@ class OpsAgent(AgentLoop):
                          **kwargs)
 
     def specs_now(self) -> list[Any]:
-        """Everything, until the operator's stated action has been carried out.
-
-        The parser already knows what was asked for. Once a tool of that class
-        has succeeded, offering more tools invites the loop to keep going, and
-        it does: a run that retrieved exactly the requested log lines then
-        fetched them another five times, alternating between two pods, because
-        every branch was still available and the model prefers acting to
-        stopping. Withdrawing them leaves one legal move, which is to answer.
-
-        Deterministic, and it can only fire on evidence that the thing
-        succeeded.
-        """
+        """Everything, until the operator's stated action has been carried out."""
         wanted = _ACTION_TOOLS.get(self.request.action)
         if wanted and self.satisfied & wanted:
             return []
         return self.specs
 
     def note_success(self, name: str, result: Any) -> None:
-        """Remember where each pod was found.
-
-        A search that spans clusters returns the context each match lives in,
-        and the next call names the pod without it. Left alone the pod name
-        resolves against whatever the kubeconfig points at: a request for logs
-        from a ch1 dev cluster returned logs from an unrelated one, and the
-        answer named the wrong cluster while looking entirely correct.
-
-        Recorded rather than inferred, from the search result itself.
-        """
+        """Remember where each pod was found."""
         self.satisfied.add(name)
         if name != "find_workloads":
             return
@@ -205,27 +125,12 @@ class OpsAgent(AgentLoop):
                                      str(row.get("namespace") or ""))
 
     def hidden(self) -> tuple[str, ...]:
-        """Arguments the loop supplies, kept out of the schema.
-
-        Schema volume is the constraint, so an argument the model never needs
-        to choose should not cost the tokens to describe."""
+        """Arguments the loop supplies, kept out of the schema."""
         return ("limit",)
 
     def note_instruction(self, instruction: str) -> None:
-        """Take the stated parameters out of the sentence, by rule.
-
-        Everything found here is bound onto the calls rather than left for the
-        model to remember. A request naming a namespace, a cluster fragment, a
-        workload and a line count gives the model four chances to drop one, and
-        a dropped parameter fails silently: the call succeeds against the wrong
-        scope and the answer reads as if it were about the right one.
-        """
-        # Deliberately not restated in the prompt. Listing the parsed
-        # parameters back to the model as "the operator stated: ..." stopped
-        # qwen3-coder emitting tool calls, the same failure the glossary hint
-        # caused in the same position. The parameters do not need saying: they
-        # are bound onto the calls below, which is both more reliable than
-        # asking and the reason the parser exists.
+        """Take the stated parameters out of the sentence, by rule."""
+        # Deliberately not restated in the prompt.
         self.request = parse_request(instruction)
         self.satisfied = set()
         self.located = {}
@@ -238,82 +143,38 @@ class OpsAgent(AgentLoop):
         self.scope = {}
 
     def bind(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Fill in the scope, never override one that was stated.
-
-        A default rather than a binding, which is the opposite of the coding
-        loop: there the worktree is not negotiable, here the operator may well
-        be asking about a namespace other than the one the prompt is set to,
-        and silently rewriting the argument would answer a question nobody
-        asked while looking like it worked.
-
-        The order matters: what the call states, then what the operator's
-        session is set to, then what the operator wrote in the instruction,
-        then the last value this turn used, and only then the kubeconfig.
-
-        Both fallbacks were added after watching a run go wrong without them.
-        Without the last-used value, a turn searched three names in
-        messaging-squad, omitted the namespace on the next three calls, and
-        silently searched perfectscale, because that is what the kubeconfig
-        binds to that context. And without the operator's own words ranking
-        above it, one call that named "default" made every later omission mean
-        default too, so a request scoped to messaging-squad finished by
-        reporting on a namespace nobody asked about.
-        """
+        """Fill in the scope, never override one that was stated."""
         fields = self._fields(name)
         bound = dict(arguments)
 
         # Operators describe a cluster as often as they name one: "a dev
-        # cluster with ch1 in it". Answering that needs the list of contexts,
-        # and the list is one kubeconfig read behind a flag the model has to
-        # remember to set. It did not, so a request scoped to ch1 ran entirely
-        # against the current context and reported on the wrong cluster
-        # without ever saying which one it had read.
         if name == "get_current_context" and "include_contexts" in fields:
             bound.setdefault("include_contexts", True)
 
         # The stated parameters are supplied when the call omits them, and a
-        # count the operator gave is not negotiable: "the last 10 logs" that
-        # returns a hundred lines has answered a different question.
         if self.request.tail and "tail" in fields:
             bound["tail"] = self.request.tail
         if self.request.since and "since" in fields and not bound.get("since"):
             bound["since"] = self.request.since
         if name == "find_workloads":
             # The environment is part of the cluster constraint, not separate
-            # from it. Left out, "any outbound pod in dev in a cluster with
-            # ch1" returned the ch1 production clusters too.
             cluster = " ".join(
                 v for v in (self.request.context_contains, self.request.environment) if v
             )
             if self.request.name_contains and not bound.get("name_contains"):
                 bound["name_contains"] = self.request.name_contains
-            # Set, like the namespace below. The model passed "ch1" and dropped
-            # the environment, so a request that said dev searched the ch1
-            # production clusters as well.
+            # Set, like the namespace below.
             if cluster:
                 bound["context_contains"] = cluster
 
-            # Namespace is set, not defaulted. The operator either named one or
-            # did not, and the parser knows which. Left to the model, "any
-            # outbound pod inside dev" became a namespace filter of "dev": no
-            # namespace is called dev, so a search that would have found both
-            # pods returned nothing, and the emptiness looked like an answer.
+            # Namespace is set, not defaulted.
             bound["namespace_contains"] = self.request.namespace or None
 
         # A pod this turn already located carries the cluster it was found in.
-        # That beats every default, because it is an observation rather than a
-        # setting, and getting it wrong reads the right pod name in the wrong
-        # cluster.
         named = str(bound.get("target") or bound.get("name") or "")
         found = self.located.get(named)
         if found and found[0]:
-            # Set, not filled. A pod this turn located came back with the
-            # context and namespace it was found in, and that is an observation;
-            # whatever the model puts in those fields is a guess about the same
-            # thing. A smaller model guesses worse: one put the context and the
-            # namespace into the namespace field as a single slash-joined
-            # string, four times, and a fill-if-absent rule let the wrong value
-            # stand because the field was not empty.
+            # Set, not filled.
             if "context" in fields:
                 bound["context"] = found[0]
             if "namespace" in fields and found[1]:

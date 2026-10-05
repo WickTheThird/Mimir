@@ -1,9 +1,4 @@
-"""``mimir doctor``: check that everything MIMIR depends on is reachable.
-
-ADR 22.3 lists what Warp integration depends on, and ADR 21 wants empirical
-checks rather than assumed capability. This reports on each dependency and is
-honest about which ones are optional.
-"""
+"""``mimir doctor``: check that everything MIMIR depends on is reachable."""
 
 from __future__ import annotations
 
@@ -184,14 +179,7 @@ def _tools_check() -> Check:
 
 
 def _context_check(settings) -> Check:
-    """Is the runtime serving the context window we configured?
-
-    Ollama's OpenAI shim discards ``num_ctx`` and serves each model at its own
-    default. qwen3-coder:30b defaults to 262144, so a run configured for 32768
-    allocated a 24.5 GB KV cache and generated at 4 tok/s while provenance
-    recorded the configured value as fact. Caught here it costs one env var;
-    caught mid-run it costs the run.
-    """
+    """Is the runtime serving the context window we configured?"""
     from mimir.eval.provenance import resolve_model
 
     problems = []

@@ -83,8 +83,7 @@ async def test_the_round_cap_stops_the_loop_before_any_model_is_asked():
 
 @pytest.mark.asyncio
 async def test_no_new_evidence_stops_the_loop_before_any_model_is_asked():
-    """A round that added nothing must not be repeated: the next round would
-    see the same evidence and choose the same thing."""
+    """A round that added nothing must not be repeated: the next round would see the same evidence and choose the same thing."""
     decider = FakeDecider("continue")
     session = _session(evidence=2)
     session.metadata["evidence_seen_by_round"] = {"1": 2}
@@ -170,8 +169,7 @@ async def test_progress_is_measured_against_the_previous_round():
 
 @pytest.mark.asyncio
 async def test_memory_recall_is_not_progress():
-    """78 recalled notes across three rounds were counted as new evidence and
-    the loop ran to its cap on a prose case. A recall is not the world changing."""
+    """78 recalled notes across three rounds were counted as new evidence and the loop ran to its cap on a prose case."""
     from mimir.models.evidence import EvidenceKind
 
     decider = FakeDecider("continue")

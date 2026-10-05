@@ -28,12 +28,7 @@ def slugify(name: str) -> str:
 
 
 def resolve_inside(root: Path, relative: str) -> Path:
-    """Resolve ``relative`` under ``root``, refusing anything that escapes.
-
-    Symlinks are resolved before the check. A containment boundary compared as
-    a string prefix is crossed by a symlink pointing outward, and that is not a
-    theoretical concern in a repository MIMIR did not write.
-    """
+    """Resolve ``relative`` under ``root``, refusing anything that escapes."""
     root = Path(root).resolve()
     candidate = (root / relative).resolve()
     if candidate == root or root in candidate.parents:
@@ -101,9 +96,6 @@ class WorktreeManager:
 
         commit = _git(repo_root, "rev-parse", base).strip()
         # An interrupted run leaves the branch behind when its worktree is
-        # removed, and the name is then blocked forever with "a branch named X
-        # already exists". Reattaching to the orphan is recovery; refusing is
-        # just making the operator clean up after a crash they did not cause.
         existing = _git(repo_root, "branch", "--list", branch).strip()
         if existing:
             log.info("worktree_reattached", branch=branch, path=str(target))
@@ -167,8 +159,6 @@ class WorktreeManager:
             _git(repo, "worktree", "prune")
         if branch.startswith(BRANCH_PREFIX):
             # A branch that will not delete is not a reason to fail the
-            # discard: the worktree is already gone and that is the guarantee
-            # that matters.
             with contextlib.suppress(WorktreeError):
                 _git(repo, "branch", "-D", branch)
         log.info("worktree_discarded", branch=branch, path=str(root))

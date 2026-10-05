@@ -1,9 +1,4 @@
-"""Language server tests.
-
-The theme: an exact engine is only worth having if its failures are
-distinguishable from its answers. "No server installed" must never read as
-"this symbol does not exist".
-"""
+"""Language server tests."""
 
 from __future__ import annotations
 
@@ -31,9 +26,7 @@ class TestServerSelection:
         assert python[0].binary == "pyright-langserver"
 
     def test_a_server_in_the_venv_counts_as_installed(self):
-        """MIMIR runs from a virtualenv, and `uv pip install python-lsp-server`
-        puts pylsp beside the interpreter rather than on PATH. Checking only
-        PATH reported a present server as missing."""
+        """MIMIR runs from a virtualenv, and `uv pip install python-lsp-server` puts pylsp beside the interpreter rather than on PATH."""
         assert any(s.language == "python" for s in available_servers())
 
 
@@ -104,8 +97,7 @@ class TestSupersession:
     """Never offer an approximate tool when an exact one is registered."""
 
     def test_lsp_hides_the_ripgrep_equivalents(self):
-        """Registered, but not offered. The registry says what exists;
-        selection says what a specialist is shown."""
+        """Registered, but not offered."""
         from mimir.eval.harness import EvalHarness
 
         registry = EvalHarness().offline_registry()
@@ -121,8 +113,7 @@ class TestSupersession:
         assert "find_references" not in names
 
     def test_a_superseded_tool_is_still_callable_directly(self):
-        """Hidden from selection, not removed. A caller that knows what it
-        wants can still reach it."""
+        """Hidden from selection, not removed."""
         from mimir.tools.base import load_all_tools
 
         assert load_all_tools().get("find_symbol") is not None
@@ -157,11 +148,7 @@ class TestCodeIsNotRepository:
 
 
 class TestReplIntrospection:
-    """The interactive prompt is the surface most people see. It used to state
-    what MIMIR is for and nothing about what it currently had, so a session
-    that had silently lost its language servers looked exactly like a healthy
-    one. These pin the prompt to live state rather than to prose.
-    """
+    """The interactive prompt is the surface most people see."""
 
     def _rendered(self, function, *args):
         import io
@@ -184,8 +171,7 @@ class TestReplIntrospection:
         assert BANNER.format(version="test", **facts).count("{") == 0
 
     def test_every_slash_command_has_a_handler(self):
-        """A command in the help table with no branch is worse than no command:
-        it advertises a capability that silently does nothing."""
+        """A command in the help table with no branch is worse than no command: it advertises a capability that silently does nothing."""
         import inspect
 
         from mimir.cli import repl

@@ -1,15 +1,4 @@
-"""OpenAI-compatible runtime adapter (ADR 6.2 C3, 18.3).
-
-One client covers Ollama, llama.cpp's server, vLLM, LM Studio, MLX-LM's server,
-and LiteLLM, because they all expose ``/v1/chat/completions``. Runtime-specific
-quirks are handled by small flags rather than by separate classes:
-
-* Ollama accepts ``format: json`` but not full JSON Schema on older builds.
-* llama.cpp ignores ``tool_choice`` and needs tools restated in the prompt.
-* Some builds omit ``usage`` on streaming responses.
-
-Nothing above this module needs to know which of those it is talking to.
-"""
+"""OpenAI-compatible runtime adapter (ADR 6.2 C3, 18.3)."""
 
 from __future__ import annotations
 
@@ -104,9 +93,7 @@ class OpenAICompatModel(ChatModel):
     def _adapt_response_format(self, response_format: dict[str, Any]) -> dict[str, Any]:
         if self.supports_json_schema:
             return response_format
-        # Degrade a json_schema request to plain JSON mode. The caller still
-        # validates the result, so a runtime without schema support loses
-        # guarantees but not correctness.
+        # Degrade a json_schema request to plain JSON mode.
         return {"type": "json_object"}
 
     # -- requests --------------------------------------------------------
@@ -193,7 +180,6 @@ class OpenAICompatModel(ChatModel):
         payload = self._build_payload(messages, options, stream=True)
         timeout = (options.timeout_s if options else None) or self.profile.request_timeout_s
         # Tool calls arrive as fragments across chunks and must be reassembled by
-        # index before they mean anything.
         partial: dict[int, dict[str, Any]] = {}
 
         try:
@@ -292,37 +278,17 @@ class OpenAICompatModel(ChatModel):
 
 
 class OllamaModel(OpenAICompatModel):
-    """Ollama speaks the OpenAI API at /v1 but has quirks worth encoding.
-
-    The important one is not fixable here. Ollama's OpenAI shim has no field
-    for ``num_ctx`` and discards it from ``options``, so every model is served
-    at that model's own default context. For qwen2.5:7b that default is 32768,
-    which matched the configured value, and the gap was invisible. For
-    qwen3-coder:30b the default is 262144: Ollama allocated a 24.5 GB KV cache
-    for a context MIMIR never uses, 18 GB of weights became 42.5 GB resident,
-    and generation fell to 4 tok/s.
-
-    The server-side fix is ``OLLAMA_CONTEXT_LENGTH``. What matters here is that
-    MIMIR must not record a configured value the runtime ignored, so
-    :func:`mimir.eval.provenance.resolve_model` reads the *served* context back
-    and flags a mismatch rather than reporting the setting as fact.
-    """
+    """Ollama speaks the OpenAI API at /v1 but has quirks worth encoding."""
 
     def _adapt_response_format(self, response_format: dict[str, Any]) -> dict[str, Any]:
         # Ollama's OpenAI shim accepts json_schema on recent builds and
-        # json_object everywhere. Prefer schema, fall back cleanly.
         if response_format.get("type") == "json_schema" and not self.supports_json_schema:
             return {"type": "json_object"}
         return response_format
 
 
 class MLXModel(OpenAICompatModel):
-    """mlx_lm.server is OpenAI-compatible.
-
-    Start it with: ``python -m mlx_lm.server --model <hf-repo> --port 8080``.
-    It does not implement /v1/embeddings, so embedding falls back to the
-    configured embed profile.
-    """
+    """mlx_lm.server is OpenAI-compatible."""
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         raise ModelError(

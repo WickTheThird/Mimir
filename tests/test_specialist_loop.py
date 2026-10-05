@@ -1,8 +1,4 @@
-"""Gathering and concluding are different phases with different budgets.
-
-On qwen3-coder:30b, 16 of 19 corpus failures were a specialist that spent its
-iteration budget calling tools and had nothing left to write an answer with.
-"""
+"""Gathering and concluding are different phases with different budgets."""
 
 import pytest
 
@@ -74,8 +70,7 @@ async def test_the_closing_turn_is_offered_no_tools(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_exhausting_the_tool_budget_ends_gathering_immediately(monkeypatch):
-    """The old loop kept asking with tools it could not honour, dropped every
-    call, and burned one iteration per dropped call."""
+    """The old loop kept asking with tools it could not honour, dropped every call, and burned one iteration per dropped call."""
     from mimir.council import specialists as mod
 
     router = RecordingRouter(
@@ -105,8 +100,7 @@ async def test_a_specialist_that_answers_early_never_pays_for_a_closing_turn(
 
 @pytest.mark.asyncio
 async def test_an_empty_closing_turn_is_reported_not_swallowed(monkeypatch):
-    """A specialist that gathered and could not write up is a different thing
-    from one that never looked. They must not produce the same report."""
+    """A specialist that gathered and could not write up is a different thing from one that never looked."""
     from mimir.council import specialists as mod
 
     router = RecordingRouter(
