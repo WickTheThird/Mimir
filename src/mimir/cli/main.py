@@ -868,17 +868,56 @@ def keys_create(label: str = typer.Option("", "--label")) -> None:
     from mimir.api.auth import generate_api_key
     from mimir.cli.init import update_config
 
+    import time as _time
+
+    from mimir.api.auth import key_digest
+
+    if not label:
+        raise typer.BadParameter("--label is required; keys are revoked by label")
+    settings = get_settings()
+    if any(k.label == label and not k.revoked for k in settings.api.keys):
+        raise typer.BadParameter(f"an active key labelled {label!r} already exists; revoke it first")
     key = generate_api_key()
-    existing = list(get_settings().api.api_keys)
-    update_config({"api": {"api_keys": [*existing, key]}})
+    entries = [k.model_dump() for k in settings.api.keys]
+    entries.append({"label": label, "sha256": key_digest(key), "created_at": _time.time(), "revoked": False})
+    update_config({"api": {"keys": entries}})
     reset_settings_cache()
-    console.print(f"[green]created key{' ' + label if label else ''}[/green]")
+    console.print(f"[green]created key {label}[/green] (stored as a hash)")
     console.print(key)
     console.print(
         "\n[yellow]This is shown once. Store it in your password manager.[/yellow]\n"
         "[dim]This key grants the OpenAI-compatible inference endpoint only. "
         "Shell, Kubernetes, SDM, and database helpers stay loopback-only.[/dim]"
     )
+
+
+@keys_app.command("list")
+def keys_list() -> None:
+    """Keys by label; the plaintext is never stored."""
+    settings = get_settings()
+    for k in settings.api.keys:
+        console.print(f"{k.label:20} {'revoked' if k.revoked else 'active':8} sha256:{k.sha256[:12]}...")
+    for i, _ in enumerate(settings.api.api_keys):
+        console.print(f"{'legacy' + str(i):20} active   plaintext in config (rotate to a labelled key)")
+    if not settings.api.keys and not settings.api.api_keys:
+        console.print("[dim]no keys[/dim]")
+
+
+@keys_app.command("revoke")
+def keys_revoke(label: str = typer.Argument(...)) -> None:
+    """Revoke one labelled key; others keep working."""
+    from mimir.cli.init import update_config
+
+    settings = get_settings()
+    entries = [k.model_dump() for k in settings.api.keys]
+    hit = [e for e in entries if e["label"] == label and not e["revoked"]]
+    if not hit:
+        raise typer.BadParameter(f"no active key labelled {label!r}")
+    for e in hit:
+        e["revoked"] = True
+    update_config({"api": {"keys": entries}})
+    reset_settings_cache()
+    console.print(f"[yellow]revoked {label}[/yellow]")
 
 
 @app.command()

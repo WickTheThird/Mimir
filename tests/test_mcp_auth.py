@@ -8,7 +8,10 @@ from mimir.mcp.server import KeyRequired
 class Settings:
     class api:
         api_keys = ["sk-good"]
+        keys = []
         allow_loopback_without_auth = True
+        facade_rate_limit_per_minute = 120
+        max_request_bytes = 1_000_000
 
 
 async def _call(middleware, client, headers=()):

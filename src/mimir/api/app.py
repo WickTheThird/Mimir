@@ -16,6 +16,7 @@ from mimir.api.deps import shutdown_runner
 from mimir.api.openai_facade import router as facade_router
 from mimir.api.routes.investigations import router as investigations_router
 from mimir.api.routes.system import router as system_router
+from mimir.api.auth import active_keys
 from mimir.config import Settings, get_settings
 from mimir.logging import configure_logging, correlation_context, get_logger
 from mimir.observability.metrics import METRICS
@@ -42,9 +43,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         port=settings.api.port,
         tools=len(registry.all()),
         auth_required=not settings.api.allow_loopback_without_auth,
-        keys_configured=len(settings.api.api_keys),
+        keys_configured=active_keys(settings),
     )
-    if settings.api.host not in ("127.0.0.1", "localhost", "::1") and not settings.api.api_keys:
+    if settings.api.host not in ("127.0.0.1", "localhost", "::1") and not active_keys(settings):
         log.warning(
             "binding_non_loopback_without_keys",
             host=settings.api.host,
@@ -65,6 +66,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved = settings or get_settings()
+    # The app's settings are the authenticator's settings, never a lazily read default.
+    from mimir.api.auth import get_authenticator, reset_authenticator
+
+    reset_authenticator()
+    get_authenticator(resolved)
 
     app = FastAPI(
         title="MIMIR",

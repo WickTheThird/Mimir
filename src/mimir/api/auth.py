@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+from typing import Any
 import ipaddress
 import time
 from collections import defaultdict, deque
@@ -79,7 +80,9 @@ class RateLimiter:
 
 class Authenticator:
     def __init__(self, settings: Settings | None = None) -> None:
-        self.settings = settings or get_settings()
+        from mimir import config as _config
+
+        self.settings = settings or _config.get_settings()
         for key in self.settings.api.api_keys:
             register_secret(key)
         self.limiter = RateLimiter(self.settings.api.facade_rate_limit_per_minute)
@@ -91,13 +94,7 @@ class Authenticator:
         return request.headers.get("x-api-key") or None
 
     def _valid(self, presented: str | None) -> str | None:
-        if not presented:
-            return None
-        for index, key in enumerate(self.settings.api.api_keys):
-            # Constant-time comparison: a timing oracle on a key check is cheap
-            if hmac.compare_digest(presented, key):
-                return f"key{index}"
-        return None
+        return validate_key(self.settings, presented)
 
     def identify(self, request: Request) -> Caller:
         address = _client_address(request)
@@ -132,7 +129,7 @@ class Authenticator:
         if caller.is_loopback and api.allow_loopback_without_auth:
             return caller
 
-        if not api.api_keys:
+        if not active_keys(self.settings):
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=(
@@ -184,6 +181,31 @@ def require(surface: Surface):
 require_local = require(Surface.LOCAL_PRIVILEGED)
 require_ui = require(Surface.LOCAL_UI)
 require_inference = require(Surface.PUBLIC_INFERENCE)
+
+
+def active_keys(settings: Any) -> int:
+    """Labelled keys not revoked, plus legacy plaintext ones."""
+    return sum(1 for k in settings.api.keys if not k.revoked) + len(settings.api.api_keys)
+
+
+def key_digest(key: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def validate_key(settings: Any, presented: str | None) -> str | None:
+    """The label of the key presented, or None; constant-time on both stores."""
+    if not presented:
+        return None
+    digest = key_digest(presented)
+    for entry in settings.api.keys:
+        if not entry.revoked and hmac.compare_digest(digest, entry.sha256):
+            return entry.label
+    for index, key in enumerate(settings.api.api_keys):
+        if hmac.compare_digest(presented, key):
+            return f"legacy{index}"
+    return None
 
 
 def generate_api_key() -> str:

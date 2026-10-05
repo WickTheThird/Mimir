@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from mimir.api.auth import active_keys
 from mimir.config import get_settings
 
 Status = Literal["ok", "warn", "fail", "skip"]
@@ -294,7 +295,7 @@ def _exposure_check(settings) -> Check:
             "ADR 16.5 requires shell, Kubernetes, SDM, and database helpers to stay "
             "loopback-only. Set expose_privileged_routes_publicly back to false.",
         )
-    if api.host not in ("127.0.0.1", "localhost", "::1") and not api.api_keys:
+    if api.host not in ("127.0.0.1", "localhost", "::1") and not active_keys(settings):
         return Check(
             "exposure",
             "fail",
@@ -302,8 +303,8 @@ def _exposure_check(settings) -> Check:
             "run 'mimir keys create' before binding a non-loopback address",
         )
     detail = f"binds {api.host}:{api.port}"
-    if api.api_keys:
-        detail += f", {len(api.api_keys)} API key(s) configured"
+    if active_keys(settings):
+        detail += f", {active_keys(settings)} API key(s) configured"
     if api.facade_agent_mode:
         detail += "; facade runs the full agent graph (ADR 16.4 advises against this)"
         return Check("exposure", "warn", detail)

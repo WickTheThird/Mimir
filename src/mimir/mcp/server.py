@@ -270,8 +270,11 @@ class KeyRequired:
     """ASGI middleware: the same API keys the facade uses, on the MCP transport."""
 
     def __init__(self, app: Any, settings: Any) -> None:
+        from mimir.api.auth import RateLimiter
+
         self.app = app
         self.settings = settings
+        self.limiter = RateLimiter(settings.api.facade_rate_limit_per_minute)
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -283,19 +286,34 @@ class KeyRequired:
         headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers") or []}
         auth = headers.get("authorization", "")
         presented = auth[7:].strip() if auth.lower().startswith("bearer ") else headers.get("x-api-key")
-        allowed = is_loopback(client) and self.settings.api.allow_loopback_without_auth
-        if not allowed and presented:
-            import hmac
+        from mimir.api.auth import validate_key
 
-            allowed = any(hmac.compare_digest(presented, k) for k in self.settings.api.api_keys)
+        label = validate_key(self.settings, presented)
+        allowed = label is not None or (
+            is_loopback(client) and self.settings.api.allow_loopback_without_auth
+        )
         if not allowed:
             log.warning("mcp_unauthenticated", address=client, path=scope.get("path"))
-            await send({"type": "http.response.start", "status": 401,
-                        "headers": [(b"content-type", b"application/json"),
-                                    (b"www-authenticate", b"Bearer")]})
-            await send({"type": "http.response.body", "body": b'{"error":"api key required"}'})
+            await self._reject(send, 401, b'{"error":"api key required"}',
+                               extra=[(b"www-authenticate", b"Bearer")])
+            return
+        try:
+            length = int(headers.get("content-length") or 0)
+        except ValueError:
+            length = 0
+        if length > self.settings.api.max_request_bytes:
+            await self._reject(send, 413, b'{"error":"request too large"}')
+            return
+        if not self.limiter.check(label or client):
+            await self._reject(send, 429, b'{"error":"rate limited"}')
             return
         await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _reject(send: Any, status: int, body: bytes, extra: list | None = None) -> None:
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"application/json"), *(extra or [])]})
+        await send({"type": "http.response.body", "body": body})
 
 
 def serve(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8010) -> None:
@@ -308,7 +326,8 @@ def serve(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8010) -
     from mimir.config import get_settings
 
     settings = get_settings()
-    if host not in ("127.0.0.1", "localhost", "::1") and not settings.api.api_keys:
+    active = [k for k in settings.api.keys if not k.revoked] or settings.api.api_keys
+    if host not in ("127.0.0.1", "localhost", "::1") and not active:
         raise SystemExit(
             "refusing to serve MCP on a non-loopback host with no API keys configured; "
             "run `mimir keys create --label warp` first"

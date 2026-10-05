@@ -246,11 +246,23 @@ class PersistenceConfig(BaseModel):
     retention_days: int | None = None  # None means keep forever (open decision in ADR)
 
 
+class ApiKeyEntry(BaseModel):
+    """A named key stored as its SHA-256; the plaintext is shown once at creation."""
+
+    label: str
+    sha256: str
+    created_at: float = 0.0
+    revoked: bool = False
+
+
 class ApiConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8756
     # Tokens accepted on non-loopback requests and by the OpenAI facade (ADR 16).
     api_keys: list[str] = Field(default_factory=list)
+    """Legacy plaintext keys. New keys go in ``keys`` as hashes."""
+    keys: list[ApiKeyEntry] = Field(default_factory=list)
+    max_request_bytes: int = 1_000_000
     allow_loopback_without_auth: bool = True
     cors_origins: list[str] = Field(default_factory=lambda: ["http://127.0.0.1:5173"])
     # When true the OpenAI facade may run the full agent graph.

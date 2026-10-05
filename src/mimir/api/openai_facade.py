@@ -13,7 +13,12 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from mimir.api.auth import Caller, require_inference
-from mimir.config import get_settings
+from mimir import config as _config
+
+
+def _settings(request: Request) -> Any:
+    """The app's settings, never a lazily imported default."""
+    return getattr(request.app.state, "settings", None) or _config.get_settings()
 from mimir.llm.base import ChunkType, GenerationOptions, LLMMessage, ModelError, Role, ToolCall
 from mimir.llm.router import TaskClass, get_router
 from mimir.logging import correlation_context, get_logger
@@ -93,9 +98,9 @@ class ChatCompletionRequest(BaseModel):
 
 
 @router.get("/models")
-async def list_models(caller: Caller = Depends(require_inference)) -> dict[str, Any]:
+async def list_models(request: Request, caller: Caller = Depends(require_inference)) -> dict[str, Any]:
     """Model list for Warp's endpoint configuration (ADR 16.1)."""
-    settings = get_settings()
+    settings = _settings(request)
     created = int(time.time())
     entries = [
         {
@@ -127,7 +132,7 @@ async def chat_completions(
     if not payload.messages:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "messages must not be empty")
 
-    settings = get_settings()
+    settings = _settings(request)
     model_router = get_router(settings)
     alias = _resolve_alias(payload.model, settings)
     messages = [m.to_llm() for m in payload.messages]
@@ -322,7 +327,7 @@ async def legacy_completions(
     prompt = body.get("prompt") or ""
     if isinstance(prompt, list):
         prompt = "\n".join(str(p) for p in prompt)
-    settings = get_settings()
+    settings = _settings(request)
     model_router = get_router(settings)
     try:
         response = await model_router.chat(
