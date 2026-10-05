@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import json
 import subprocess
 from typing import Any
@@ -227,6 +228,46 @@ async def _propose_repo_lesson(runner: Any, repo: str, outcome: Any, test_comman
         log.warning("repo_lesson_skipped", error=str(exc))
 
 
+def _query_variants(phrase: str) -> list[str]:
+    """A phrase as the model would type it, widened the way a person would grep it."""
+    words = [w for w in re.findall(r"[A-Za-z0-9_]+", phrase) if len(w) > 2]
+    out = [phrase.strip()] if phrase.strip() else []
+    if len(words) >= 2:
+        out.append(".*".join(words))
+        out.append(".*".join(reversed(words)))
+        out.append("|".join(words))
+    out += [w for w in words if w.lower() not in out]
+    return list(dict.fromkeys(v for v in out if v))
+
+
+async def search_code_impl(query: str, repo: str | None = None, limit: int = 40) -> dict[str, Any]:
+    """Index first, then text search over widening variants. No model, no loop."""
+    runner = _get_runner()
+    ctx = runner.tool_context(None)
+    out: dict[str, Any] = {"query": query, "symbols": [], "matches": [], "tried": []}
+    try:
+        from mimir.tools.repomap import repository_map
+
+        for word in [w for w in re.findall(r"[A-Za-z0-9_]+", query) if len(w) > 2][:3]:
+            res = await runner.registry.get("repository_map").invoke({"query": word, "repo": repo}, ctx)
+            out["symbols"] += (res.data or {}).get("symbols", []) if res.ok else []
+    except Exception as exc:  # noqa: BLE001 - the index is a bonus, not a requirement
+        out["index_error"] = str(exc)[:200]
+    spec = runner.registry.get("search_repository")
+    for variant in _query_variants(query):
+        out["tried"].append(variant)
+        res = await spec.invoke({"query": variant, "repo": repo, "max_results": limit, "case_sensitive": False}, ctx)
+        rows = (res.data or {}).get("matches") or [] if res.ok else []
+        if rows:
+            out["matches"] = rows[:limit]
+            out["matched_with"] = variant
+            break
+    out["files"] = sorted({m.get("path") or m.get("file") for m in out["matches"] if isinstance(m, dict)})
+    out["note"] = ("No match for the phrase or any widening of it; the thing may be named "
+                   "differently. Try a symbol, a config key, or an error string.") if not out["matches"] else ""
+    return out
+
+
 def build_server() -> Any:
     """The MCP server with the three tools registered."""
     from mcp.server.mcpserver import MCPServer
@@ -236,6 +277,7 @@ def build_server() -> Any:
         instructions=(
             "MIMIR: a local operations and coding assistant. construct_command "
             "builds a reviewed command and its risk class and never runs it. "
+            "search_code finds where something lives in a repository without a model. "
             "investigate runs a full evidence-gated investigation. code_task makes "
             "a change in an isolated worktree and returns the diff for review."
         ),
@@ -247,6 +289,14 @@ def build_server() -> Any:
     ) -> dict[str, Any]:
         """Build the command for a natural-language request."""
         return await construct_command_impl(request, context, namespace)
+
+    @server.tool()
+    async def search_code(query: str, repo: str | None = None, limit: int = 40) -> dict[str, Any]:
+        """Read-only search of a repository: symbol index first, then text search that
+        widens the phrase (all words in order, reversed, any word) until something
+        matches. Returns files and matching lines. No model involved; use this
+        before investigate for "where is X set up" questions."""
+        return await search_code_impl(query, repo, limit)
 
     @server.tool()
     async def investigate(
@@ -341,5 +391,6 @@ __all__ = [
     "code_task_impl",
     "construct_command_impl",
     "investigate_impl",
+    "search_code_impl",
     "serve",
 ]

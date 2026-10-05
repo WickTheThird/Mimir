@@ -75,3 +75,44 @@ async def test_investigate_without_an_answer_says_so_instead_of_returning_empty(
     out = await mcp_server.investigate_impl("why is api restarting?")
     assert out["answer"] == ""
     assert "no answer" in out["error"]
+
+
+def test_query_variants_widen_a_phrase_the_way_a_person_would():
+    from mimir.mcp.server import _query_variants
+
+    v = _query_variants("whatsapp coexistence")
+    assert v[0] == "whatsapp coexistence"
+    assert "whatsapp.*coexistence" in v and "coexistence.*whatsapp" in v and "whatsapp|coexistence" in v
+    assert "whatsapp" in v and "coexistence" in v
+
+
+def test_the_fourth_tool_is_registered():
+    server = mcp_server.build_server()
+    mgr = getattr(server, "_tool_manager", None)
+    listing = getattr(mgr, "list_tools", None) or getattr(mgr, "_tools", None)
+    items = listing() if callable(listing) else listing
+    names = {getattr(t, "name", t) for t in (items.values() if isinstance(items, dict) else items)}
+    assert "search_code" in names
+
+
+@pytest.mark.asyncio
+async def test_search_code_tries_variants_until_one_matches(monkeypatch):
+    from mimir.tools.base import ToolResult
+
+    class Spec:
+        def __init__(self, hits_on): self.hits_on, self.seen = hits_on, []
+        async def invoke(self, args, ctx):
+            self.seen.append(args["query"])
+            ok = args["query"] == self.hits_on
+            return ToolResult(ok=True, tool="search_repository", summary="",
+                              data={"matches": [{"path": "pkg/wa.py", "line": 3, "text": "coexistence = True"}] if ok else []})
+    search = Spec("whatsapp|coexistence")
+    class Reg:
+        def get(self, name): return search if name == "search_repository" else None
+    class Runner:
+        registry = Reg(); settings = None
+        def tool_context(self, sid): return None
+    monkeypatch.setattr(mcp_server, "_runner", Runner())
+    out = await mcp_server.search_code_impl("whatsapp coexistence")
+    assert out["matched_with"] == "whatsapp|coexistence" and out["files"] == ["pkg/wa.py"]
+    assert search.seen[:3] == ["whatsapp coexistence", "whatsapp.*coexistence", "coexistence.*whatsapp"]
