@@ -34,6 +34,21 @@ Then merge the `ingress` block from `config.yml` into the mini's existing
 three MIMIR rules, keeping the `api.` rules and the final 404 as they are.
 `cloudflared tunnel ingress validate`, then restart cloudflared.
 
+## Keys
+
+Two keys, created on the machine that serves, shown once, stored as hashes:
+
+```bash
+mimir keys create --label warp-cloud    # lives only in Warp's secret store
+mimir keys create --label wick-local    # lives only in your password manager
+mimir keys list
+mimir keys revoke warp-cloud            # the other keeps working
+```
+
+Each is 32 random bytes. Both the facade and the MCP server check the same
+store, on every route including streams; a revoked key fails everywhere at
+once. Requests over 1MB are refused and each key is rate limited.
+
 ## Check from anywhere
 
 ```bash
