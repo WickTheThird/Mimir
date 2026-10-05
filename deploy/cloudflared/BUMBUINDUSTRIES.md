@@ -64,3 +64,25 @@ refuse non-loopback callers in code regardless of credentials. Rotate with
 
 Put Cloudflare Access in front of the hostname if you want a second factor;
 the hostname is guessable.
+
+## Variant: the connector already runs in a UTM VM on the mini
+
+Do not create a second tunnel. Add the `ai.` hostnames to the existing
+tunnel in the dashboard (Public Hostname tab), with the service pointing at
+the macOS host as the VM sees it rather than `localhost`: the UTM Shared
+Network gateway (usually `192.168.64.1`) or the mini's LAN IP when bridged.
+`ip route | head -1` inside the VM shows it.
+
+MIMIR itself stays on macOS; Ollama and Kev need Metal and the VM has no
+GPU. Two host-side changes so the VM can reach it:
+
+```yaml
+api:
+  host: 0.0.0.0        # refuses non-loopback callers without a key
+```
+
+and the MCP unit started with `--host 0.0.0.0` (it refuses to start that
+way with no keys configured, and requires the key per request).
+
+The VM's RAM comes out of the same 16GB. With a 2GB VM the ops tier fits
+with headroom; at 4GB it fits with none; above that it does not.
