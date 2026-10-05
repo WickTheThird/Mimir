@@ -176,9 +176,9 @@ async def code_task_impl(
         async for event in agent.run(instruction):
             if event.type is AgentEventType.TEXT:
                 text.append(event.text)
-    diff = subprocess.run(
-        ["git", "-C", str(worktree.root), "diff"], capture_output=True, text=True
-    ).stdout
+    from mimir.eval.coding import worktree_diff
+
+    diff = worktree_diff(worktree.root)
     outcome = agent.outcome
     await _propose_repo_lesson(runner, resolved.name, outcome, test_command)
     return {

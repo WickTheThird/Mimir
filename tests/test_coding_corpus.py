@@ -71,3 +71,13 @@ def test_an_aborted_run_leaves_no_worktree_behind(tmp_path, settings):
     # the runner's pre-create discard must clear it
     manager.discard(manager.find(root, f"eval-{case.id}"))
     assert not stale.root.exists()
+
+
+def test_a_file_the_change_created_appears_in_the_diff(tmp_path):
+    """The agent once wrote src/fetch.js into a Python fixture and the diff was empty."""
+    from mimir.eval.coding import worktree_diff
+
+    root = build_fixture(load_corpus()[0], tmp_path)
+    (root / "src").mkdir(); (root / "src" / "fetch.js").write_text("export const x = 1;\n")
+    diff = worktree_diff(root)
+    assert "src/fetch.js" in diff and "+export const x" in diff

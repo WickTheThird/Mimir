@@ -67,6 +67,12 @@ def build_fixture(case: CodeCase, base: Path) -> Path:
     return root
 
 
+def worktree_diff(root: Path) -> str:
+    """The diff including files the change created; plain git diff hides untracked files."""
+    subprocess.run(["git", "-C", str(root), "add", "-N", "."], capture_output=True, check=False)
+    return subprocess.run(["git", "-C", str(root), "diff"], capture_output=True, text=True, check=False).stdout
+
+
 def _lines_changed(diff: str) -> int:
     return sum(1 for l in diff.splitlines()
                if (l.startswith("+") or l.startswith("-")) and not l.startswith(("+++", "---")))
@@ -131,8 +137,7 @@ async def run_case(case: CodeCase, runner: Any, base: Path) -> CodeResult:
     try:
         async for _ in agent.run(case.instruction):
             pass
-        diff = subprocess.run(["git", "-C", str(worktree.root), "diff"], capture_output=True,
-                              text=True, check=False).stdout
+        diff = worktree_diff(worktree.root)
         tests_passed = _run_tests(worktree.root, case.test_command)
         failures = check(case, diff, tests_passed)
         outcome = agent.outcome
@@ -179,4 +184,4 @@ def to_json(results: list[CodeResult], model: str) -> str:
 
 
 __all__ = ["CodeCase", "CodeResult", "build_fixture", "check", "load_corpus", "run_case",
-           "summarise", "to_json"]
+           "summarise", "to_json", "worktree_diff"]
