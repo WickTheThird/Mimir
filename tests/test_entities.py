@@ -126,3 +126,11 @@ async def test_nothing_seen_leaves_it_to_the_plan(store):
 async def test_no_name_means_nothing_to_resolve(store):
     session = InvestigationState(user_request="why is checkout timing out")
     assert (await resolve_target(session, store, None))["status"] == "unnamed"
+
+
+def test_find_workloads_rows_keyed_pod_are_recorded(store):
+    n = store.observe("find_workloads", None, R({"matches": [
+        {"context": "gce-backend-fr5-prod", "namespace": "messaging-squad", "pod": "messaging-settings-65f5-mhfdl", "phase": "Running"}]}))
+    assert n >= 1
+    (hit,) = store.candidates("messaging-settings")
+    assert hit.kind == "pod" and hit.scope == "gce-backend-fr5-prod/messaging-squad"

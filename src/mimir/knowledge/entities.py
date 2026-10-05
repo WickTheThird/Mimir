@@ -131,7 +131,11 @@ class EntityStore:
             *(data.get("found") or []), *(data.get("results") or []),
         ]
         for row in rows:
-            if not isinstance(row, dict) or not row.get("name"):
+            if not isinstance(row, dict):
+                continue
+            if row.get("pod") and not row.get("name"):
+                row = {**row, "name": row["pod"], "kind": "pod"}
+            if not row.get("name"):
                 continue
             kind = str(row.get("kind") or "workload").lower()
             ns = str(row.get("namespace") or namespace)

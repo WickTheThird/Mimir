@@ -1231,6 +1231,14 @@ class FindWorkloadsArgs(BaseModel):
         description="Cluster context substrings, space separated. All must match.",
     )
     namespace_contains: str | None = Field(default=None)
+    environment: str | None = Field(
+        default=None,
+        description="dev or prod: only contexts whose name ends in -dev or -prod, fanned out across all of them.",
+    )
+    regions: list[str] | None = Field(
+        default=None,
+        description="Region fragments such as ch1, fr5, dc2: only contexts containing one, fanned out across all of them.",
+    )
     limit: int = Field(default=40, ge=1, le=200)
 
 
@@ -1248,7 +1256,9 @@ class FindWorkloadsArgs(BaseModel):
 async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResult:
     """Search by substring, deterministically."""
     wanted = _safe_token(_as_fragment(args.name_contains), "name_contains").lower()
-    contexts = await _matching_contexts(ctx, args.context_contains)
+    contexts = await _matching_contexts(
+        ctx, args.context_contains, environment=args.environment, regions=args.regions
+    )
     if not contexts:
         raise ToolError(
             f"no kubectl context matches {args.context_contains!r}",
@@ -1351,10 +1361,16 @@ def _as_fragment(value: str | None) -> str:
     return "-".join(str(value).strip().lower().split())
 
 
-async def _matching_contexts(ctx: ToolContext, fragment: str | None) -> list[str]:
-    """Contexts containing every whitespace-separated fragment, sorted."""
+async def _matching_contexts(
+    ctx: ToolContext, fragment: str | None, *, environment: str | None = None,
+    regions: list[str] | None = None,
+) -> list[str]:
+    """Contexts containing every fragment, filtered by environment suffix and region, sorted."""
     fragments = [f for f in (fragment or "").lower().replace(",", " ").split() if f]
-    if not fragments:
+    environment = (environment or getattr(ctx.environment, "environment", None) or "").lower()
+    environment = {"production": "prod", "development": "dev"}.get(environment, environment)
+    regions = [r.lower() for r in (regions or []) if r]
+    if not fragments and not environment and not regions:
         return [await _resolve_context(ctx, None)]
     listing = _build(
         ctx,
@@ -1366,11 +1382,13 @@ async def _matching_contexts(ctx: ToolContext, fragment: str | None) -> list[str
     record = await _run_one(ctx, listing)
     if not record.ok:
         return [await _resolve_context(ctx, None)]
-    return sorted(
-        name
-        for name in (line.strip() for line in record.stdout.splitlines())
-        if name and all(f in name.lower() for f in fragments)
-    )
+    names = [line.strip() for line in record.stdout.splitlines() if line.strip()]
+    kept = [n for n in names if all(f in n.lower() for f in fragments)]
+    if environment:
+        kept = [n for n in kept if n.lower().endswith(f"-{environment}")]
+    if regions:
+        kept = [n for n in kept if any(r in n.lower() for r in regions)]
+    return sorted(kept)
 
 
 _LOG_KINDS = frozenset({

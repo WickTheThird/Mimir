@@ -44,6 +44,8 @@ _NAMESPACE = (
     re.compile(r"(?:-n|--namespace)\s+([a-z0-9][\w.-]*)", re.IGNORECASE),
     re.compile(r"\b([a-z0-9][\w.-]*)\s+namespace\b", re.IGNORECASE),
     re.compile(r"\bnamespace\s+(?:called\s+|named\s+)?([a-z0-9][\w.-]*)", re.IGNORECASE),
+    # A hyphenated token after a location word is a namespace; single words and environments are not.
+    re.compile(r"\b(?:in|inside|within|under)\s+(?:the\s+)?([a-z0-9]+(?:-[a-z0-9]+)+)\b(?!\s*(?:cluster|context|pod|deployment))", re.IGNORECASE),
 )
 
 _CONTEXT_EXACT = re.compile(r"(?:--context|\bcontext)\s+([a-z0-9][\w.-]*)", re.IGNORECASE)

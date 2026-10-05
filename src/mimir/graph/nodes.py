@@ -225,6 +225,11 @@ async def resolve_target(
     parsed = parse_request(session.user_request)
     name = parsed.name_contains
     env = session.environment
+    # What the operator stated is bound before anything is looked up.
+    if parsed.namespace and not env.namespace:
+        env.namespace = parsed.namespace
+    if parsed.environment and not env.environment:
+        env.environment = parsed.environment
     if not name or store is None:
         return {"status": "unnamed" if not name else "no_store"}
     if env.namespace and env.cluster_context:

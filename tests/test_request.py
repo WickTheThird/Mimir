@@ -308,3 +308,12 @@ def test_cluster_name_after_the_word_cluster_is_a_fragment_and_the_namespace_is_
     assert p.namespace == "payments" and p.context_contains == "ch1"
     assert parse_request("on the ch1 cluster").context_contains == "ch1"
     assert parse_request("a cluster that has ch1 in it").context_contains == "ch1"
+
+
+def test_a_hyphenated_token_after_in_is_a_namespace_without_the_word():
+    from mimir.agent.request import parse_request
+
+    p = parse_request("find messaging-settings pods in messaging-squad on prod")
+    assert p.namespace == "messaging-squad" and p.environment == "prod" and p.name_contains == "messaging-settings"
+    assert parse_request("look inside messaging-squad for the prod pods").namespace == "messaging-squad"
+    assert parse_request("pods in prod").namespace == ""
