@@ -233,3 +233,45 @@ async def test_sandbox_does_not_inherit_credentials(registry, tool_context, monk
     )
     assert result.ok, result.error
     assert result.data["result"]["leaked"] == []
+
+
+class TestFanOutScope:
+    def _ctx(self, settings, store=None):
+        from mimir.tools.base import ToolContext
+        return ToolContext(settings=settings, entities=store)
+
+    @pytest.mark.asyncio
+    async def test_regions_from_config_apply_when_the_request_names_none(self, settings, monkeypatch):
+        from mimir.tools import kubernetes as k
+
+        settings.kubernetes.regions = ["ch1", "fr5"]
+        async def fake_run_one(ctx, command, timeout_s=None):
+            class R: ok = True; stdout = "aws-backend-ch1-prod\ngce-backend-fr5-prod\ntlnx-backend-at1-prod\nbackend-ch1-dev\n"
+            return R()
+        monkeypatch.setattr(k, "_run_one", fake_run_one)
+        got = await k._matching_contexts(self._ctx(settings), None, environment="prod")
+        assert got == ["aws-backend-ch1-prod", "gce-backend-fr5-prod"]
+
+    @pytest.mark.asyncio
+    async def test_a_named_fragment_overrides_the_region_default(self, settings, monkeypatch):
+        from mimir.tools import kubernetes as k
+
+        settings.kubernetes.regions = ["ch1"]
+        async def fake_run_one(ctx, command, timeout_s=None):
+            class R: ok = True; stdout = "aws-backend-ch1-prod\ntlnx-backend-at1-prod\n"
+            return R()
+        monkeypatch.setattr(k, "_run_one", fake_run_one)
+        assert await k._matching_contexts(self._ctx(settings), "at1") == ["tlnx-backend-at1-prod"]
+
+    @pytest.mark.asyncio
+    async def test_a_recently_unreachable_context_is_skipped_unless_named(self, settings, monkeypatch, tmp_path):
+        from mimir.knowledge.entities import EntityStore
+        from mimir.tools import kubernetes as k
+
+        store = EntityStore(tmp_path / "e.db"); k._remember_unreachable(store, "tlnx-backend-at1-prod")
+        async def fake_run_one(ctx, command, timeout_s=None):
+            class R: ok = True; stdout = "aws-backend-ch1-prod\ntlnx-backend-at1-prod\n"
+            return R()
+        monkeypatch.setattr(k, "_run_one", fake_run_one)
+        assert await k._matching_contexts(self._ctx(settings, store), None, environment="prod") == ["aws-backend-ch1-prod"]
+        assert await k._matching_contexts(self._ctx(settings, store), "at1") == ["tlnx-backend-at1-prod"]

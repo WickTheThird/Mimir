@@ -184,6 +184,12 @@ class KubernetesConfig(BaseModel):
     denied_contexts: list[str] = Field(default_factory=list)
     log_tail_lines: int = 2000
     command_timeout_s: float = 90.0
+    regions: list[str] = Field(default_factory=list)
+    """Region fragments a fan-out searches when the request names none; empty means every context."""
+    fanout_timeout_s: float = 15.0
+    """Per-context limit for a fan-out probe, so one unreachable cluster cannot hold the answer."""
+    skip_unreachable_for_s: float = 1800.0
+    """A context that failed this recently is skipped unless named explicitly."""
 
 
 class SdmConfig(BaseModel):

@@ -1242,6 +1242,20 @@ class FindWorkloadsArgs(BaseModel):
     limit: int = Field(default=40, ge=1, le=200)
 
 
+def _remember_unreachable(store: Any, context: str) -> None:
+    """Mark a context unreachable now, so the next fan-out skips it for a while."""
+    try:
+        from mimir.knowledge.entities import Entity, entity_id
+
+        ent = store.get(entity_id("context", context))
+        attrs = dict(ent.attrs) if ent else {}
+        attrs["unreachable_at"] = time.time()
+        store.upsert(Entity(entity_id("context", context), "context", context, attrs=attrs, seen_at=time.time()))
+        store.commit()
+    except Exception:  # noqa: BLE001 - a cache must not fail a tool
+        pass
+
+
 @tool(
     "find_workloads",
     description=(
@@ -1273,10 +1287,12 @@ async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResul
         _build(
             ctx,
             args=["get", "pods", "--all-namespaces", "-o",
-                  f"custom-columns={columns}", "--no-headers"],
+                  f"custom-columns={columns}", "--no-headers",
+                  f"--request-timeout={int(ctx.settings.kubernetes.fanout_timeout_s)}s"],
             purpose=f"find pods matching {wanted!r} across namespaces",
             context=name,
             tool_name="find_workloads",
+            timeout_s=ctx.settings.kubernetes.fanout_timeout_s + 5,
         )
         for name in contexts
     ]
@@ -1285,10 +1301,13 @@ async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResul
     rows: list[dict[str, Any]] = []
     unreachable: list[str] = []
     namespace_filter = _as_fragment(args.namespace_contains).lower()
+    store = getattr(ctx, "entities", None)
     for name, command in zip(contexts, commands, strict=True):
         record = records[command.id]
         if not record.ok:
             unreachable.append(name)
+            if store is not None:
+                _remember_unreachable(store, name)
             continue
         for line in record.stdout.splitlines():
             parts = line.split()
@@ -1372,6 +1391,10 @@ async def _matching_contexts(
     regions = [r.lower() for r in (regions or []) if r]
     if not fragments and not environment and not regions:
         return [await _resolve_context(ctx, None)]
+    # The operator's regions, when the request names none; the script they
+    # trust tries ch1|fr5|dc2 and nothing else.
+    if not regions and not fragments:
+        regions = [r.lower() for r in ctx.settings.kubernetes.regions]
     listing = _build(
         ctx,
         args=["config", "get-contexts", "-o", "name"],
@@ -1388,6 +1411,17 @@ async def _matching_contexts(
         kept = [n for n in kept if n.lower().endswith(f"-{environment}")]
     if regions:
         kept = [n for n in kept if any(r in n.lower() for r in regions)]
+    # A context that failed recently is skipped unless it was named outright.
+    store = getattr(ctx, "entities", None)
+    if store is not None and not fragments:
+        from mimir.knowledge.entities import entity_id
+
+        horizon = time.time() - ctx.settings.kubernetes.skip_unreachable_for_s
+        for name in list(kept):
+            ent = store.get(entity_id("context", name))
+            when = (ent.attrs.get("unreachable_at") if ent else None) or 0
+            if when and when > horizon:
+                kept.remove(name)
     return sorted(kept)
 
 

@@ -120,3 +120,18 @@ read individually. Pair consistency is below where it was. The mini tier
 has not been re-measured with the plan live. Coding has eight cases. Kev's
 verdicts are uncalibrated on the Qwen3 revision until the calibration
 step has thirty samples per field, which it does not yet.
+
+## Against the operator's own tool, on live clusters (5 October)
+
+The operator keeps a shell function that fans `kubectl get pods` out across
+every `ch1|fr5|dc2` context, filters `-prod`, and groups by region. Given
+the sentence "look inside messaging-squad namespace for messaging-settings
+prod pods", MIMIR's parser read namespace, environment and name, and
+`find_workloads` returned **the same 44 pods, no difference in either
+direction**. Before that afternoon's fixes it had searched one dev context
+and reported four.
+
+What the script still does better: it tries only the operator's three
+regions and takes 4 seconds; MIMIR tried all 17 `-prod` contexts, six of
+them unreachable, and took 167 seconds. That is operator knowledge the tool
+does not yet hold.
