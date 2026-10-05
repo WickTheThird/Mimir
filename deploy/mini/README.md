@@ -6,13 +6,14 @@ config, reachable from Warp over the tunnel described in
 
 | service | what | port | memory |
 |---|---|---|---|
-| `com.mimir.kev` | Kev-4B decision model, Qwen3 revision (fast on Apple Silicon) | 8009 | ~5GB |
+| `com.mimir.kev` | Kev-0.8B decision model, Qwen3 revision, bf16 | 8009 | ~1.6GB |
 | `com.mimir.api` | OpenAI-compatible facade, key-authenticated | 8000 | shares Ollama |
 | `com.mimir.mcp` | MIMIR's capabilities as MCP tools for Warp (streamable HTTP) | 8010 | shares Ollama |
 
-Ollama holds `qwen2.5:7b` (4.7GB) and `nomic-embed-text`. Total resident
-about 7.5GB on 16GB, which leaves room for the OS and a cluster's worth of
-kubectl output.
+Ollama holds `qwen2.5:7b` (4.7GB, 8k context) and `nomic-embed-text`. Total
+resident about 11GB on 16GB. Kev-4B is ~8GB in bf16 and does not fit beside
+the 7B on this machine; 0.8B costs about 0.05 accuracy on Kev's own suite,
+and computed facts and the margin floor come before it everywhere.
 
 ## Install
 

@@ -287,7 +287,7 @@ the decision model is never asked to write.
 | 7 predictions, round records | yes | unit level |
 | 8 experience (routing, drafts) | yes | unit level |
 | 9 manifest drift | yes | unit level |
-| 10 mini deployment | files written | not installed |
+| 10 mini deployment | files written (7B at 8k + Kev-0.8B, ~11GB of 16GB) | not installed |
 | 11 specialists table | yes | n/a |
 
 Everything above the line is code with tests (743). What is not yet true is
