@@ -142,3 +142,34 @@ async def test_interim_narration_is_dropped_and_only_the_last_turn_is_the_answer
     out = "".join([t async for t in run_agent([LLMMessage.user("why is the api pod restarting?")], Runner(), settings)])
     assert "Let me look." not in out
     assert out.strip().endswith("The pod was OOMKilled.")
+
+
+
+@pytest.mark.asyncio
+async def test_a_loop_that_stops_without_answering_gets_one_closing_turn(monkeypatch, settings):
+    """The model re-read state.go until repeat detection stopped it and never wrote an answer."""
+    from mimir.agent.events import AgentEvent, AgentEventType
+    from mimir.tools.base import ToolResult
+
+    class FakeAgent:
+        task_class = "fast_command"
+        def __init__(self, **kw):
+            self.outcome = type("O", (), {"stopped": "repeating"})(); self.messages = [LLMMessage.user("q")]
+        async def run(self, instruction):
+            yield AgentEvent(type=AgentEventType.TOOL_START, tool="read_file_range", arguments={"path": "x.go"})
+            yield AgentEvent(type=AgentEventType.TOOL_END, tool="read_file_range", result=ToolResult(ok=True, tool="read_file_range", summary="ok"))
+    import mimir.agent.ops as ops
+    monkeypatch.setattr(ops, "OpsAgent", FakeAgent)
+    seen = {}
+    class Router:
+        async def chat(self, messages, **kw):
+            seen["tools"] = kw["options"].tools; seen["last"] = messages[-1].content
+            return type("R", (), {"content": "It lives in internal/coexistence/state.go."})()
+    class Reg:
+        def get(self, name): return object()
+    class Runner:
+        router = Router(); registry = Reg()
+        def tool_context(self, sid): return None
+    out = "".join([t async for t in run_agent([LLMMessage.user("why is the api pod restarting?")], Runner(), settings)])
+    assert out.strip().endswith("It lives in internal/coexistence/state.go.")
+    assert seen["tools"] == [] and "Stop calling tools" in seen["last"]

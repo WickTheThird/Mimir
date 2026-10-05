@@ -160,7 +160,29 @@ async def run_agent(messages: list[Any], runner: Any, settings: Any) -> AsyncIte
         log.exception("facade_agent_failed")
         yield f"\n[MIMIR: {type(exc).__name__}: {exc}]\n"
     answer = "".join(pending).strip()
+    if not answer:
+        answer = await _conclude(agent, runner)
     yield "\n" + (answer or "(no conclusion was written; the tool results above are what was found)") + "\n"
+
+
+async def _conclude(agent: Any, runner: Any) -> str:
+    """One closing turn with no tools when the loop stopped without answering."""
+    from mimir.llm.base import GenerationOptions, LLMMessage, ModelError
+
+    messages = list(getattr(agent, "messages", []) or [])
+    if not messages:
+        return ""
+    messages.append(LLMMessage.user(
+        "Stop calling tools. Answer the original question now from what the tools returned: "
+        "name the files and lines, in a short list, and say what each one does."))
+    try:
+        response = await runner.router.chat(
+            messages, task_class=getattr(agent, "task_class", None),
+            options=GenerationOptions(tools=[], temperature=0.0, max_tokens=900), purpose="facade:conclude")
+    except ModelError as exc:
+        log.warning("facade_conclude_failed", error=exc.message)
+        return ""
+    return (response.content or "").strip()
 
 
 __all__ = ["ASSISTANT_TOOLS", "CLUSTER_TOOLS", "REPO_TOOLS", "classify_surface", "instruction_from", "pick_repo", "run_agent", "search_phrase"]
