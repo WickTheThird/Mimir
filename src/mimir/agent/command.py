@@ -40,8 +40,7 @@ def construct_fast(
     if not parsed.action or not name:
         return None
     if not ctx and parsed.context_contains:
-        # A stated scope is never dropped. Resolve the fragment against the
-        # contexts the store has seen; anything short of one match declines.
+        # A stated scope is never dropped.
         known = [e.name for e in entities.candidates(parsed.context_contains, kinds=("context",))] if entities is not None else []
         if len(known) != 1:
             return None

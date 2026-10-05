@@ -41,8 +41,7 @@ def test_two_known_namespaces_is_not_a_guess(tmp_path):
 
 def test_every_fast_command_is_read_only_and_classified_r0_or_r1(settings):
     engine = get_policy_engine(settings)
-    # Every phrasing names the kind: a bare word is not a stated name and the
-    # parser declines it (next test), which is what sends it to the graph.
+    # Every phrasing names the kind: a bare word is not a stated name and the parser declines it (next test), which 
     for text in ("events for the api deployment in namespace payments",
                  "describe pod api-7c9 in namespace payments",
                  "status of deployment api in namespace payments",
