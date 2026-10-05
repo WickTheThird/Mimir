@@ -299,3 +299,12 @@ def test_since_without_a_last_prefix_is_read():
     from mimir.agent.request import parse_request
 
     assert parse_request("logs of api pod in payments namespace since 10m").since == "10m"
+
+
+def test_cluster_name_after_the_word_cluster_is_a_fragment_and_the_namespace_is_not():
+    from mimir.agent.request import parse_request
+
+    p = parse_request("show logs of deployment api in namespace payments on cluster ch1")
+    assert p.namespace == "payments" and p.context_contains == "ch1"
+    assert parse_request("on the ch1 cluster").context_contains == "ch1"
+    assert parse_request("a cluster that has ch1 in it").context_contains == "ch1"

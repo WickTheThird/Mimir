@@ -39,6 +39,13 @@ def construct_fast(
     kind = _kind(request) or ("pod" if parsed.action in ("logs", "usage") else "")
     if not parsed.action or not name:
         return None
+    if not ctx and parsed.context_contains:
+        # A stated scope is never dropped. Resolve the fragment against the
+        # contexts the store has seen; anything short of one match declines.
+        known = [e.name for e in entities.candidates(parsed.context_contains, kinds=("context",))] if entities is not None else []
+        if len(known) != 1:
+            return None
+        ctx = known[0]
     if not ns and entities is not None:
         scopes = sorted({(e.context, e.namespace) for e in entities.candidates(name) if e.namespace})
         if len(scopes) == 1:

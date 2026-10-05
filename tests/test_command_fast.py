@@ -5,7 +5,7 @@ from mimir.safety.policy import get_policy_engine
 
 
 def test_logs_with_namespace_and_tail_is_built_without_a_model():
-    (cmd,) = construct_fast("show the last 50 log lines of deployment api in namespace payments on cluster ch1")
+    (cmd,) = construct_fast("show the last 50 log lines of deployment api in namespace payments --context ch1")
     assert cmd.argv[:1] == ["kubectl"]
     assert "-n" in cmd.argv and cmd.argv[cmd.argv.index("-n") + 1] == "payments"
     assert "logs" in cmd.argv and "deployment/api" in cmd.argv and "50" in cmd.argv
@@ -59,3 +59,18 @@ def test_no_action_means_the_parser_declines():
 
 def test_a_bare_word_with_no_kind_noun_is_not_a_stated_name():
     assert construct_fast("restarts of api in namespace payments") is None
+
+
+def test_a_stated_cluster_fragment_is_resolved_or_the_parser_declines(tmp_path):
+    """"on cluster ch1" must reach --context or stop the fast path; it was silently dropped once."""
+    from mimir.knowledge.entities import EntityStore
+
+    class R:
+        ok = True
+        data = {"context": "gce-management-ch1-dev", "available_contexts": ["gce-management-ch1-dev", "gce-prod-eu-1"]}
+
+    text = "show the last 50 log lines of deployment api in namespace payments on cluster ch1"
+    assert construct_fast(text) is None
+    store = EntityStore(tmp_path / "e.db"); store.observe("get_current_context", None, R())
+    (cmd,) = construct_fast(text, entities=store)
+    assert cmd.argv[cmd.argv.index("--context") + 1] == "gce-management-ch1-dev"

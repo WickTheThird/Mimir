@@ -55,6 +55,11 @@ _CONTEXT_FRAGMENT = (
         r"(?:the\s+)?['\"]?([a-z0-9][\w.-]*)['\"]?",
         re.IGNORECASE,
     ),
+    # "on cluster ch1", "cluster called ch1".
+    re.compile(
+        r"\bclusters?\s+(?:called\s+|named\s+)?([a-z0-9][\w.-]*)\b(?!\s+(?:that|with|has|have))",
+        re.IGNORECASE,
+    ),
     # "ch1 cluster", "the ch1 dev cluster".
     re.compile(
         r"\b([a-z0-9][\w.-]*)(?:\s+([a-z0-9][\w.-]*))?\s+clusters?\b", re.IGNORECASE
@@ -190,7 +195,11 @@ def parse_request(text: str) -> ParsedRequest:
     parsed.namespace = _first(_NAMESPACE, text)
     parsed.context = _first((_CONTEXT_EXACT,), text)
     if not parsed.context:
-        parsed.context_contains = _first(_CONTEXT_FRAGMENT, text)
+        fragment = _first(_CONTEXT_FRAGMENT, text).lower()
+        # "payments on cluster" is a namespace followed by a preposition, not a cluster name.
+        if fragment in _QUALIFIERS or fragment in _NOT_A_NAME or fragment == parsed.namespace.lower():
+            fragment = ""
+        parsed.context_contains = fragment
 
     for environment in ENVIRONMENTS:
         if re.search(rf"\b{environment}\b", lowered):
