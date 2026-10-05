@@ -33,6 +33,16 @@ ingress:
       # generation completes.
       disableChunkedEncoding: false
 
+  # MIMIR's capabilities as MCP tools (construct_command, investigate,
+  # code_task). Key-authenticated by the MCP server itself for any
+  # non-loopback caller; a key buys these three tools and nothing privileged.
+  - hostname: CHANGE_ME.example.com
+    path: ^/mcp(/.*)?$
+    service: http://127.0.0.1:8010
+    originRequest:
+      httpHostHeader: 127.0.0.1:8010
+      disableChunkedEncoding: false
+
   # A health probe that does not require a credential, so the tunnel can be
   # monitored without embedding a key in the monitor.
   - hostname: CHANGE_ME.example.com

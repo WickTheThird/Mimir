@@ -1592,6 +1592,13 @@ async def finalise(state: GraphState, deps: NodeDeps) -> dict[str, Any]:
         draft = write_corpus_draft(deps.tool_context.settings.home, session)
         if draft is not None:
             session.metadata["corpus_draft"] = str(draft)
+        from mimir.knowledge.skill_drafts import draft_from_session, write_draft
+
+        skill = draft_from_session(session)
+        if skill is not None:
+            session.metadata["skill_draft"] = str(
+                write_draft(deps.tool_context.settings.home, skill)
+            )
     except Exception as exc:  # noqa: BLE001 - experience must not fail the session
         log.warning("experience_skipped", error=str(exc))
     log.info(

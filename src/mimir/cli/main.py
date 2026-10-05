@@ -752,6 +752,31 @@ def skills_list() -> None:
     )
 
 
+@skills_app.command("drafts")
+def skills_drafts() -> None:
+    """Skills drafted from completed tasks, waiting for a person (never auto-promoted)."""
+    from mimir.knowledge.skill_drafts import list_drafts
+
+    drafts = list_drafts(get_settings().home)
+    if not drafts:
+        console.print("[dim]no drafts[/dim]")
+        return
+    for path in drafts:
+        console.print(f"{path.parent.name:56} {path}")
+    console.print("\n[dim]promote one with: mimir skills promote <name>[/dim]")
+
+
+@skills_app.command("promote")
+def skills_promote(name: str = typer.Argument(...)) -> None:
+    """Move a drafted skill into the live skills root. The one step that needs you."""
+    from mimir.knowledge.skill_drafts import promote
+
+    settings = get_settings()
+    roots = [Path(r) for r in settings.skills.roots] or [settings.home / "knowledge" / "skills"]
+    dst = promote(settings.home, name, roots[0])
+    console.print(f"[green]promoted[/green] {dst}")
+
+
 @skills_app.command("show")
 def skills_show(name: str = typer.Argument(...)) -> None:
     """Show a skill body (level-2 load)."""

@@ -222,6 +222,14 @@ async def _propose_repo_lesson(runner: Any, repo: str, outcome: Any, test_comman
             tools_used=sorted(getattr(outcome, "tools_used", []) or []), stopped=outcome.stopped,
         )
         await spec.invoke(note, runner.tool_context(None))
+        from mimir.knowledge.skill_drafts import draft_from_coding, write_draft
+
+        skill = draft_from_coding(
+            repo, getattr(outcome, "instruction", "") or "", files_changed=sorted(outcome.files_changed),
+            tools_used=sorted(getattr(outcome, "tools_used", []) or []), test_command=test_command,
+        )
+        if skill is not None:
+            write_draft(runner.settings.home, skill)
     except Exception as exc:  # noqa: BLE001 - a lesson must not fail the task
         log.warning("repo_lesson_skipped", error=str(exc))
 
@@ -271,12 +279,63 @@ def build_server() -> Any:
     return server
 
 
+class KeyRequired:
+    """ASGI middleware: the same API keys the facade uses, on the MCP transport.
+
+    The MCP tools run investigations and coding tasks. Over stdio the caller
+    is the local process that started it; over HTTP, behind a tunnel, it is
+    the internet. The rule from mimir.api.auth applies unchanged: a loopback
+    caller may pass without a key, anyone else presents one, and a key buys
+    these three tools and nothing privileged. Constant-time comparison, same
+    as the facade.
+    """
+
+    def __init__(self, app: Any, settings: Any) -> None:
+        self.app = app
+        self.settings = settings
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        from mimir.api.auth import is_loopback
+
+        client = (scope.get("client") or ("", 0))[0] or ""
+        headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers") or []}
+        auth = headers.get("authorization", "")
+        presented = auth[7:].strip() if auth.lower().startswith("bearer ") else headers.get("x-api-key")
+        allowed = is_loopback(client) and self.settings.api.allow_loopback_without_auth
+        if not allowed and presented:
+            import hmac
+
+            allowed = any(hmac.compare_digest(presented, k) for k in self.settings.api.api_keys)
+        if not allowed:
+            log.warning("mcp_unauthenticated", address=client, path=scope.get("path"))
+            await send({"type": "http.response.start", "status": 401,
+                        "headers": [(b"content-type", b"application/json"),
+                                    (b"www-authenticate", b"Bearer")]})
+            await send({"type": "http.response.body", "body": b'{"error":"api key required"}'})
+            return
+        await self.app(scope, receive, send)
+
+
 def serve(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8010) -> None:
     server = build_server()
     if transport == "stdio":
         server.run(transport="stdio")
-    else:
-        server.run(transport="streamable-http", host=host, port=port, stateless_http=True)
+        return
+    import uvicorn
+
+    from mimir.config import get_settings
+
+    settings = get_settings()
+    if host not in ("127.0.0.1", "localhost", "::1") and not settings.api.api_keys:
+        raise SystemExit(
+            "refusing to serve MCP on a non-loopback host with no API keys configured; "
+            "run `mimir keys create --label warp` first"
+        )
+    app = KeyRequired(server.streamable_http_app(stateless_http=True), settings)
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 __all__ = [
