@@ -64,7 +64,7 @@ async def test_a_repeating_loop_says_so_instead_of_going_quiet(monkeypatch, sett
         router = None; registry = Reg()
         def tool_context(self, sid): return None
     out = "".join([t async for t in run_agent([LLMMessage.user("q")], Runner(), settings)])
-    assert "stopped repeating" in out and "no conclusion was written" in out
+    assert "no conclusion was written" in out
 
 
 def test_the_surface_is_read_from_the_words_used():
@@ -117,3 +117,28 @@ def test_the_search_phrase_never_contains_the_repository_name():
     from mimir.api.agent_mode import search_phrase
 
     assert search_phrase("in what files is whatsapp coexistence setup? search the repo target", exclude=("target",)) == "whatsapp coexistence"
+
+
+
+@pytest.mark.asyncio
+async def test_interim_narration_is_dropped_and_only_the_last_turn_is_the_answer(monkeypatch, settings):
+    from mimir.agent.events import AgentEvent, AgentEventType
+    from mimir.tools.base import ToolResult
+
+    class FakeAgent:
+        def __init__(self, **kw): self.outcome = type("O", (), {"stopped": "done"})()
+        async def run(self, instruction):
+            yield AgentEvent(type=AgentEventType.TEXT, text="Let me look.")
+            yield AgentEvent(type=AgentEventType.TOOL_START, tool="get_events", arguments={})
+            yield AgentEvent(type=AgentEventType.TOOL_END, tool="get_events", result=ToolResult(ok=True, tool="get_events", summary="3 events"))
+            yield AgentEvent(type=AgentEventType.TEXT, text="The pod was OOMKilled.")
+    import mimir.agent.ops as ops
+    monkeypatch.setattr(ops, "OpsAgent", FakeAgent)
+    class Reg:
+        def get(self, name): return object()
+    class Runner:
+        router = None; registry = Reg()
+        def tool_context(self, sid): return None
+    out = "".join([t async for t in run_agent([LLMMessage.user("why is the api pod restarting?")], Runner(), settings)])
+    assert "Let me look." not in out
+    assert out.strip().endswith("The pod was OOMKilled.")

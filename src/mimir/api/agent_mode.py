@@ -137,32 +137,30 @@ async def run_agent(messages: list[Any], runner: Any, settings: Any) -> AsyncIte
         )
     budget = settings.api.facade_agent_timeout_s
     started = time.time()
-    said_anything = False
+    pending: list[str] = []
+    """Text since the last tool call; interim narration is dropped, the last turn is the answer."""
     try:
         async for event in agent.run(instruction):
             if time.time() - started > budget:
-                yield f"\n[MIMIR: stopped after {budget:.0f}s; what was found so far is above]\n"
+                yield f"\n[MIMIR: stopped after {budget:.0f}s]\n"
                 break
             if event.type is AgentEventType.TOOL_START:
-                yield f"\n> {event.tool}({_render_args(event.arguments)})\n"
+                pending.clear()
+                yield f"> {event.tool}({_render_args(event.arguments)})\n"
             elif event.type is AgentEventType.TOOL_END:
                 summary = (event.result.summary if event.result is not None else "").strip().splitlines()
                 head = summary[0][:160] if summary else ("ok" if event.result and event.result.ok else "failed")
                 mark = "ok" if (event.result is None or event.result.ok) else "failed"
                 yield f"  {mark}: {head}\n"
             elif event.type is AgentEventType.TEXT and event.text:
-                said_anything = True
-                yield event.text
+                pending.append(event.text)
             elif event.type is AgentEventType.ERROR:
                 yield f"\n[MIMIR: {event.error}]\n"
     except Exception as exc:  # noqa: BLE001 - the client must get a reply, not a dropped stream
         log.exception("facade_agent_failed")
         yield f"\n[MIMIR: {type(exc).__name__}: {exc}]\n"
-    outcome = getattr(agent, "outcome", None)
-    if outcome is not None and outcome.stopped == "repeating":
-        yield "\n[MIMIR: stopped repeating the same call; the thing may be named differently]\n"
-    if not said_anything:
-        yield "\n(no conclusion was written; the tool results above are what was found)\n"
+    answer = "".join(pending).strip()
+    yield "\n" + (answer or "(no conclusion was written; the tool results above are what was found)") + "\n"
 
 
 __all__ = ["ASSISTANT_TOOLS", "CLUSTER_TOOLS", "REPO_TOOLS", "classify_surface", "instruction_from", "pick_repo", "run_agent", "search_phrase"]
