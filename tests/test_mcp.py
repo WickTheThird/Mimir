@@ -37,6 +37,7 @@ class FakeState:
             argv=["kubectl", "get", "pods", "-n", "messaging-squad"],
             purpose="list pods", context=TargetContext(),
         )]
+        self.commands_executed = []
         self.session_id = "ses_test"
         self.final_answer = None
         self.error = None

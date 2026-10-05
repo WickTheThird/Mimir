@@ -286,3 +286,16 @@ class TestALocatedPodOverridesAGuess:
         agent = self._agent_with()
         bound = agent.bind("get_logs", {"target": "other-pod", "context": "ctx-x"})
         assert bound["context"] == "ctx-x"
+
+
+def test_a_name_after_the_kind_noun_is_stated():
+    from mimir.agent.request import parse_request
+
+    assert parse_request("show logs of deployment api in namespace payments").name_contains == "api"
+    assert parse_request("describe pod api-7c9 in namespace payments").name_contains == "api-7c9"
+
+
+def test_since_without_a_last_prefix_is_read():
+    from mimir.agent.request import parse_request
+
+    assert parse_request("logs of api pod in payments namespace since 10m").since == "10m"

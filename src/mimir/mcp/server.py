@@ -83,17 +83,37 @@ async def construct_command_impl(
     request: str, context: str | None = None, namespace: str | None = None
 ) -> dict[str, Any]:
     runner = _get_runner()
+    # Parser first: milliseconds when everything is stated. The graph is the fallback.
+    from mimir.agent.command import construct_fast
+
+    fast = construct_fast(
+        request, context=context, namespace=namespace,
+        entities=getattr(runner, "entities", None),
+        kubectl=getattr(runner.settings.kubernetes, "binary", "kubectl") or "kubectl",
+    )
+    if fast:
+        return {
+            "commands": [_command_view(c, runner) for c in fast],
+            "source": "parser",
+            "note": "Nothing was executed. Built from the stated request; anything above R0 "
+                    "needs the operator's approval before it runs.",
+        }
     state = await runner.run(
         f"Construct the command for this request. Show it, do not run it: {request}",
         environment=_environment(context, namespace),
         interface="mcp",
     )
     commands = [_command_view(c, runner) for c in state.commands_planned]
+    ran = [r.argv for r in state.commands_executed]
     return {
         "commands": commands,
+        "source": "graph",
+        "executed_readonly_probes": [" ".join(a) for a in ran[:10]],
         "note": (
-            "Nothing was executed. Anything above R0 needs the operator's approval "
-            "through MIMIR's policy engine before it runs."
+            (f"The investigation ran {len(ran)} read-only probe(s) to construct this; " if ran
+             else "Nothing was executed. ")
+            + "the proposed command itself was not run, and anything above R0 needs the "
+              "operator's approval through MIMIR's policy engine."
         ),
         "session_id": state.session_id,
     }

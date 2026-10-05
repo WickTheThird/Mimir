@@ -70,7 +70,7 @@ _TAIL = re.compile(
 )
 
 _SINCE = re.compile(
-    r"\b(?:last|past|previous|within|over)\s+(\d{1,4})\s*"
+    r"\b(?:last|past|previous|within|over|since)\s+(\d{1,4})\s*"
     r"(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)\b",
     re.IGNORECASE,
 )
@@ -160,6 +160,11 @@ def _name_fragments(text: str) -> list[str]:
         # The last word is the distinctive one far more often than the first:
         out.append(words[-1])
 
+    # A name written after the kind ("deployment api", "pod api-7c9") is stated too.
+    for match in re.finditer(r"\b(?:" + "|".join(KIND_NOUNS) + r")\s+(?:named\s+|called\s+)?([a-z0-9][\w.-]*)", lowered):
+        word = match.group(1)
+        if word not in _QUALIFIERS and word not in _NOT_A_NAME and len(word) > 2:
+            out.append(word)
     # A name written as kind/name, and a hyphenated token anywhere, are names
     explicit = [
         match.group(1)
