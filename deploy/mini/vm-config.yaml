@@ -1,0 +1,18 @@
+# MIMIR inside the UTM VM on the mini. Models and decisions live on the macOS
+# host; 192.168.64.1 is the UTM shared-network gateway (check: ip route | head -1).
+models:
+  profiles:
+    fast:  {alias: fast,  runtime: ollama, model: "qwen2.5:7b",      context_window: 8192, base_url: "http://192.168.64.1:11434/v1"}
+    deep:  {alias: deep,  runtime: ollama, model: "qwen2.5:7b",      context_window: 8192, base_url: "http://192.168.64.1:11434/v1"}
+    embed: {alias: embed, runtime: ollama, model: "nomic-embed-text", base_url: "http://192.168.64.1:11434/v1"}
+  routing:
+    default: deep
+decisions:
+  enabled: true
+  backend: kev
+  base_url: http://192.168.64.1:8009
+api:
+  host: 127.0.0.1      # cloudflared is in the same VM; nothing binds beyond loopback
+  port: 8756
+graph:
+  max_specialist_rounds: 3

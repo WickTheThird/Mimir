@@ -65,24 +65,45 @@ refuse non-loopback callers in code regardless of credentials. Rotate with
 Put Cloudflare Access in front of the hostname if you want a second factor;
 the hostname is guessable.
 
-## Variant: the connector already runs in a UTM VM on the mini
+## The split: inference on the host, everything else in the UTM VM
 
-Do not create a second tunnel. Add the `ai.` hostnames to the existing
-tunnel in the dashboard (Public Hostname tab), with the service pointing at
-the macOS host as the VM sees it rather than `localhost`: the UTM Shared
-Network gateway (usually `192.168.64.1`) or the mini's LAN IP when bridged.
-`ip route | head -1` inside the VM shows it.
+Of the exposed tools, `code_task` runs a repository's tests, which is
+arbitrary code on whichever machine hosts MIMIR. That machine is the VM.
 
-MIMIR itself stays on macOS; Ollama and Kev need Metal and the VM has no
-GPU. Two host-side changes so the VM can reach it:
-
-```yaml
-api:
-  host: 0.0.0.0        # refuses non-loopback callers without a key
+```
+internet -> Cloudflare -> cloudflared (VM)
+                            -> MIMIR facade :8756 + MCP :8010 + tools   (VM)
+                                 -> Ollama :11434   (macOS host, Metal)
+                                 -> Kev    :8009    (macOS host, Metal)
 ```
 
-and the MCP unit started with `--host 0.0.0.0` (it refuses to start that
-way with no keys configured, and requires the key per request).
+The host runs the two inference servers and nothing else of MIMIR's, bound
+to the UTM virtual network, not the LAN. Text in, text out; neither
+executes anything. Tools, worktrees, test execution and the tunnel live in
+the VM, which can be snapshotted, capped and discarded.
 
-The VM's RAM comes out of the same 16GB. With a 2GB VM the ops tier fits
-with headroom; at 4GB it fits with none; above that it does not.
+### Host (macOS)
+
+```bash
+# Ollama listens on the UTM shared-network gateway only (not the LAN)
+launchctl setenv OLLAMA_HOST 192.168.64.1:11434 && brew services restart ollama
+# Kev the same
+KEV_DTYPE=bf16 uv run --extra serve python -m kev.serve --run jaredpalmer/kev-0.8b@qwen3 --host 192.168.64.1 --port 8009
+```
+
+Memory: 7B + Kev-0.8B + macOS, about 11GB. The VM takes the rest.
+
+### VM (Debian, 3GB, no models)
+
+MIMIR installed as on any Linux box, with `~/.mimir/config.yaml` from
+`../mini/vm-config.yaml`: every profile's `base_url` and `decisions.base_url`
+point at the host gateway. The existing cloudflared adds the three
+`ai.bumbuindustries.com` hostnames pointing at `localhost` inside the VM.
+`investigate` sees whatever kubeconfig and VPN the VM has; `code_task`
+works on repositories cloned into the VM.
+
+### What a compromised VM reaches
+
+Ollama and Kev as text APIs, and nothing else on the host. Put Cloudflare
+Access in front of the hostname for a second factor, and keep the VM's
+snapshot current.

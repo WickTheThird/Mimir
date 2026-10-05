@@ -1,5 +1,9 @@
 # MIMIR on the Mac mini
 
+> Preferred layout is the host/VM split in `../cloudflared/BUMBUINDUSTRIES.md`:
+> only Ollama and Kev on macOS, MIMIR and the tunnel in the UTM VM. The units
+> below are the all-on-host layout for a mini without a VM.
+
 The always-on ops tier (plan step 10). Three services under launchd, one
 config, reachable from Warp over the tunnel described in
 `../cloudflared/README.md`.
