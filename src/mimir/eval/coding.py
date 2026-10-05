@@ -116,6 +116,10 @@ async def run_case(case: CodeCase, runner: Any, base: Path) -> CodeResult:
     directory = get_repository_directory(runner.settings)
     directory.register_session(case.id, root, f"coding corpus fixture {case.id}")
     manager = WorktreeManager(runner.settings.home)
+    try:
+        manager.discard(manager.find(root, f"eval-{case.id}"))  # a stale one from an aborted run
+    except Exception:  # noqa: BLE001 - absent is the normal case
+        pass
     worktree = manager.create(root, f"eval-{case.id}")
     view = f"{worktree.name}-worktree"
     directory.register_session(view, worktree.root, "eval worktree")
@@ -142,7 +146,7 @@ async def run_case(case: CodeCase, runner: Any, base: Path) -> CodeResult:
         )
     finally:
         try:
-            manager.remove(root, worktree.name)  # type: ignore[attr-defined]
+            manager.discard(worktree)
         except Exception:  # noqa: BLE001 - best effort cleanup
             pass
 

@@ -56,3 +56,18 @@ def test_an_absent_needle_must_not_match_the_removal_line_of_a_correct_rename():
     assert check(case, correct, True) == []
     missed = correct.replace('+    return read_config("x")', '+    return load_config("x")')
     assert check(case, missed, True)
+
+
+def test_an_aborted_run_leaves_no_worktree_behind(tmp_path, settings):
+    """The first version called a method that did not exist, so every eval
+    worktree leaked and the next run refused to start."""
+    from mimir.worktree import WorktreeManager
+
+    case = load_corpus()[0]
+    root = build_fixture(case, tmp_path)
+    manager = WorktreeManager(settings.home)
+    stale = manager.create(root, f"eval-{case.id}")
+    assert stale.root.exists()
+    # the runner's pre-create discard must clear it
+    manager.discard(manager.find(root, f"eval-{case.id}"))
+    assert not stale.root.exists()
