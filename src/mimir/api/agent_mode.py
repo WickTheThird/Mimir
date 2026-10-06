@@ -105,7 +105,8 @@ def search_phrase(text: str, *, exclude: tuple[str, ...] = ()) -> str:
     drop = {e.lower() for e in exclude}
     words = [w for w in re.findall(r"[A-Za-z0-9_-]+", text)
              if len(w) > 2 and not _REPO_CUES.fullmatch(w) and not _CLUSTER_CUES.fullmatch(w) and w.lower() not in drop]
-    stop = {"can", "you", "what", "which", "how", "the", "and", "for", "our", "check", "find", "look", "read", "readonly", "read-only", "search", "through", "this", "that", "please", "show", "where", "setup", "set", "about", "with", "are", "is"}
+    stop = {"can", "you", "what", "which", "how", "the", "and", "for", "our", "check", "find", "look", "read", "readonly", "read-only", "search", "through", "this", "that", "please", "show", "where", "setup", "set", "about", "with", "are", "is", "trace", "end", "flow", "implemented",
+            "implementation", "walk", "works", "work", "does", "explain", "readonly", "only", "repo"}
     kept = [w for w in words if w.lower() not in stop][:4]
     return " ".join(kept)
 

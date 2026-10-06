@@ -200,3 +200,10 @@ async def test_a_trace_question_is_answered_from_the_trace_not_by_the_model(monk
     assert "Signups are stored and then worked by a state machine." in out
     assert "`POST /v2/signup` → `post` (s.go:4)" in out and "`StoreSignupEvent` (db.go:9)" in out
     assert "1. `SUBSCRIBE` (f.go:7)" in out
+
+
+def test_trace_wording_is_not_part_of_the_feature_name():
+    from mimir.api.agent_mode import search_phrase
+
+    assert search_phrase("where is embedded signup implemented in messaging whatsapp? trace it end to end (readonly, repo target)",
+                         exclude=("target", "messaging", "whatsapp")) == "embedded signup"
