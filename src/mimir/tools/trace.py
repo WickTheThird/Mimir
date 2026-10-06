@@ -148,9 +148,12 @@ def trace(root: Path, feature: str, *, tests: bool = False) -> dict[str, Any]:
     # 1. entry points: route registrations naming the term; the handler may be on the next line
     for path, line, text in _rg(root, re.escape(term), tests=tests):
         if _ROUTE.search(text):
-            span = " ".join([text, *[l.strip() for l in _lines(root, path)[line:line + 2]]])
-            handlers = [m for m in _CALL.findall(span) if m not in _STOP and not _ROUTE.search(m + "(")
-                        and m not in ("Handle", "HandleFunc", "Post", "Get", "Put", "Patch", "Delete", "pat")]
+            skip = ("Handle", "HandleFunc", "Post", "Get", "Put", "Patch", "Delete", "pat")
+            pick = lambda txt: [m for m in _CALL.findall(txt) if m not in _STOP and m not in skip]  # noqa: E731
+            handlers = pick(text)
+            if not handlers:
+                # Only a registration that left its handler for the next line may borrow from it.
+                handlers = pick(" ".join(l.strip() for l in _lines(root, path)[line:line + 1]))
             result["routes"].append({"path": path, "line": line, "text": text[:200], "handlers": handlers[:3]})
     # 2. handlers: their definitions, and what they call
     seen_calls: set[str] = set()
@@ -230,6 +233,55 @@ def render(t: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+_VERB_PATH = re.compile(r'\.(Post|Get|Put|Patch|Delete|Handle)\(\s*"([^"]+)"|@(?:app|router|bp)\.(get|post|put|patch|delete)\(\s*["\']([^"\']+)', re.I)
+
+
+def answer_markdown(t: dict[str, Any]) -> str:
+    """The trace as an ordered, cited end-to-end answer. Every line comes from the code."""
+    if not t["term"]:
+        return f"No code in this repository names anything like '{t['feature']}'."
+    where = {c["name"]: f"{c['path']}:{c['line']}" for c in t["calls"]}
+    rx = re.compile(re.escape(t["term"]), re.I)
+    out = [f"**{t['feature']}** is implemented under the name `{t['term']}`. End to end:", ""]
+    step = 1
+    primary = [r for r in t["routes"] if rx.search(r["text"].split('"')[1] if '"' in r["text"] else r["text"])]
+    if primary:
+        out.append(f"**{step}. Entry points**"); step += 1
+        for r in primary[:10]:
+            m = _VERB_PATH.search(r["text"])
+            verb, path = ((m.group(1) or m.group(3) or "").upper(), m.group(2) or m.group(4)) if m else ("", "")
+            handler = r["handlers"][0] if r["handlers"] else "?"
+            out.append(f"- `{verb} {path}` → `{handler}` ({r['path']}:{r['line']})" if path else f"- {r['text'][:100]} ({r['path']}:{r['line']})")
+        out.append("")
+    if t["handlers"]:
+        out.append(f"**{step}. Handlers and what they call**"); step += 1
+        routed = {h for r in primary for h in r["handlers"]}
+        for h in [h for h in t["handlers"] if h["name"] in routed][:8]:
+            hops = [f"`{c}` ({where[c]})" for c in h["calls"] if c in where and c != h["name"]]
+            out.append(f"- `{h['name']}` ({h['path']}:{h['line']})" + (f" calls {', '.join(hops[:6])}" if hops else ""))
+        out.append("")
+    workers = [c for c in t["consumers"] if not re.search(r"(Type|Metadata|Log|Filter|PhoneNumber|Payload|Response|Request|Session|Error)$", c["name"])]
+    if workers or t["wiring"]:
+        out.append(f"**{step}. Background processing**"); step += 1
+        for c in workers[:8]:
+            out.append(f"- `{c['name']}` ({c['path']}:{c['line']})")
+        for w in t["wiring"][:4]:
+            out.append(f"- started by `{w['name']}` in {w['path']}:{w['line']}")
+        out.append("")
+    if t["states"]:
+        out.append(f"**{step}. States, in order**"); step += 1
+        for i, st in enumerate(t["states"][:20], 1):
+            calls = ", ".join(f"`{c}`" for c in st.get("calls", [])[:5])
+            nxt = " → " + " or ".join(f"`{n}`" for n in st["next"]) if st.get("next") else ""
+            out.append(f"{i}. `{st['state']}` ({st['path']}:{st['line']})" + (f": {calls}" if calls else "") + nxt)
+        out.append("")
+    other = [r for r in t["routes"] if r not in primary]
+    if other:
+        out.append("**Related routes that mention it**")
+        out += [f"- {r['text'][:90]} ({r['path']}:{r['line']})" for r in other[:6]]
+    return "\n".join(out).rstrip()
+
+
 @tool(
     "trace_feature",
     description=(
@@ -248,4 +300,4 @@ async def trace_feature(args: TraceInput, ctx: ToolContext) -> ToolResult:
     return ToolResult(ok=bool(t["term"]), tool="trace_feature", summary=render(t), data=t)
 
 
-__all__ = ["choose_term", "key_terms", "render", "trace", "trace_feature"]
+__all__ = ["answer_markdown", "choose_term", "key_terms", "render", "trace", "trace_feature"]

@@ -173,3 +173,30 @@ async def test_a_loop_that_stops_without_answering_gets_one_closing_turn(monkeyp
     out = "".join([t async for t in run_agent([LLMMessage.user("why is the api pod restarting?")], Runner(), settings)])
     assert out.strip().endswith("It lives in internal/coexistence/state.go.")
     assert seen["tools"] == [] and "Stop calling tools" in seen["last"]
+
+
+@pytest.mark.asyncio
+async def test_a_trace_question_is_answered_from_the_trace_not_by_the_model(monkeypatch, settings):
+    from mimir.tools.base import ToolResult
+
+    trace_data = {"feature": "embedded signup", "term": "signup",
+                  "routes": [{"path": "s.go", "line": 4, "text": 'mux.Handle(pat.Post("/v2/signup"), s.post())', "handlers": ["post"]}],
+                  "handlers": [{"name": "post", "path": "h.go", "line": 3, "calls": ["StoreSignupEvent"]}],
+                  "calls": [{"name": "StoreSignupEvent", "path": "db.go", "line": 9, "text": ""}],
+                  "consumers": [], "states": [{"path": "f.go", "line": 7, "state": "SUBSCRIBE", "calls": [], "next": []}], "wiring": []}
+    class Trace:
+        async def invoke(self, args, ctx):
+            return ToolResult(ok=True, tool="trace_feature", summary="trace text", data=trace_data)
+    class Reg:
+        def get(self, name): return Trace() if name == "trace_feature" else object()
+    class Router:
+        async def chat(self, messages, **kw):
+            return type("R", (), {"content": "Signups are stored and then worked by a state machine."})()
+    class Runner:
+        router = Router(); registry = Reg()
+        def tool_context(self, sid): return None
+    Runner.settings = settings
+    out = "".join([t async for t in run_agent([LLMMessage.user("trace embedded signup end to end in the repo")], Runner(), settings)])
+    assert "Signups are stored and then worked by a state machine." in out
+    assert "`POST /v2/signup` → `post` (s.go:4)" in out and "`StoreSignupEvent` (db.go:9)" in out
+    assert "1. `SUBSCRIBE` (f.go:7)" in out

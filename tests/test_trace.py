@@ -48,3 +48,24 @@ def test_a_full_trace_from_route_to_states(tmp_path):
 def test_nothing_named_like_it_says_so(tmp_path):
     t = trace(_repo(tmp_path), "quantum teleport")
     assert render(t).startswith("no code names anything like")
+
+
+def test_a_route_with_its_handler_on_the_same_line_does_not_borrow_the_next(tmp_path):
+    root = tmp_path / "svc"; (root / "internal/http").mkdir(parents=True)
+    (root / "internal/http/server.go").write_text(
+        'package http\n\nfunc r() {\n\tmux.Handle(pat.Post("/v2/signup"), s.postSignup())\n\tmux.Handle(pat.Post("/v2/apps"), s.postApps())\n}\n')
+    (root / "internal/http/h.go").write_text('package http\n\nfunc (s *Server) postSignup() {}\nfunc (s *Server) postApps() {}\n')
+    t = trace(root, "signup")
+    assert [r["handlers"] for r in t["routes"]] == [["postSignup"]]
+
+
+def test_the_answer_is_ordered_cited_and_built_from_the_trace(tmp_path):
+    from mimir.tools.trace import answer_markdown
+
+    md = answer_markdown(trace(_repo(tmp_path), "embedded signup"))
+    order = [md.index(h) for h in ("1. Entry points", "2. Handlers", "3. Background", "4. States")]
+    assert order == sorted(order)
+    assert "`POST /v2/whatsapp_signup/initiate` → `postInitSignup` (internal/http/server.go:4)" in md
+    assert "`StoreSignupEvent` (internal/db/storage.go:3)" in md
+    assert "started by `NewSignupFSM` in cmd/svc/main.go:4" in md
+    assert "1. `SUBSCRIBE_WEBHOOKS`" in md and "2. `REGISTER_PHONE_NUMBER`" in md

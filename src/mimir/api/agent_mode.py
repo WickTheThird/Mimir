@@ -131,17 +131,13 @@ async def run_agent(messages: list[Any], runner: Any, settings: Any) -> AsyncIte
         if phrase and _TRACE_CUES.search(instruction) and runner.registry.get("trace_feature") is not None:
             res = await runner.registry.get("trace_feature").invoke({"feature": phrase, "repo": repo}, runner.tool_context(None))
             if res.ok:
-                yield f"> trace_feature({phrase!r}, repo={repo!r})\n{res.summary}\n"
-                instruction = (f"{instruction}\n\nA deterministic trace already ran; every hop below is file:line "
-                               f"from the code. Write the end-to-end answer from it, reading a range only where "
-                               f"a hop needs explaining.\n{res.summary}")
-                agent = AgentLoop(
-                    router=runner.router, registry=runner.registry, tool_context=runner.tool_context(None),
-                    settings=settings, tools=available(("read_file_range", "find_symbol", "find_references")),
-                    system=REPO_SYSTEM, task_class="fast_command", max_steps=6,
-                )
-                async for line in _drive(agent, instruction, runner, settings):
-                    yield line
+                from mimir.tools.trace import answer_markdown
+
+                yield f"> trace_feature({phrase!r}, repo={repo!r}) -> {len(res.data['routes'])} routes, "
+                yield f"{len(res.data['handlers'])} handlers, {len(res.data['states'])} states\n"
+                body = answer_markdown(res.data)
+                overview = await _overview(runner, instruction, res.summary)
+                yield "\n" + (overview + "\n\n" if overview else "") + body + "\n"
                 return
         found = await search_code_impl(phrase, repo) if phrase else {"files": [], "matches": [], "tried": []}
         yield f"> search_code({phrase!r}, repo={repo!r}) -> {len(found.get('files', []))} file(s)\n"
@@ -201,6 +197,27 @@ async def _drive(agent: Any, instruction: str, runner: Any, settings: Any) -> As
     if not answer:
         answer = await _conclude(agent, runner)
     yield "\n" + (answer or "(no conclusion was written; the tool results above are what was found)") + "\n"
+
+
+async def _overview(runner: Any, question: str, trace_text: str) -> str:
+    """Two or three sentences on what the flow does; the cited hops are not the model's to write."""
+    from mimir.llm.base import GenerationOptions, LLMMessage, ModelError
+
+    prompt = (
+        "Below is a trace extracted from the code. In two or three plain sentences, say what this "
+        "feature does from the first request to completion. Do not list files or line numbers, do "
+        "not invent anything not in the trace; a cited list follows your sentences.\n\n"
+        f"Question: {question}\n\nTrace:\n{trace_text[:6000]}"
+    )
+    try:
+        response = await runner.router.chat(
+            [LLMMessage.user(prompt)], task_class="fast_command",
+            options=GenerationOptions(tools=[], temperature=0.0, max_tokens=220), purpose="facade:overview")
+    except ModelError as exc:
+        log.warning("facade_overview_failed", error=exc.message)
+        return ""
+    text = (response.content or "").strip()
+    return text if len(text) < 1200 else ""
 
 
 async def _conclude(agent: Any, runner: Any) -> str:
