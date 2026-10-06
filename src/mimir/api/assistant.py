@@ -44,6 +44,7 @@ class Turn:
     repo: str | None = None
     evidence: list[str] = field(default_factory=list)
     verdict: list[dict[str, Any]] = field(default_factory=list)
+    plan: str = ""
     cited: list[str] = field(default_factory=list)
     steps: int = 0
 
@@ -172,6 +173,23 @@ async def gather(turn: Turn, runner: Any, settings: Any) -> AsyncIterator[Part]:
                     f"- {m.get('path') or m.get('file')}:{m.get('line')}: {str(m.get('text') or '')[:150]}" for m in hits))
             else:
                 turn.evidence.append(f"`{name}`: no match in the repository code (searched: {', '.join(found.get('tried', [])[:4])}).")
+    if turn.intent == "scope" and phrase:
+        # Follow the patterns the repository already uses for the same subject.
+        yield Part("progress", f"Reading how `{phrase}` is wired today")
+        res = await _tool(runner, "trace_feature", {"feature": phrase, "repo": turn.repo})
+        turn.steps += 1
+        if res is not None and res.ok and (res.data["routes"] or res.data["states"] or res.data["consumers"]):
+            turn.evidence.append("Existing implementation of the same subject:\n" + answer_markdown(res.data))
+            action = _action(phrase, res.data)
+            if action:
+                from mimir.tools.repo import get_repository_directory
+                from mimir.tools.trace import plan_change, plan_markdown, repo_shape
+
+                yield Part("progress", f"Planning `{action}` by mirroring what exists")
+                root = get_repository_directory(runner.settings).resolve(turn.repo).root
+                plan = plan_change(root, res.data, action, repo_shape(root, phrase.split()))
+                if plan["steps"]:
+                    turn.plan = plan_markdown(plan)
     if turn.intent == "scope":
         from mimir.tools.repo import get_repository_directory
         from mimir.tools.trace import repo_shape, shape_markdown
@@ -194,6 +212,16 @@ async def gather(turn: Turn, runner: Any, settings: Any) -> AsyncIterator[Part]:
     if turn.intent == "live":
         async for part in _live(turn, runner, settings):
             yield part
+
+
+def _action(phrase: str, trace_data: dict[str, Any]) -> str | None:
+    """The verb being added to something that exists: 'cancel currency migration' -> 'cancel'."""
+    words = phrase.lower().split()
+    if len(words) < 2:
+        return None
+    routes = " ".join(r["text"].lower() for r in trace_data.get("routes", []))
+    first = words[0]
+    return first if first not in routes and first != trace_data.get("term", "").lower() else None
 
 
 def _gap_names(turn: Turn) -> list[str]:
@@ -222,7 +250,9 @@ async def _live(turn: Turn, runner: Any, settings: Any) -> AsyncIterator[Part]:
     )
     async for event in agent.run(turn.question):
         if event.type is AgentEventType.TOOL_START:
-            yield Part("progress", f"{_label(event.tool)}")
+            target = ", ".join(str(v) for k, v in (event.arguments or {}).items()
+                               if k in ("name_contains", "pod", "name", "context", "namespace", "environment") and v)
+            yield Part("progress", _label(event.tool) + (f" ({target})" if target else ""))
         elif event.type is AgentEventType.TOOL_END and event.result is not None:
             turn.steps += 1
             head = (event.result.summary or "").strip().splitlines()
@@ -250,7 +280,11 @@ Rules:
   exactly as it appears there. Never invent a file, function, route or number.
 - If the evidence does not settle something, say so in one line instead of guessing.
 - An implementation check table in the evidence is computed from the code and is authoritative:
-  "implemented" means production code does it, whatever tests or mocks say.
+  "implemented" means production code does it, whatever tests or mocks say. It is shown to the
+  operator above your answer, so do not restate it; give the conclusion and what it means.
+- For a change plan, follow the patterns the evidence shows (how routes are registered, how
+  handlers and workers are named and structured, the next migration number). List the changes
+  file by file. Write code only if asked.
 - Match the size the conversation asks for. A request to shorten means shorten.
 - When asked to draft a reply, write only the reply, ready to paste.
 - Plain language. No preamble, no restating the question.
@@ -278,14 +312,24 @@ def _strip_trail(text: str) -> str:
     return re.sub(r"^\*Worked for [^\n]*\n+", "", text)
 
 
-async def answer(turn: Turn, runner: Any) -> str:
+def _no_code(text: str, question: str) -> str:
+    """Code blocks out of a plan unless the operator asked for code."""
+    if re.search(r"\b(code|snippet|example|write it|implement it)\b", question, re.I):
+        return text
+    return re.sub(r"```.*?```\n?", "", text, flags=re.S).strip()
+
+
+async def answer(turn: Turn, runner: Any, *, brief: bool = False) -> str:
     from mimir.llm.base import GenerationOptions, LLMMessage, ModelError
 
     msgs = [LLMMessage.system(SYSTEM)]
     for role, text in turn.history:
         msgs.append(LLMMessage.user(text) if role == "user" else LLMMessage.assistant(text))
     evidence = "\n\n".join(turn.evidence) or "(no tools were needed for this message)"
-    msgs.append(LLMMessage.user(f"{turn.question}\n\nEVIDENCE (kind of question: {turn.intent}):\n{evidence[:12000]}"))
+    ask = (f"{turn.question}\n\nThe computed plan below will be shown under your text. In three to five "
+           f"sentences, say what the change does and the one or two things most likely to go wrong. No code, "
+           f"no file list.") if brief else turn.question
+    msgs.append(LLMMessage.user(f"{ask}\n\nEVIDENCE (kind of question: {turn.intent}):\n{evidence[:12000]}"))
     try:
         response = await runner.router.chat(msgs, task_class="fast_command",
                                             options=GenerationOptions(tools=[], temperature=0.0, max_tokens=1400),
@@ -328,6 +372,11 @@ async def respond(messages: list[Any], runner: Any, settings: Any) -> AsyncItera
         yield Part("progress", "Writing a short overview")
         overview = await _overview(turn, runner)
         text = (overview + "\n\n" if overview else "") + "\n\n".join(turn.evidence)
+    elif turn.intent == "scope" and turn.plan:
+        yield Part("progress", "Writing a short summary of the plan")
+        turn.evidence.append(turn.plan)
+        summary = _no_code(check(turn, await answer(turn, runner, brief=True)), turn.question)
+        text = summary + "\n\n" + turn.plan
     elif turn.intent == "gap" and turn.verdict:
         from mimir.tools.trace import gap_markdown
 
@@ -336,6 +385,8 @@ async def respond(messages: list[Any], runner: Any, settings: Any) -> AsyncItera
     else:
         yield Part("progress", "Writing the answer")
         text = check(turn, await answer(turn, runner))
+        if turn.intent == "scope":
+            text = _no_code(text, turn.question)
     elapsed = time.time() - started
     yield Part("answer", f"*Worked for {elapsed:.0f}s*\n\n{text}")
 

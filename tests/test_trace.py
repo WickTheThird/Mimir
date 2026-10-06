@@ -110,3 +110,28 @@ def test_a_mock_that_panics_does_not_make_real_code_unimplemented(tmp_path):
     (v1, v2) = gap_verdict(root, ["set_payment_method_migration_intent", "pause_migration"])
     assert v1["status"] == "implemented" and v1["sites"][0]["function"] == "StartMigration" and v1["tests"] == 1
     assert v2["status"] == "absent"
+
+
+def test_a_plan_mirrors_the_existing_route_storage_interface_doubles_and_schema(tmp_path):
+    from mimir.tools.trace import plan_change, plan_markdown, repo_shape
+
+    root = tmp_path / "svc"
+    files = {
+        "internal/http/server.go": 'package http\n\nfunc r() {\n\tmux.Handle(pat.Post("/private/v2/jobs"), s.postJobPrivate())\n\tmux.Handle(pat.Get("/private/v2/jobs/:id"), s.getJobPrivate())\n}\n',
+        "internal/http/jobs.go": 'package http\n\nfunc (s *Server) postJobPrivate() {\n\twritePublicError(w)\n\ts.db.CreateJob(j)\n}\n\nfunc (s *Server) getJobPrivate() {\n\twritePublicError(w)\n\ts.db.FetchJob(id)\n}\n',
+        "internal/db/interface.go": 'package db\n\ntype DBStorage interface {\n\tCreateJob(j Job) error\n\tFetchJob(id string) (Job, error)\n\tSaveJob(j Job) error\n}\n',
+        "internal/db/storage.go": 'package db\n\nfunc (st *Storage) CreateJob(j Job) error { return nil }\nfunc (st *Storage) FetchJob(id string) (Job, error) { return Job{}, nil }\nfunc (st *Storage) SaveJob(j Job) error { return nil }\n',
+        "internal/fsm/job_test.go": 'package fsm\n\nfunc (m *fakeDB) SaveJob(j Job) error { return nil }\n',
+        "internal/fsm/job.go": 'package fsm\n\ntype JobCoordinator struct{}\n\nfunc (c *JobCoordinator) step(j Job) {\n\tswitch j.Status {\n\tcase "QUEUED":\n\t\tc.db.SaveJob(j)\n\tcase "DONE":\n\t}\n}\n',
+        "migrations/000007_add_jobs.up.sql": "CREATE TABLE jobs (status TEXT CHECK (status IN ('QUEUED','DONE')));\nCREATE INDEX x ON jobs (id) WHERE status <> 'DONE';\n",
+    }
+    for rel, text in files.items():
+        p = root / rel; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(text)
+    t = trace(root, "cancel job")
+    md = plan_markdown(plan_change(root, t, "cancel", repo_shape(root, ["job"])))
+    assert "`POST /private/v2/jobs/:id/cancel` → `cancelJobPrivate`" in md
+    assert "shaped like `getJobPrivate`" in md and "writePublicError" in md
+    assert "add `CancelJob` to the interface" in md
+    assert "internal/fsm/job_test.go" in md and "test double" in md
+    assert "migrations/000008_allow_cancelled_status.up.sql" in md
+    assert "partial indexes" in md

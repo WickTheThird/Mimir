@@ -402,7 +402,7 @@ async def trace_feature(args: TraceInput, ctx: ToolContext) -> ToolResult:
     return ToolResult(ok=bool(t["term"]), tool="trace_feature", summary=render(t), data=t)
 
 
-__all__ = ["gap_verdict", "gap_markdown", "repo_shape", "shape_markdown", "code_tokens", "symbol_markdown", "trace_symbol", "answer_markdown", "choose_term", "key_terms", "render", "trace", "trace_feature"]
+__all__ = ["plan_change", "plan_markdown", "gap_verdict", "gap_markdown", "repo_shape", "shape_markdown", "code_tokens", "symbol_markdown", "trace_symbol", "answer_markdown", "choose_term", "key_terms", "render", "trace", "trace_feature"]
 
 
 class SymbolInput(BaseModel):
@@ -496,4 +496,81 @@ def gap_markdown(verdicts: list[dict[str, Any]]) -> str:
         where = "; ".join(f"`{s['function'] or '?'}` {s['path']}:{s['line']}" for s in v["sites"][:3]) or "-"
         tests = f" ({v['tests']} test reference{'s' if v['tests'] != 1 else ''})" if v["tests"] else ""
         out.append(f"| `{v['name']}` | {label[v['status']]}{tests} | {where} |")
+    return "\n".join(out)
+
+
+def _pascal(word: str) -> str:
+    return word[:1].upper() + word[1:]
+
+
+def plan_change(root: Path, t: dict[str, Any], action: str, shape: dict[str, Any]) -> dict[str, Any]:
+    """A file-by-file plan for adding `action` to something that already exists, mirroring it."""
+    plan: dict[str, Any] = {"action": action, "steps": [], "risks": []}
+    a = action.lower()
+    routes = [r for r in t["routes"] if r["handlers"]]
+    if routes:
+        r = routes[-1]
+        m = _VERB_PATH.search(r["text"])
+        base = (m.group(2) or m.group(4) or "").rstrip("/") if m else ""
+        item = base if ":id" in base else (base + "/:id" if base else "")
+        url = f"{item}/{a}" if item else ""
+        handler = re.sub(r"^(post|get|put|patch|delete|fetch|create|list)", a, r["handlers"][0], count=1)
+        handler = handler if handler != r["handlers"][0] else a + _pascal(r["handlers"][0])
+        hdef = next((h for h in t["handlers"] if h["name"] in r["handlers"]), None)
+        plan["steps"].append({"file": r["path"], "line": r["line"],
+                              "change": f"register `POST {url}` → `{handler}`, next to the existing `{r['text'][:70].strip()}`"})
+        if hdef:
+            plan["steps"].append({"file": hdef["path"], "line": hdef["line"],
+                                  "change": f"add `{handler}`, shaped like `{hdef['name']}`: same auth and error helpers "
+                                            f"({', '.join([c for c in hdef['calls'] if 'Error' in c or 'Auth' in c or 'auth' in c][:3]) or 'as it uses'})"})
+    entity = None
+    for c in t["calls"] + t["consumers"]:
+        mm = re.match(r"^(Create|Fetch|Save|Claim|Complete|Store|Update)(\w+)$", c["name"])
+        if mm:
+            entity = mm.group(2); break
+    if entity:
+        method = f"{_pascal(a)}{entity}"
+        sites = _rg(root, rf"func \([^)]*\) (Save|Fetch|Create){re.escape(entity)}\(", ignore_case=False, tests=True)
+        impl = sorted({p for p, _, _ in sites})
+        iface = _rg(root, rf"^\s+(Save|Fetch|Create){re.escape(entity)}\(", ignore_case=False, tests=False)
+        for f, line, text in sorted({(p, l, t) for p, l, t in iface}, key=lambda x: x[0])[:3]:
+            plan["steps"].append({"file": f, "line": line,
+                                  "change": f"add `{method}` to the interface beside `{text.split('(')[0].strip()}`"})
+        for f in impl:
+            kind = "test double" if _TEST_PATH.search(f) else "implementation"
+            plan["steps"].append({"file": f, "line": next(l for p, l, _ in sites if p == f),
+                                  "change": f"implement `{method}` ({kind}); the interface change breaks the build until every implementer has it"})
+    states = [st["state"] for st in t["states"]]
+    if states:
+        new = {"cancel": "CANCELLED", "pause": "PAUSED", "retry": "QUEUED", "resume": "QUEUED"}.get(a, a.upper() + "ED")
+        st_file = t["states"][0]["path"]
+        plan["steps"].append({"file": st_file, "line": t["states"][0]["line"],
+                              "change": f"teach the worker about `{new}` (today it knows {', '.join(f'`{x}`' for x in states)}): "
+                                        f"a {new.lower()} job must not be claimed or advanced"})
+        mig = shape.get("migrations") or {}
+        if mig:
+            latest = root / mig["dir"] / mig["latest"]
+            text = latest.read_text(errors="replace") if latest.is_file() else ""
+            for f in sorted((root / mig["dir"]).glob("*.up.sql"), reverse=True)[:6]:
+                body = f.read_text(errors="replace")
+                if any(s_ in body for s_ in states) and re.search(r"CHECK\s*\(\s*status\s+IN", body, re.I):
+                    plan["steps"].append({"file": f"{mig['dir']}/{mig['next_number']}_allow_{new.lower()}_status.up.sql", "line": 0,
+                                          "change": f"a new migration: `{f.name}` constrains status with CHECK (status IN ...), "
+                                                    f"so `{new}` is rejected by the database until the constraint is widened"})
+                    if re.search(r"WHERE status (IN|<>)", body):
+                        plan["risks"].append(f"`{f.name}` also has partial indexes filtered on status; decide whether `{new}` counts as active")
+                    break
+    tests = sorted({p for p, _, _ in _rg(root, re.escape(entity or a), ignore_case=False, tests=True) if _TEST_PATH.search(p)})[:4] if (entity or a) else []
+    if tests:
+        plan["steps"].append({"file": ", ".join(tests), "line": 0, "change": "extend the existing tests for the new route, storage method and state"})
+    return plan
+
+
+def plan_markdown(plan: dict[str, Any]) -> str:
+    out = [f"**Changes, file by file** (computed from how the code is wired today)", ""]
+    for i, st in enumerate(plan["steps"], 1):
+        where = f"{st['file']}:{st['line']}" if st["line"] else st["file"]
+        out.append(f"{i}. `{where}`: {st['change']}")
+    if plan["risks"]:
+        out += ["", "**Watch for**"] + [f"- {r}" for r in plan["risks"]]
     return "\n".join(out)
