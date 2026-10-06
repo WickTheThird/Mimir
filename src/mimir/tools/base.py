@@ -400,6 +400,7 @@ def load_all_tools() -> ToolRegistry:
         "mimir.tools.repo",
         "mimir.tools.code",
         "mimir.tools.repomap",
+        "mimir.tools.trace",
         "mimir.tools.kubernetes",
         "mimir.tools.sdm",
         "mimir.tools.database",

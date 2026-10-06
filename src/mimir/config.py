@@ -121,7 +121,7 @@ class ReposConfig(BaseModel):
             "**/venv/**",
             "**/dist/**",
             "**/build/**",
-            "**/__pycache__/**",
+            "**/__pycache__/**", "**/vendor/**", "**/.claude/**", "**/third_party/**",
             "**/*.min.js",
             "**/*.lock",
         ]

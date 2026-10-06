@@ -37,20 +37,22 @@ def _render_args(arguments: dict[str, Any]) -> str:
     return ", ".join(f"{k}={str(v)[:40]!r}" for k, v in list(shown.items())[:4])
 
 
-REPO_TOOLS: tuple[str, ...] = ("repository_map", "search_repository", "read_file_range", "locate_tests", "search_memory")
+REPO_TOOLS: tuple[str, ...] = ("trace_feature", "repository_map", "find_symbol", "find_references",
+                               "search_repository", "read_file_range", "locate_tests", "search_memory")
 CLUSTER_TOOLS: tuple[str, ...] = tuple(t for t in ASSISTANT_TOOLS if t not in REPO_TOOLS) + ("search_memory",)
 
 _REPO_CUES = re.compile(r"\b(repo|repository|repositories|codebase|source|file|files|code|module|function|class|"
                         r"defined|definition|implemented|implementation|set ?up|configured|config|where is|call site|caller)\b", re.I)
+_TRACE_CUES = re.compile(r"\b(trace|end to end|end-to-end|flow|how does .{0,40} work|walk me through|implemented|implementation)\b", re.I)
 _CLUSTER_CUES = re.compile(r"\b(pod|pods|namespace|cluster|context|deployment|deployments|logs?|restart|restarts|"
                            r"crashloop|oom|events?|rollout|kubectl|node|nodes|replica|replicas)\b", re.I)
 
 REPO_SYSTEM = """\
 You are MIMIR answering a question about a code repository, read-only.
-A repository search has already run and its results are in the request. Start
-from those files: read the relevant ranges with read_file_range, follow
-imports with repository_map, and name the files and lines that answer the
-question. Do not guess at file names; only name what a tool returned. If the
+A trace or a repository search has already run and its results are in the
+request. Start from those: read the ranges that matter with read_file_range,
+and name files and lines. For a trace, write it as ordered hops: entry route,
+handler, what it calls, where it is stored, what consumes it, its states. Do not guess at file names; only name what a tool returned. If the
 search found nothing, say what you searched for and suggest what the thing
 might be called instead. Never describe a cluster for a question about code.
 """
@@ -84,6 +86,20 @@ def pick_repo(text: str, runner: Any) -> str | None:
     return repos[0].name if len(repos) == 1 else None
 
 
+def repo_words(repo: str | None, runner: Any) -> tuple[str, ...]:
+    """The repository's own name and folder name, split into words; they match everything in it."""
+    words: list[str] = []
+    if repo:
+        words += re.findall(r"[A-Za-z0-9]+", repo)
+        try:
+            from mimir.tools.repo import get_repository_directory
+
+            words += re.findall(r"[A-Za-z0-9]+", get_repository_directory(runner.settings).resolve(repo).root.name)
+        except Exception:  # noqa: BLE001
+            pass
+    return tuple(dict.fromkeys(w.lower() for w in words))
+
+
 def search_phrase(text: str, *, exclude: tuple[str, ...] = ()) -> str:
     """The part of the request worth searching for: drop the asking words and repo names."""
     drop = {e.lower() for e in exclude}
@@ -111,7 +127,22 @@ async def run_agent(messages: list[Any], runner: Any, settings: Any) -> AsyncIte
         from mimir.mcp.server import search_code_impl
 
         repo = pick_repo(instruction, runner)
-        phrase = search_phrase(instruction, exclude=(repo,) if repo else ())
+        phrase = search_phrase(instruction, exclude=repo_words(repo, runner))
+        if phrase and _TRACE_CUES.search(instruction) and runner.registry.get("trace_feature") is not None:
+            res = await runner.registry.get("trace_feature").invoke({"feature": phrase, "repo": repo}, runner.tool_context(None))
+            if res.ok:
+                yield f"> trace_feature({phrase!r}, repo={repo!r})\n{res.summary}\n"
+                instruction = (f"{instruction}\n\nA deterministic trace already ran; every hop below is file:line "
+                               f"from the code. Write the end-to-end answer from it, reading a range only where "
+                               f"a hop needs explaining.\n{res.summary}")
+                agent = AgentLoop(
+                    router=runner.router, registry=runner.registry, tool_context=runner.tool_context(None),
+                    settings=settings, tools=available(("read_file_range", "find_symbol", "find_references")),
+                    system=REPO_SYSTEM, task_class="fast_command", max_steps=6,
+                )
+                async for line in _drive(agent, instruction, runner, settings):
+                    yield line
+                return
         found = await search_code_impl(phrase, repo) if phrase else {"files": [], "matches": [], "tried": []}
         yield f"> search_code({phrase!r}, repo={repo!r}) -> {len(found.get('files', []))} file(s)\n"
         for f in found.get("files", [])[:12]:
@@ -135,6 +166,13 @@ async def run_agent(messages: list[Any], runner: Any, settings: Any) -> AsyncIte
             tools=available(CLUSTER_TOOLS if surface == "cluster" else ASSISTANT_TOOLS),
             task_class="fast_command", max_steps=settings.api.facade_agent_max_steps,
         )
+    async for line in _drive(agent, instruction, runner, settings):
+        yield line
+
+
+async def _drive(agent: Any, instruction: str, runner: Any, settings: Any) -> AsyncIterator[str]:
+    from mimir.agent.events import AgentEventType
+
     budget = settings.api.facade_agent_timeout_s
     started = time.time()
     pending: list[str] = []
@@ -185,4 +223,4 @@ async def _conclude(agent: Any, runner: Any) -> str:
     return (response.content or "").strip()
 
 
-__all__ = ["ASSISTANT_TOOLS", "CLUSTER_TOOLS", "REPO_TOOLS", "classify_surface", "instruction_from", "pick_repo", "run_agent", "search_phrase"]
+__all__ = ["repo_words", "ASSISTANT_TOOLS", "CLUSTER_TOOLS", "REPO_TOOLS", "classify_surface", "instruction_from", "pick_repo", "run_agent", "search_phrase"]
