@@ -934,3 +934,35 @@ class TestAToolThatKeepsFailingIsWithdrawn:
         agent.failures["edit_worktree_file"] = 5
         asyncio.run(_drain(agent, "next"))
         assert agent.failures == {}
+
+
+class TestReadOnlyRepeats:
+    """A read-only repeat is stopped after one step and never re-fed in full."""
+
+    def test_the_same_file_read_with_different_arguments_is_a_repeat(self):
+        from mimir.agent.loop import IDEMPOTENT_TOOLS
+        assert "read_file_range" in IDEMPOTENT_TOOLS and "run_worktree_tests" not in IDEMPOTENT_TOOLS
+
+    @pytest.mark.asyncio
+    async def test_a_reread_stops_the_loop_after_one_repeat_step(self, tmp_path, monkeypatch):
+        from mimir.agent.events import AgentEventType
+        from mimir.llm.base import ToolCall
+        from mimir.tools.base import ToolContext, ToolResult
+
+        f = tmp_path / "state.go"; f.write_text("package coexistence\n")
+        read = lambda cid, **a: ToolCall(id=cid, name="read_file_range", arguments={"path": "state.go", **a})
+        agent, model, router = _agent([
+            ("", [read("c1")]),
+            ("", [read("c2", start_line=1, end_line=1)]),
+            ("", [read("c3")]),
+            ("should not be reached", []),
+        ], root=str(tmp_path))
+
+        async def fake_invoke(name, args, ctx):
+            return ToolResult(ok=True, tool=name, summary="target:state.go lines 1-1 of 1", data={"text": "package coexistence"})
+        monkeypatch.setattr(agent.registry, "invoke", fake_invoke)
+        events = await _drain(agent)
+        assert agent.outcome.stopped == "repeating"
+        assert sum(1 for e in events if e.type is AgentEventType.TOOL_START) == 2
+        fed = [m.content for m in agent.messages if getattr(m, "role", "") == "tool"]
+        assert "already above" in fed[-1]

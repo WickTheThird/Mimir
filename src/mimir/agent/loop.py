@@ -79,6 +79,15 @@ class TurnOutcome:
     """Calls that repeated one already made this turn, exactly."""
 
 
+IDEMPOTENT_TOOLS: frozenset[str] = frozenset({
+    "read_file_range", "search_repository", "repository_map", "locate_tests",
+    "lsp_definition", "lsp_references", "lsp_diagnostics", "search_memory",
+    "find_workloads", "list_workloads", "get_current_context", "list_namespaces",
+    "describe_resource",
+})
+"""Tools whose result cannot change within one turn; repeating one is never progress."""
+
+
 class AgentLoop:
     """Call the model, run what it asks for, feed the result back, repeat."""
 
@@ -122,6 +131,7 @@ class AgentLoop:
         """Every tool result of this turn, as the ground truth for grounding."""
 
         self.seen: dict[str, str] = {}
+        self.seen_results: set[tuple[str, str]] = set()
         """Calls already made this turn, so a repeat is recognisable."""
 
         self.failures: dict[str, int] = {}
@@ -185,6 +195,7 @@ class AgentLoop:
         self.instruction = instruction
         self.observed = []
         self.seen: dict[str, str] = {}
+        self.seen_results: set[tuple[str, str]] = set()
         self.failures = {}
         self.note_instruction(instruction)
         options = GenerationOptions(tools=self.schemas(), temperature=0.0)
@@ -256,7 +267,9 @@ class AgentLoop:
             # A model that runs the same call again has stopped making
             if repeated and repeated == len(calls):
                 self.outcome.repeats += 1
-                if self.outcome.repeats >= 3:
+                # Re-reading cannot produce anything new; one all-repeat step is enough.
+                limit = 1 if all(c.name in IDEMPOTENT_TOOLS for c in calls) else 3
+                if self.outcome.repeats >= limit:
                     self.outcome.stopped = "repeating"
                     answer = self.observed[-1] if self.observed else ""
                     self.outcome.grounding = self._grounding(answer)
@@ -290,7 +303,14 @@ class AgentLoop:
         repeat = signature in self.seen
         result = await self.registry.invoke(call.name, arguments, self.ctx)
         elapsed = time.time() - started
+        # Same tool, same result is a repeat even when the arguments were spelled differently.
+        read_only = call.name in IDEMPOTENT_TOOLS
+        result_key = (call.name, result.summary or "")
+        if read_only and result.ok and result_key in self.seen_results:
+            repeat = True
         self.seen[signature] = result.summary or ""
+        if result.ok:
+            self.seen_results.add(result_key)
 
         self.outcome.tool_calls += 1
         if result.ok:
@@ -302,12 +322,17 @@ class AgentLoop:
         if call.name == "run_worktree_tests" and result.ok:
             self.outcome.tests_run += 1
 
-        rendered = self._render(result)
-        if repeat:
-            rendered += (
-                "\n[this is the same call you already made, with the same result. "
-                "Do something different, or finish.]"
-            )
+        if repeat and read_only:
+            # Do not feed the same content twice; it is already in the conversation.
+            rendered = (f"[{call.name} returned exactly what it returned before: {result.summary}. "
+                        "That content is already above. Answer from it now, or read something else.]")
+        else:
+            rendered = self._render(result)
+            if repeat:
+                rendered += (
+                    "\n[this is the same call you already made, with the same result. "
+                    "Do something different, or finish.]"
+                )
         # The model sees the trimmed render; the grounding check sees
         self.observed.append(f"{rendered}\n{_all_text(result)}")
         self.messages.append(
