@@ -270,6 +270,10 @@ class ApiConfig(BaseModel):
     """When true, /v1/chat/completions is answered by MIMIR's own read-only tool loop."""
     facade_agent_timeout_s: float = 240.0
     facade_agent_max_steps: int = 12
+    facade_web: bool = True
+    """Gap and scope questions may look up external documentation."""
+    facade_progress: Literal["reasoning", "content", "off"] = "reasoning"
+    """Where progress goes: reasoning_content (shown by clients that support it), inline, or nowhere."""
     facade_rate_limit_per_minute: int = 120
     expose_privileged_routes_publicly: bool = False
 

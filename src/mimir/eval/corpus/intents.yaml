@@ -1,0 +1,27 @@
+# Real operator messages, labelled with what kind of question each is. history: whether an
+# earlier assistant answer exists in the conversation.
+cases:
+  - {text: "i would like to see where can i find where we are receving the flag FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING inside this service", history: false, intent: locate}
+  - {text: "can we check in what files is whatsapp coexistence setup? (readonly search through the repo)", history: false, intent: locate}
+  - {text: "where is embedded signup implemented in messaging whatsapp? trace it end to end", history: false, intent: trace}
+  - {text: "so what exactly is there for us todo?", history: false, intent: scope}
+  - {text: "wasnt this the question at the end of the thread? These are the questions 1. Executor decision: does Telnyx run the currency migration ... Maybe you can help us with 1 above.", history: true, intent: draft}
+  - {text: "are you 100% sure?", history: true, intent: revise}
+  - {text: "so then what exactly should i reply? you say that its a code gap?", history: true, intent: revise}
+  - {text: "ok make the reply as small as possible", history: true, intent: revise}
+  - {text: "well he can make a one off backfill while i make the implementation no?", history: true, intent: revise}
+  - {text: "Or we could run it and implement it quickly no?", history: true, intent: revise}
+  - {text: "then what should the end reply for this be?", history: true, intent: draft}
+  - {text: "scope it out please for me in terms of changes", history: true, intent: scope}
+  - {text: "do we implement set_payment_method_migration_intent?", history: false, intent: gap}
+  - {text: "is the currency migration supported in our api?", history: false, intent: gap}
+  - {text: "why is messaging-router restarting in messaging-squad on fr5", history: false, intent: live}
+  - {text: "show me the messaging-settings prod pods", history: false, intent: live}
+  - {text: "last 100 log lines of the whatsapp deployment in prod", history: false, intent: live}
+  - {text: "what does signupTypeForEvent do", history: false, intent: explain}
+  - {text: "why does the signup fsm go straight to ADD_WABA_TO_DB sometimes", history: false, intent: explain}
+  - {text: "how does the coexistence sync work", history: false, intent: trace}
+  - {text: "what would it take to add a currency migration endpoint", history: false, intent: scope}
+  - {text: "draft a reply to Juan saying we will run it as a one off", history: false, intent: draft}
+  - {text: "thanks", history: true, intent: chat}
+  - {text: "who calls StoreSignupEvent", history: false, intent: locate}

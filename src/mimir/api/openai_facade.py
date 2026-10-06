@@ -215,7 +215,7 @@ async def chat_completions(
 
 
 async def _agent_completion(payload: Any, settings: Any, caller: Any) -> Any:
-    from mimir.api.agent_mode import run_agent
+    from mimir.api.assistant import respond
     from mimir.mcp.server import _get_runner
 
     runner = _get_runner()
@@ -223,6 +223,7 @@ async def _agent_completion(payload: Any, settings: Any, caller: Any) -> Any:
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
     model_name = settings.models.public_alias
+    mode = settings.api.facade_progress
     log.info("facade_agent_request", origin=caller.origin, stream=payload.stream, messages=len(messages))
 
     def frame(delta: dict[str, Any], finish: str | None = None) -> dict[str, str]:
@@ -230,22 +231,42 @@ async def _agent_completion(payload: Any, settings: Any, caller: Any) -> Any:
                                     "created": created, "model": model_name,
                                     "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})}
 
+    def progress_delta(text: str) -> dict[str, Any] | None:
+        if mode == "reasoning":
+            return {"reasoning_content": f"{text}\n"}
+        if mode == "content":
+            return {"content": f"> {text}\n"}
+        return None
+
     if payload.stream:
         async def events() -> AsyncIterator[dict[str, str]]:
             yield frame({"role": "assistant", "content": ""})
-            async for text in run_agent(messages, runner, settings):
-                yield frame({"content": text})
+            async for part in respond(messages, runner, settings):
+                if part.kind == "progress":
+                    delta = progress_delta(part.text)
+                    if delta:
+                        yield frame(delta)
+                else:
+                    yield frame({"content": ("\n" if mode == "content" else "") + part.text})
             yield frame({}, finish="stop")
             yield {"data": "[DONE]"}
         return EventSourceResponse(events(), ping=15)
 
-    parts: list[str] = []
-    async for text in run_agent(messages, runner, settings):
-        parts.append(text)
-    content = "".join(parts).strip()
+    progress: list[str] = []
+    content = ""
+    async for part in respond(messages, runner, settings):
+        if part.kind == "progress":
+            progress.append(part.text)
+        else:
+            content = part.text
+    message: dict[str, Any] = {"role": "assistant", "content": content}
+    if mode == "reasoning" and progress:
+        message["reasoning_content"] = "\n".join(progress)
+    elif mode == "content" and progress:
+        message["content"] = "\n".join(f"> {p}" for p in progress) + "\n\n" + content
     return {
         "id": completion_id, "object": "chat.completion", "created": created, "model": model_name,
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
 

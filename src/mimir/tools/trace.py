@@ -402,7 +402,7 @@ async def trace_feature(args: TraceInput, ctx: ToolContext) -> ToolResult:
     return ToolResult(ok=bool(t["term"]), tool="trace_feature", summary=render(t), data=t)
 
 
-__all__ = ["code_tokens", "symbol_markdown", "trace_symbol", "answer_markdown", "choose_term", "key_terms", "render", "trace", "trace_feature"]
+__all__ = ["repo_shape", "shape_markdown", "code_tokens", "symbol_markdown", "trace_symbol", "answer_markdown", "choose_term", "key_terms", "render", "trace", "trace_feature"]
 
 
 class SymbolInput(BaseModel):
@@ -426,3 +426,42 @@ async def trace_symbol_tool(args: SymbolInput, ctx: ToolContext) -> ToolResult:
     root = await _repo_root(ctx, args.repo)
     r = trace_symbol(root, args.symbol, tests=args.include_tests)
     return ToolResult(ok=bool(r["literal"] or r["uses"]), tool="trace_symbol", summary=symbol_markdown(r), data=r)
+
+
+def repo_shape(root: Path, nouns: list[str]) -> dict[str, Any]:
+    """Facts a change plan should rest on: where clients, routes, workers and migrations live."""
+    shape: dict[str, Any] = {"migrations": {}, "packages": [], "routes_file": "", "workers": []}
+    migs = sorted(p for p in root.rglob("*") if p.is_file() and "migrations" in p.parts
+                  and not any(x in p.parts for x in EXCLUDE) and re.match(r"^\d{3,}", p.name))
+    if migs:
+        last = migs[-1]
+        digits = re.match(r"^(\d+)", last.name).group(1)
+        shape["migrations"] = {"dir": str(last.parent.relative_to(root)), "latest": last.name,
+                               "next_number": str(int(digits) + 1).zfill(len(digits))}
+    for noun in nouns:
+        for d in sorted({p.parent for p in root.rglob("*.go")} | {p.parent for p in root.rglob("*.py")}):
+            rel = str(d.relative_to(root))
+            if any(x in d.parts for x in EXCLUDE):
+                continue
+            if noun.lower() in rel.lower() and rel not in shape["packages"]:
+                shape["packages"].append(rel)
+    routes = _rg(root, r"(Handle(Func)?\(|\.(Post|Get)\(|@(app|router)\.(get|post))", ignore_case=False, max_count=200)
+    if routes:
+        shape["routes_file"] = Counter(p for p, _, _ in routes).most_common(1)[0][0]
+    for path, line, text in _rg(root, r"(type \w*(FSM|Worker|Coordinator|Consumer|Poller)\b|class \w*(Worker|Consumer|Poller))", ignore_case=False, max_count=20):
+        shape["workers"].append({"path": path, "line": line, "text": text[:120]})
+    return shape
+
+
+def shape_markdown(shape: dict[str, Any]) -> str:
+    lines = []
+    m = shape.get("migrations") or {}
+    if m:
+        lines.append(f"- migrations live in `{m['dir']}`, latest `{m['latest']}`, next number `{m['next_number']}`")
+    if shape.get("routes_file"):
+        lines.append(f"- routes are registered in `{shape['routes_file']}`")
+    if shape.get("packages"):
+        lines.append("- related packages: " + ", ".join(f"`{p}`" for p in shape["packages"][:8]))
+    for w in shape.get("workers", [])[:5]:
+        lines.append(f"- background worker pattern: `{w['text'][:80]}` ({w['path']}:{w['line']})")
+    return "\n".join(lines)

@@ -1,0 +1,20 @@
+# Held out: written after the rules, never used to tune them.
+cases:
+  - {text: "which handler deals with the signup callback", history: false, intent: locate}
+  - {text: "can you point me to where webhook subscriptions are made", history: false, intent: locate}
+  - {text: "walk me through what happens after a phone number is registered", history: false, intent: trace}
+  - {text: "how does a signup event move through the fsm", history: false, intent: trace}
+  - {text: "what's the point of saveNextSignupStep", history: false, intent: explain}
+  - {text: "why would ASSIGNED_USERS fail", history: false, intent: explain}
+  - {text: "do we handle the history_declined state anywhere", history: false, intent: gap}
+  - {text: "is there support for pausing a currency migration", history: false, intent: gap}
+  - {text: "what would we need to change to support EUR credit lines", history: false, intent: scope}
+  - {text: "give me a plan for adding a resume endpoint", history: false, intent: scope}
+  - {text: "are the whatsapp pods healthy in ch1 prod", history: false, intent: live}
+  - {text: "grab the events for messaging-settings-data on fr5", history: false, intent: live}
+  - {text: "write a slack message telling barry the migration is done", history: false, intent: draft}
+  - {text: "how should i answer juan on this", history: true, intent: draft}
+  - {text: "shorter please", history: true, intent: revise}
+  - {text: "hmm are you certain about the credit line part", history: true, intent: revise}
+  - {text: "can you double check that", history: true, intent: revise}
+  - {text: "nice one", history: true, intent: chat}
