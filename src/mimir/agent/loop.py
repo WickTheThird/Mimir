@@ -83,7 +83,8 @@ IDEMPOTENT_TOOLS: frozenset[str] = frozenset({
     "read_file_range", "search_repository", "repository_map", "locate_tests",
     "lsp_definition", "lsp_references", "lsp_diagnostics", "search_memory",
     "find_workloads", "list_workloads", "get_current_context", "list_namespaces",
-    "describe_resource",
+    "describe_resource", "summarise_pod_health", "get_events", "get_logs", "get_resource_usage",
+    "get_rollout_status", "trace_feature", "trace_symbol",
 })
 """Tools whose result cannot change within one turn; repeating one is never progress."""
 

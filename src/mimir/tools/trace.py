@@ -533,7 +533,10 @@ def plan_change(root: Path, t: dict[str, Any], action: str, shape: dict[str, Any
         sites = _rg(root, rf"func \([^)]*\) (Save|Fetch|Create){re.escape(entity)}\(", ignore_case=False, tests=True)
         impl = sorted({p for p, _, _ in sites})
         iface = _rg(root, rf"^\s+(Save|Fetch|Create){re.escape(entity)}\(", ignore_case=False, tests=False)
-        for f, line, text in sorted({(p, l, t) for p, l, t in iface}, key=lambda x: x[0])[:3]:
+        first_per_file = {}
+        for f, line, text in iface:
+            first_per_file.setdefault(f, (line, text))
+        for f, (line, text) in sorted(first_per_file.items())[:4]:
             plan["steps"].append({"file": f, "line": line,
                                   "change": f"add `{method}` to the interface beside `{text.split('(')[0].strip()}`"})
         for f in impl:

@@ -131,7 +131,7 @@ def test_a_plan_mirrors_the_existing_route_storage_interface_doubles_and_schema(
     md = plan_markdown(plan_change(root, t, "cancel", repo_shape(root, ["job"])))
     assert "`POST /private/v2/jobs/:id/cancel` → `cancelJobPrivate`" in md
     assert "shaped like `getJobPrivate`" in md and "writePublicError" in md
-    assert "add `CancelJob` to the interface" in md
+    assert md.count("add `CancelJob` to the interface") == 1   # once per interface file, not per method
     assert "internal/fsm/job_test.go" in md and "test double" in md
     assert "migrations/000008_allow_cancelled_status.up.sql" in md
     assert "partial indexes" in md
