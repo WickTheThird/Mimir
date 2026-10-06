@@ -191,8 +191,16 @@ def trace(root: Path, feature: str, *, tests: bool = False) -> dict[str, Any]:
                 result["wiring"].append({"name": c["name"], "path": path, "line": line, "text": text[:160]})
     # 6. state machine: string cases in consumer files, in source order
     for path in dict.fromkeys(c["path"] for c in result["consumers"]):
-        for line, text in [(ln, t) for p, ln, t in _rg(root, r'case\s+"[A-Z][A-Z0-9_]+"\s*:', ignore_case=False, tests=tests) if p == path]:
-            result["states"].append({"path": path, "line": line, "state": re.search(r'"([A-Z0-9_]+)"', text).group(1)})
+        lines = _lines(root, path)
+        cases = [(ln, t) for p, ln, t in _rg(root, r'case\s+"[A-Z][A-Z0-9_]+"\s*:', ignore_case=False, tests=tests) if p == path]
+        for i, (line, text) in enumerate(cases):
+            end = cases[i + 1][0] - 1 if i + 1 < len(cases) else min(len(lines), line + 80)
+            block = "\n".join(lines[line:end])
+            calls = [c for c in dict.fromkeys(re.findall(r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", block))
+                     if c not in _STOP and len(c) > 3][:6]
+            goes_to = re.findall(r'State\s*=\s*"([A-Z0-9_]+)"', block)
+            result["states"].append({"path": path, "line": line, "state": re.search(r'"([A-Z0-9_]+)"', text).group(1),
+                                     "calls": calls, "next": list(dict.fromkeys(goes_to))})
     return result
 
 
@@ -217,7 +225,8 @@ def render(t: dict[str, Any]) -> str:
         lines += [f"  {w['name']}  {w['path']}:{w['line']}  {w['text'][:100]}" for w in t["wiring"][:6]]
     if t["states"]:
         lines.append("STATES (in source order):")
-        lines += [f"  {s['state']}  {s['path']}:{s['line']}" for s in t["states"][:20]]
+        lines += [f"  {s['state']}  {s['path']}:{s['line']}  calls {', '.join(s.get('calls', [])) or '-'}"
+                  + (f"  -> {', '.join(s['next'])}" if s.get("next") else "") for s in t["states"][:20]]
     return "\n".join(lines)
 
 
