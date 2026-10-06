@@ -1275,7 +1275,7 @@ async def find_workloads(args: FindWorkloadsArgs, ctx: ToolContext) -> ToolResul
     )
     if not contexts:
         raise ToolError(
-            f"no kubectl context matches {args.context_contains!r}",
+            f"no kubectl context matches context={args.context_contains!r} environment={args.environment!r} regions={args.regions!r}",
             code="not_found",
         )
 
@@ -1387,7 +1387,9 @@ async def _matching_contexts(
     """Contexts containing every fragment, filtered by environment suffix and region, sorted."""
     fragments = [f for f in (fragment or "").lower().replace(",", " ").split() if f]
     environment = (environment or getattr(ctx.environment, "environment", None) or "").lower()
-    environment = {"production": "prod", "development": "dev"}.get(environment, environment)
+    environment = {"production": "prod", "development": "dev", "stage": "staging"}.get(environment, environment)
+    if environment not in ("dev", "prod", "staging", "qa", "uat", "test", "sandbox"):
+        environment = ""  # a model filling the field with anything else is ignored, not obeyed
     regions = [r.lower() for r in (regions or []) if r]
     if not fragments and not environment and not regions:
         return [await _resolve_context(ctx, None)]

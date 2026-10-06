@@ -282,6 +282,108 @@ def answer_markdown(t: dict[str, Any]) -> str:
     return "\n".join(out).rstrip()
 
 
+_FUNC_START = re.compile(r"^\s*(func\s+(\([^)]*\)\s*)?(\w+)|def\s+(\w+)|(?:export\s+)?(?:async\s+)?function\s+(\w+)|(?:public|private|protected)[^(=]*\s(\w+)\s*\()")
+_COMPARE = re.compile(r"\bcase\b|==|!=|\bswitch\b|\bif\b|\bmatch\b|\bwhen\b|\bin\s*\(")
+CODE_TOKEN = re.compile(r"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,}\b|\b[a-z]+(?:[A-Z][a-z0-9]+){2,}\b|\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+){2,}\b|\b[a-z][a-z0-9]*(?:_[a-z0-9]+){2,}\b|`([^`]{3,80})`")
+
+
+def code_tokens(text: str) -> list[str]:
+    """Identifiers and literals the operator typed: SCREAMING_SNAKE, camelCase, snake_case, `backticked`."""
+    out = []
+    for m in CODE_TOKEN.finditer(text):
+        out.append(m.group(1) or m.group(0))
+    return list(dict.fromkeys(out))
+
+
+def _enclosing(root: Path, path: str, line: int) -> tuple[str, int] | None:
+    lines = _lines(root, path)
+    for i in range(min(line, len(lines)) - 1, -1, -1):
+        m = _FUNC_START.match(lines[i])
+        if m:
+            name = next((g for g in (m.group(3), m.group(4), m.group(5), m.group(6)) if g), None)
+            if name:
+                return name, i + 1
+    return None
+
+
+def trace_symbol(root: Path, token: str, *, tests: bool = False) -> dict[str, Any]:
+    """Where a literal or identifier is defined, bound, compared, and how requests reach it."""
+    r: dict[str, Any] = {"token": token, "literal": [], "bindings": [], "uses": [], "callers": [], "routes": []}
+    for path, line, text in _rg(root, re.escape(token), ignore_case=False, tests=tests):
+        r["literal"].append({"path": path, "line": line, "text": text[:180]})
+        m = re.match(r"^\s*(?:const\s+|var\s+|let\s+|final\s+|static\s+)?([A-Za-z_]\w*)\s*(?::\s*\w+\s*)?:?=\s*[\"'`]" + re.escape(token), text)
+        if m:
+            r["bindings"].append({"name": m.group(1), "path": path, "line": line})
+    names = [b["name"] for b in r["bindings"]] or [token]
+    seen_funcs: dict[str, tuple[str, int]] = {}
+    for name in names:
+        for path, line, text in _rg(root, rf"\b{re.escape(name)}\b", ignore_case=False, tests=tests):
+            if any(b["path"] == path and b["line"] == line for b in r["bindings"]):
+                continue
+            enc = _enclosing(root, path, line)
+            kind = "compared" if _COMPARE.search(text) else "used"
+            r["uses"].append({"name": name, "path": path, "line": line, "text": text[:180], "kind": kind,
+                              "function": enc[0] if enc else "", "function_line": enc[1] if enc else 0})
+            if enc and enc[0] != name:
+                seen_funcs[enc[0]] = (path, enc[1])
+    # Who calls the functions that read it, one level up, and the routes that reach those callers.
+    for func, (fpath, fline) in list(seen_funcs.items())[:6]:
+        for path, line, text in _rg(root, rf"\b{re.escape(func)}\s*\(", ignore_case=False, tests=tests, max_count=30):
+            if (path, line) == (fpath, fline):
+                continue
+            enc = _enclosing(root, path, line)
+            caller = enc[0] if enc else ""
+            r["callers"].append({"function": func, "caller": caller, "path": path, "line": line, "text": text[:180]})
+    handler_names = {c["caller"] for c in r["callers"] if c["caller"]}
+    # A delegating caller (xPublic -> xCommon) is followed one more level so its route is found.
+    for c in list(r["callers"]):
+        if not c["caller"]:
+            continue
+        for path, line, text in _rg(root, rf"\b{re.escape(c['caller'])}\s*\(", ignore_case=False, tests=tests, max_count=20):
+            enc = _enclosing(root, path, line)
+            if enc and enc[0] != c["caller"]:
+                handler_names.add(enc[0])
+    for path, line, text in _rg(root, r"(Handle(Func)?\(|\.(Post|Get|Put|Patch|Delete)\(|@(app|router)\.)", ignore_case=False, tests=tests):
+        span = " ".join([text, *[l.strip() for l in _lines(root, path)[line:line + 1]]])
+        hit = [h for h in handler_names if re.search(rf"\b{re.escape(h)}\s*\(", span)]
+        if hit:
+            m = _VERB_PATH.search(text)
+            r["routes"].append({"path": path, "line": line, "handler": hit[0],
+                                "verb": (m.group(1) or m.group(3) or "").upper() if m else "",
+                                "url": (m.group(2) or m.group(4)) if m else ""})
+    return r
+
+
+def symbol_markdown(r: dict[str, Any]) -> str:
+    if not r["literal"] and not r["uses"]:
+        return f"`{r['token']}` does not appear in this repository's code."
+    out = [f"**`{r['token']}`**", ""]
+    if r["bindings"]:
+        out.append("**Defined as**")
+        out += [f"- `{b['name']}` ({b['path']}:{b['line']})" for b in r["bindings"]]
+        out.append("")
+    compared = [u for u in r["uses"] if u["kind"] == "compared"]
+    if compared:
+        out.append("**Where it is received and checked**")
+        out += [f"- {u['path']}:{u['line']} in `{u['function']}`: `{u['text'][:110]}`" for u in compared]
+        out.append("")
+    other = [u for u in r["uses"] if u["kind"] != "compared"]
+    if other:
+        out.append("**Other uses**")
+        out += [f"- {u['path']}:{u['line']}" + (f" in `{u['function']}`" if u["function"] else "") + f": `{u['text'][:100]}`" for u in other[:10]]
+        out.append("")
+    if r["callers"]:
+        out.append("**How requests get there**")
+        out += [f"- `{c['caller'] or '?'}` calls `{c['function']}` ({c['path']}:{c['line']}): `{c['text'][:100]}`" for c in r["callers"][:8]]
+        out += [f"- `{rt['verb']} {rt['url']}` → `{rt['handler']}` ({rt['path']}:{rt['line']})" for rt in r["routes"][:6] if rt["url"]]
+        out.append("")
+    stray = [l for l in r["literal"] if not any(b["path"] == l["path"] and b["line"] == l["line"] for b in r["bindings"])]
+    if stray:
+        out.append("**The literal also appears**")
+        out += [f"- {l['path']}:{l['line']}: `{l['text'][:100]}`" for l in stray[:6]]
+    return "\n".join(out).rstrip()
+
+
 @tool(
     "trace_feature",
     description=(
@@ -300,4 +402,27 @@ async def trace_feature(args: TraceInput, ctx: ToolContext) -> ToolResult:
     return ToolResult(ok=bool(t["term"]), tool="trace_feature", summary=render(t), data=t)
 
 
-__all__ = ["answer_markdown", "choose_term", "key_terms", "render", "trace", "trace_feature"]
+__all__ = ["code_tokens", "symbol_markdown", "trace_symbol", "answer_markdown", "choose_term", "key_terms", "render", "trace", "trace_feature"]
+
+
+class SymbolInput(BaseModel):
+    symbol: str = Field(description="An identifier or literal exactly as written, e.g. FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING.")
+    repo: str | None = None
+    include_tests: bool = False
+
+
+@tool(
+    "trace_symbol",
+    description=(
+        "Follow one identifier or literal through a repository without guessing: the constant it is "
+        "bound to, where that is compared or received, the functions that do it, their callers, and "
+        "the routes that reach them. Use for 'where do we receive/handle/check X'."
+    ),
+    capability=Capability.REPOSITORY,
+    risk=RiskClass.R1,
+    tags=("repository", "trace", "symbol"),
+)
+async def trace_symbol_tool(args: SymbolInput, ctx: ToolContext) -> ToolResult:
+    root = await _repo_root(ctx, args.repo)
+    r = trace_symbol(root, args.symbol, tests=args.include_tests)
+    return ToolResult(ok=bool(r["literal"] or r["uses"]), tool="trace_symbol", summary=symbol_markdown(r), data=r)

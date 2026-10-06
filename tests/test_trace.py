@@ -69,3 +69,31 @@ def test_the_answer_is_ordered_cited_and_built_from_the_trace(tmp_path):
     assert "`StoreSignupEvent` (internal/db/storage.go:3)" in md
     assert "started by `NewSignupFSM` in cmd/svc/main.go:4" in md
     assert "1. `SUBSCRIBE_WEBHOOKS`" in md and "2. `REGISTER_PHONE_NUMBER`" in md
+
+
+def test_a_literal_is_followed_to_its_constant_its_check_and_its_route(tmp_path):
+    from mimir.tools.trace import symbol_markdown, trace_symbol
+
+    root = tmp_path / "svc"; (root / "internal/http").mkdir(parents=True)
+    (root / "internal/http/server.go").write_text('package http\n\nfunc r() {\n\tmux.Handle(pat.Post("/v2/signup/initiate"),\n\t\ts.postInit())\n}\n')
+    (root / "internal/http/signup.go").write_text(
+        'package http\n\nconst (\n\tfinishEvent = "FINISH_ONBOARDING"\n)\n\n'
+        'func signupType(e string) int {\n\tswitch e {\n\tcase finishEvent:\n\t\treturn 1\n\t}\n\treturn 0\n}\n\n'
+        'func (s *Server) postInit() {\n\tt := signupType(payload.Event)\n\t_ = t\n}\n')
+    r = trace_symbol(root, "FINISH_ONBOARDING")
+    assert r["bindings"] == [{"name": "finishEvent", "path": "internal/http/signup.go", "line": 4}]
+    (u,) = [u for u in r["uses"] if u["kind"] == "compared"]
+    assert u["function"] == "signupType" and u["line"] == 9
+    assert any(c["caller"] == "postInit" and "payload.Event" in c["text"] for c in r["callers"])
+    assert any(rt["url"] == "/v2/signup/initiate" and rt["handler"] == "postInit" for rt in r["routes"])
+    md = symbol_markdown(r)
+    assert "**Where it is received and checked**" in md and "`POST /v2/signup/initiate` → `postInit`" in md
+
+
+def test_code_tokens_are_what_the_operator_typed_as_code():
+    from mimir.tools.trace import code_tokens
+
+    assert code_tokens("where do we receive FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING") == ["FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"]
+    assert "signupTypeForEvent" in code_tokens("who calls signupTypeForEvent")
+    assert "store_signup_event" in code_tokens("find store_signup_event")
+    assert code_tokens("why is the api pod restarting") == []

@@ -58,8 +58,16 @@ might be called instead. Never describe a cluster for a question about code.
 """
 
 
+_EXPLICIT_CLUSTER = re.compile(r"\b(pods?|namespaces?|clusters?|contexts?|kubectl|logs?|restarts?|rollouts?|nodes?)\b", re.I)
+
+
 def classify_surface(text: str) -> str:
     """repository, cluster or both, from the words the operator used; no model."""
+    from mimir.tools.trace import code_tokens
+
+    # An identifier the operator typed is something to find in code, unless they named the cluster.
+    if code_tokens(text) and not _EXPLICIT_CLUSTER.search(text):
+        return "repository"
     repo = len(_REPO_CUES.findall(text))
     cluster = len(_CLUSTER_CUES.findall(text))
     if repo and not cluster:
@@ -128,6 +136,17 @@ async def run_agent(messages: list[Any], runner: Any, settings: Any) -> AsyncIte
         from mimir.mcp.server import search_code_impl
 
         repo = pick_repo(instruction, runner)
+        from mimir.tools.trace import code_tokens
+
+        tokens = code_tokens(instruction)
+        if tokens and runner.registry.get("trace_symbol") is not None:
+            res = await runner.registry.get("trace_symbol").invoke({"symbol": tokens[0], "repo": repo}, runner.tool_context(None))
+            if res.ok:
+                yield f"> trace_symbol({tokens[0]!r}, repo={repo!r})\n"
+                overview = await _overview(runner, instruction, res.summary)
+                yield "\n" + (overview + "\n\n" if overview else "") + res.summary + "\n"
+                return
+            yield f"> trace_symbol({tokens[0]!r}) found nothing; searching text instead\n"
         phrase = search_phrase(instruction, exclude=repo_words(repo, runner))
         if phrase and _TRACE_CUES.search(instruction) and runner.registry.get("trace_feature") is not None:
             res = await runner.registry.get("trace_feature").invoke({"feature": phrase, "repo": repo}, runner.tool_context(None))
@@ -205,8 +224,8 @@ async def _overview(runner: Any, question: str, trace_text: str) -> str:
     from mimir.llm.base import GenerationOptions, LLMMessage, ModelError
 
     prompt = (
-        "Below is a trace extracted from the code. In two or three plain sentences, say what this "
-        "feature does from the first request to completion. Do not list files or line numbers, do "
+        "Below is a trace extracted from the code. In two or three plain sentences, answer the "
+        "question from it: what happens, and where. Do not list files or line numbers, do "
         "not invent anything not in the trace; a cited list follows your sentences.\n\n"
         f"Question: {question}\n\nTrace:\n{trace_text[:6000]}"
     )

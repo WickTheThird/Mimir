@@ -275,3 +275,18 @@ class TestFanOutScope:
         monkeypatch.setattr(k, "_run_one", fake_run_one)
         assert await k._matching_contexts(self._ctx(settings, store), None, environment="prod") == ["aws-backend-ch1-prod"]
         assert await k._matching_contexts(self._ctx(settings, store), "at1") == ["tlnx-backend-at1-prod"]
+
+
+@pytest.mark.asyncio
+async def test_a_model_filling_environment_with_junk_is_ignored(settings, monkeypatch):
+    from mimir.tools import kubernetes as k
+    from mimir.tools.base import ToolContext
+
+    settings.kubernetes.regions = []
+    async def fake_run_one(ctx, command, timeout_s=None):
+        class R: ok = True; stdout = "aws-backend-ch1-prod\nbackend-ch1-dev\n"
+        return R()
+    async def fake_resolve(ctx, requested): return "backend-ch1-dev"
+    monkeypatch.setattr(k, "_run_one", fake_run_one); monkeypatch.setattr(k, "_resolve_context", fake_resolve)
+    got = await k._matching_contexts(ToolContext(settings=settings), None, environment="flag:FINISH_WHATSAPP")
+    assert got == ["backend-ch1-dev"]   # treated as no filter, not as a filter matching nothing

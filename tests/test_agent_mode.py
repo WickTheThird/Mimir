@@ -207,3 +207,10 @@ def test_trace_wording_is_not_part_of_the_feature_name():
 
     assert search_phrase("where is embedded signup implemented in messaging whatsapp? trace it end to end (readonly, repo target)",
                          exclude=("target", "messaging", "whatsapp")) == "embedded signup"
+
+
+def test_an_identifier_in_the_question_means_repository_unless_the_cluster_is_named():
+    from mimir.api.agent_mode import classify_surface
+
+    assert classify_surface("where are we receiving the flag FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING inside this service") == "repository"
+    assert classify_surface("which pods log FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING in prod") != "repository"
