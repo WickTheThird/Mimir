@@ -97,3 +97,16 @@ def test_code_tokens_are_what_the_operator_typed_as_code():
     assert "signupTypeForEvent" in code_tokens("who calls signupTypeForEvent")
     assert "store_signup_event" in code_tokens("find store_signup_event")
     assert code_tokens("why is the api pod restarting") == []
+
+
+def test_a_mock_that_panics_does_not_make_real_code_unimplemented(tmp_path):
+    from mimir.tools.trace import gap_verdict
+
+    root = tmp_path / "svc"; (root / "internal/facebook").mkdir(parents=True)
+    (root / "internal/facebook/client.go").write_text(
+        'package facebook\n\nfunc (c *Client) StartMigration() error {\n\treturn c.post("set_payment_method_migration_intent")\n}\n')
+    (root / "internal/facebook/client_test.go").write_text(
+        'package facebook\n\nfunc (m *mock) StartMigration() error { panic("set_payment_method_migration_intent not implemented") }\n')
+    (v1, v2) = gap_verdict(root, ["set_payment_method_migration_intent", "pause_migration"])
+    assert v1["status"] == "implemented" and v1["sites"][0]["function"] == "StartMigration" and v1["tests"] == 1
+    assert v2["status"] == "absent"

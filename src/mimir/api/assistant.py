@@ -43,6 +43,7 @@ class Turn:
     tokens: list[str] = field(default_factory=list)
     repo: str | None = None
     evidence: list[str] = field(default_factory=list)
+    verdict: list[dict[str, Any]] = field(default_factory=list)
     cited: list[str] = field(default_factory=list)
     steps: int = 0
 
@@ -143,8 +144,22 @@ async def gather(turn: Turn, runner: Any, settings: Any) -> AsyncIterator[Part]:
         if res is not None and res.ok and (res.data["routes"] or res.data["states"]):
             turn.evidence.append(answer_markdown(res.data))
             return
-    if turn.intent in ("locate", "explain", "trace", "gap", "scope"):
-        names = _gap_names(turn) if turn.intent in ("gap", "scope") else [phrase]
+    if turn.intent in ("gap", "scope") and _gap_names(turn):
+        from mimir.tools.repo import get_repository_directory
+        from mimir.tools.trace import gap_markdown, gap_verdict
+
+        names = _gap_names(turn)[:6]
+        yield Part("progress", "Checking whether " + ", ".join(f"`{n}`" for n in names) + " exist in production code")
+        try:
+            root = get_repository_directory(runner.settings).resolve(turn.repo).root
+            verdicts = gap_verdict(root, names)
+            turn.steps += 1
+            turn.evidence.append("Implementation check (production code, tests and docs separated):\n" + gap_markdown(verdicts))
+            turn.verdict = verdicts
+        except Exception as exc:  # noqa: BLE001
+            log.warning("gap_verdict_failed", error=str(exc))
+    if turn.intent in ("locate", "explain", "trace"):
+        names = [phrase]
         for name in [n for n in names if n][:6]:
             yield Part("progress", f"Searching the code for `{name}`")
             from mimir.mcp.server import search_code_impl
@@ -182,12 +197,15 @@ async def gather(turn: Turn, runner: Any, settings: Any) -> AsyncIterator[Part]:
 
 
 def _gap_names(turn: Turn) -> list[str]:
-    """What to look for: identifiers the operator typed, API-shaped words, then the phrase."""
-    from mimir.api.agent_mode import repo_words, search_phrase
+    """What to look for: identifiers and API-shaped words the operator typed; the phrase only if none."""
+    from mimir.api.agent_mode import search_phrase
 
     api = re.findall(r"\b[a-z]+(?:_[a-z]+){1,}\b", turn.question)
+    named = list(dict.fromkeys([*turn.tokens, *api]))
+    if named:
+        return named
     phrase = search_phrase(turn.question, exclude=())
-    return list(dict.fromkeys([*turn.tokens, *api, phrase]))
+    return [phrase] if phrase else []
 
 
 async def _live(turn: Turn, runner: Any, settings: Any) -> AsyncIterator[Part]:
@@ -231,6 +249,8 @@ Rules:
 - Ground every claim about the code or the clusters in the EVIDENCE below. Cite file:line
   exactly as it appears there. Never invent a file, function, route or number.
 - If the evidence does not settle something, say so in one line instead of guessing.
+- An implementation check table in the evidence is computed from the code and is authoritative:
+  "implemented" means production code does it, whatever tests or mocks say.
 - Match the size the conversation asks for. A request to shorten means shorten.
 - When asked to draft a reply, write only the reply, ready to paste.
 - Plain language. No preamble, no restating the question.
@@ -308,6 +328,11 @@ async def respond(messages: list[Any], runner: Any, settings: Any) -> AsyncItera
         yield Part("progress", "Writing a short overview")
         overview = await _overview(turn, runner)
         text = (overview + "\n\n" if overview else "") + "\n\n".join(turn.evidence)
+    elif turn.intent == "gap" and turn.verdict:
+        from mimir.tools.trace import gap_markdown
+
+        yield Part("progress", "Writing the answer")
+        text = gap_markdown(turn.verdict) + "\n\n" + check(turn, await answer(turn, runner))
     else:
         yield Part("progress", "Writing the answer")
         text = check(turn, await answer(turn, runner))

@@ -402,7 +402,7 @@ async def trace_feature(args: TraceInput, ctx: ToolContext) -> ToolResult:
     return ToolResult(ok=bool(t["term"]), tool="trace_feature", summary=render(t), data=t)
 
 
-__all__ = ["repo_shape", "shape_markdown", "code_tokens", "symbol_markdown", "trace_symbol", "answer_markdown", "choose_term", "key_terms", "render", "trace", "trace_feature"]
+__all__ = ["gap_verdict", "gap_markdown", "repo_shape", "shape_markdown", "code_tokens", "symbol_markdown", "trace_symbol", "answer_markdown", "choose_term", "key_terms", "render", "trace", "trace_feature"]
 
 
 class SymbolInput(BaseModel):
@@ -465,3 +465,35 @@ def shape_markdown(shape: dict[str, Any]) -> str:
     for w in shape.get("workers", [])[:5]:
         lines.append(f"- background worker pattern: `{w['text'][:80]}` ({w['path']}:{w['line']})")
     return "\n".join(lines)
+
+
+_TEST_PATH = re.compile(r"(_test\.go|(^|/)test_[^/]*\.py|_test\.py|\.(test|spec)\.[jt]sx?|(^|/)(tests?|mocks?|fakes?|testdata)/)")
+
+
+def gap_verdict(root: Path, names: list[str]) -> list[dict[str, Any]]:
+    """For each name: implemented in production code, only in tests or docs, or absent."""
+    out = []
+    for name in names:
+        rows = _rg(root, re.escape(name), ignore_case=False, tests=True)
+        code = [(p, l, t) for p, l, t in rows if not _TEST_PATH.search(p) and not t.lstrip().startswith(("//", "#", "*"))]
+        tests = [(p, l, t) for p, l, t in rows if _TEST_PATH.search(p)]
+        sites = []
+        for p, l, t in code[:6]:
+            enc = _enclosing(root, p, l)
+            sites.append({"path": p, "line": l, "function": enc[0] if enc else "", "text": t[:140]})
+        # The function named for it first: resume_migration -> ResumePaymentMethodMigration over an error string.
+        words = {w for w in re.split(r"[_\W]+", name.lower()) if len(w) > 2}
+        sites.sort(key=lambda x: -len(words & {w.lower() for w in re.findall(r"[A-Z]?[a-z]+", x["function"])}))
+        status = "implemented" if code else ("tests_only" if tests else "absent")
+        out.append({"name": name, "status": status, "sites": sites, "tests": len(tests)})
+    return out
+
+
+def gap_markdown(verdicts: list[dict[str, Any]]) -> str:
+    label = {"implemented": "implemented", "tests_only": "only in tests", "absent": "not found in the code"}
+    out = ["| name | status | where |", "|---|---|---|"]
+    for v in verdicts:
+        where = "; ".join(f"`{s['function'] or '?'}` {s['path']}:{s['line']}" for s in v["sites"][:3]) or "-"
+        tests = f" ({v['tests']} test reference{'s' if v['tests'] != 1 else ''})" if v["tests"] else ""
+        out.append(f"| `{v['name']}` | {label[v['status']]}{tests} | {where} |")
+    return "\n".join(out)
