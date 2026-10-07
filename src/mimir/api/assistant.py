@@ -78,6 +78,8 @@ def rule_intent(question: str, has_history: bool, *, regions: tuple[str, ...] = 
         return "live"  # a configured region or environment is a place things run
     if re.fullmatch(r"(thanks|thank you|thx|cool|great|nice|perfect|ok|okay)[\s!.]*", q, re.I):
         return "chat"
+    if re.match(r"^(hi|hey|hello|yo|good (morning|afternoon|evening))\b[\s,!.]*(there)?[\s,!.]*(how are you|how's it going|what's up)?[\s?!.]*$", q, re.I):
+        return "chat"
     if has_history and len(q) < 220 and REVISE.search(q):
         return "revise"
     if re.search(r"\bwhat (exactly )?is there (for (us|me) )?to ?do\b", q, re.I):
@@ -353,13 +355,38 @@ def check(turn: Turn, text: str) -> str:
 
 
 async def respond(messages: list[Any], runner: Any, settings: Any) -> AsyncIterator[Part]:
+    """Every request ends with exactly one answer part, whatever fails on the way."""
+    started = time.time()
+    answered = False
+    intent = "?"
+    try:
+        async for part in _respond(messages, runner, settings):
+            if part.kind == "progress" and part.text.startswith("Understood as:"):
+                intent = part.text
+            answered = answered or part.kind == "answer"
+            yield part
+    except Exception as exc:  # noqa: BLE001 - the client must get an answer, not a dropped stream
+        log.exception("assistant_failed")
+        yield Part("answer", f"MIMIR hit an error answering this: {type(exc).__name__}: {exc}")
+        answered = True
+    finally:
+        log.info("assistant_request", intent=intent, seconds=round(time.time() - started, 2), answered=answered)
+    if not answered:
+        yield Part("answer", "MIMIR finished without an answer; the server log has the details.")
+
+
+async def _respond(messages: list[Any], runner: Any, settings: Any) -> AsyncIterator[Part]:
     started = time.time()
     question, history = conversation(messages)
     if not question:
         yield Part("answer", "No question found in the conversation.")
         return
     turn = Turn(question=question, history=history)
-    await classify(turn, runner)
+    try:
+        await classify(turn, runner)
+    except Exception as exc:  # noqa: BLE001 - an unreachable decider means "chat", not an error
+        log.warning("classify_failed", error=str(exc))
+        turn.intent, turn.intent_source = "chat", "fallback"
     yield Part("progress", f"Understood as: {INTENT_HELP[turn.intent]}")
     try:
         async for part in gather(turn, runner, settings):

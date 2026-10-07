@@ -71,3 +71,23 @@ async def test_a_revision_uses_no_tools_and_the_answer_is_clean(settings):
     assert answer.startswith("*Worked for ") and answer.endswith("Telnyx should run it.")
     assert not any(line.startswith((">", "[surface")) for line in answer.splitlines())
     assert any("currency migration flow" in getattr(m, "content", "") for m in seen["msgs"])
+
+
+def test_a_greeting_never_needs_the_decision_model():
+    for text in ("hello how are you?", "hey", "hi there, how's it going", "good morning!"):
+        assert rule_intent(text, False) == "chat", text
+
+
+@pytest.mark.asyncio
+async def test_a_failure_anywhere_still_ends_with_one_answer(settings):
+    class Router:
+        async def chat(self, messages, **kw):
+            raise RuntimeError("ollama is down")
+
+    class Runner:
+        router = Router(); registry = None
+        def tool_context(self, sid): return None
+    Runner.settings = settings
+    parts = [p async for p in respond([LLMMessage.user("hello how are you?")], Runner(), settings)]
+    answers = [p for p in parts if p.kind == "answer"]
+    assert len(answers) == 1 and answers[0].text.strip()

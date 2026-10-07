@@ -241,13 +241,17 @@ async def _agent_completion(payload: Any, settings: Any, caller: Any) -> Any:
     if payload.stream:
         async def events() -> AsyncIterator[dict[str, str]]:
             yield frame({"role": "assistant", "content": ""})
-            async for part in respond(messages, runner, settings):
-                if part.kind == "progress":
-                    delta = progress_delta(part.text)
-                    if delta:
-                        yield frame(delta)
-                else:
-                    yield frame({"content": ("\n" if mode == "content" else "") + part.text})
+            try:
+                async for part in respond(messages, runner, settings):
+                    if part.kind == "progress":
+                        delta = progress_delta(part.text)
+                        if delta:
+                            yield frame(delta)
+                    else:
+                        yield frame({"content": ("\n" if mode == "content" else "") + part.text})
+            except Exception as exc:  # noqa: BLE001 - never end a stream without content
+                log.exception("facade_stream_failed")
+                yield frame({"content": f"MIMIR stream error: {type(exc).__name__}: {exc}"})
             yield frame({}, finish="stop")
             yield {"data": "[DONE]"}
         return EventSourceResponse(events(), ping=15)
